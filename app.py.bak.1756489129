@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+import os, time, glob, atexit, signal, threading, subprocess, shutil
+from typing import List
+from flask import Flask, request, jsonify, send_from_directory, render_template_string
+import numpy as np
+from PIL import Image as PILImage
+from PIL import ImageDraw, ImageFont
+import RPi.GPIO as GPIO
+from luma.core.interface.serial import spi
+from luma.lcd.device import st7735
+
+# ----------------- GPIO pins -----------------
+PIN_BL, PIN_DC, PIN_RST = 24, 25, 27
+PIN_KEY1, PIN_KEY2, PIN_KEY3 = 21, 20, 16
+PIN_JOY_UP, PIN_JOY_DOWN, PIN_JOY_LEFT, PIN_JOY_RIGHT, PIN_JOY_PRESS = 6, 19, 5, 26, 13
+LCD_W, LCD_H = 128, 128
+
+# ----------------- Paths -----------------
+CAP_DIR, UP_DIR = "/home/pi/timelapse/frames", "/home/pi/timelapse/uploads"
+os.makedirs(CAP_DIR, exist_ok=True)
+os.makedirs(UP_DIR, exist_ok=True)
+state = {"running": False, "interval_ms": 30000, "last_frame": None}
+_capture_thread, _btn_thread = None, None
+_stop_flag, _btn_stop = threading.Event(), threading.Event()
+
+menu_items, menu_index = ["Timelapse", "Wigglegram", "Hotspot: Off"], 0
+hotspot_on, AP_NAME = False, "PiCam-AP"
+
+# ----------------- LCD helpers -----------------
+GPIO.setmode(GPIO.BCM); GPIO.setwarnings(False)
+GPIO.setup(PIN_BL, GPIO.OUT, initial=GPIO.HIGH)
+for p in [PIN_KEY1,PIN_KEY2,PIN_KEY3,PIN_JOY_UP,PIN_JOY_DOWN,PIN_JOY_LEFT,PIN_JOY_RIGHT,PIN_JOY_PRESS]:
+    GPIO.setup(p, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+_font = ImageFont.load_default(); _lcd=None
+def _lcd_init():
+    global _lcd
+    try:
+        serial = spi(port=0, device=0, gpio_DC=PIN_DC, gpio_RST=PIN_RST, bus_speed_hz=16000000)
+        _lcd = st7735(serial_interface=serial,width=LCD_W,height=LCD_H,rotate=0,bgr=True,h_offset=2,v_offset=3)
+    except Exception as e: print("[WARN] LCD init failed:",e)
+def lcd_display_image(img): 
+    if _lcd: _lcd.display(img.resize((LCD_W,LCD_H)).convert("RGB"))
+def lcd_text(msg):
+    safe = msg.encode("ascii","replace").decode()
+    img=PILImage.new('RGB',(LCD_W,LCD_H),(0,0,0)); d=ImageDraw.Draw(img)
+    d.multiline_text((4,4),safe,fill=(255,255,255),font=_font,spacing=2); lcd_display_image(img)
+
+# ----------------- Network helpers -----------------
+def _sh(cmd):
+    try: return subprocess.check_output(cmd, shell=True, text=True).strip()
+    except Exception: return ""
+
+def ap_exists(): 
+    return AP_NAME in _sh("nmcli -t -f NAME connection show").splitlines()
+
+def ap_is_active():
+    for line in _sh("nmcli -t -f NAME,TYPE,DEVICE,ACTIVE connection show --active").splitlines():
+        p=line.split(":")
+        if len(p)>=4 and p[0]==AP_NAME and p[1]=="wifi" and p[3]=="yes": return True
+    return False
+
+def _active_wifi_on_wlan0():
+    out = _sh("nmcli -t -f NAME,TYPE,DEVICE,ACTIVE connection show --active")
+    names=[]
+    for line in out.splitlines():
+        n,t,dev,act = (line.split(":")+["","","",""])[:4]
+        if t=="wifi" and dev=="wlan0" and act=="yes" and n!=AP_NAME:
+            names.append(n)
+    return names
+
+def _run(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+def hotspot_toggle():
+    """Toggle AP on/off. Drops any client Wi-Fi on wlan0 first.
+       Tries nmcli as 'pi', falls back to sudo if blocked."""
+    global hotspot_on, menu_items
+    if not ap_exists():
+        lcd_text("AP profile\nmissing!")
+        return
+
+    if ap_is_active():
+        r=_run(["nmcli","connection","down",AP_NAME])
+        if r.returncode!=0 and "Insufficient" in (r.stderr or r.stdout):
+            r=_run(["sudo","/usr/bin/nmcli","connection","down",AP_NAME])
+        if r.returncode==0:
+            hotspot_on=False; lcd_text("Hotspot Off")
+        else:
+            lcd_text("AP off fail")
+    else:
+        # free wlan0 from any client connections (whatever their names are)
+        for n in _active_wifi_on_wlan0():
+            _run(["nmcli","connection","down",n])
+        # try to bring AP up
+        r=_run(["nmcli","connection","up",AP_NAME])
+        if r.returncode!=0 and "Insufficient" in (r.stderr or r.stdout):
+            r=_run(["sudo","/usr/bin/nmcli","connection","up",AP_NAME])
+        if r.returncode==0:
+            hotspot_on=True; lcd_text("Hotspot On\nSSID: PiCam-AP")
+        else:
+            msg=(r.stderr or r.stdout or "unknown").splitlines()[0][:18]
+            lcd_text(f"AP on failed:\n{msg}")
+
+    menu_items[2]=f"Hotspot: {'On' if hotspot_on else 'Off'}"; draw_menu()
+
+# ----------------- Capture helpers -----------------
+def _wait_stable(p,tries=15,delay=0.05):
+    last=-1
+    for _ in range(tries):
+        if not os.path.exists(p): time.sleep(delay); continue
+        sz=os.path.getsize(p)
+        if sz>0 and sz==last: return True
+        last=sz; time.sleep(delay)
+    return os.path.exists(p)
+def _capture_once():
+    ts=int(time.time()); tmp=f"{CAP_DIR}/tmp_{ts}.jpg"; out=f"{CAP_DIR}/{ts}.jpg"
+    capt="rpicam-still" if shutil.which("rpicam-still") else "libcamera-still"
+    cmd=[capt,"-n","--timeout","1200","--width","1296","--height","972","-o",tmp]
+    r=subprocess.run(cmd,capture_output=True,text=True,check=False)
+    if not _wait_stable(tmp) or r.returncode!=0: return
+    os.rename(tmp,out); state["last_frame"]=out
+    try: lcd_display_image(PILImage.open(out).convert("RGB"))
+    except: pass
+def _loop():
+    lcd_text("Timelapse:\nRUNNING")
+    while not _stop_flag.is_set():
+        t0=time.time(); _capture_once()
+        remain=state["interval_ms"]/1000.0-(time.time()-t0)
+        if remain>0: _stop_flag.wait(timeout=remain)
+    lcd_text("Timelapse:\nSTOPPED")
+def start_timelapse():
+    global _capture_thread
+    if state["running"]: return
+    state["running"]=True; _stop_flag.clear()
+    _capture_thread=threading.Thread(target=_loop,daemon=True); _capture_thread.start()
+def stop_timelapse():
+    if state["running"]: _stop_flag.set(); state["running"]=False
+
+# ----------------- Menu UI -----------------
+def draw_menu():
+    img=PILImage.new("RGB",(LCD_W,LCD_H),(0,0,0)); d=ImageDraw.Draw(img); y=14
+    for i,item in enumerate(menu_items):
+        pref="> " if i==menu_index else "  "; col=(255,255,0) if i==menu_index else (200,200,200)
+        d.text((6,y),pref+item,font=_font,fill=col); y+=20
+    lcd_display_image(img)
+def handle_select():
+    if menu_index==0: lcd_text("Starting\nTimelapse..."); start_timelapse()
+    elif menu_index==1: lcd_text("Wigglegram\n(not yet)")
+    elif menu_index==2: lcd_text("Toggling\nHotspot..."); hotspot_toggle()
+def _menu_buttons_loop():
+    global menu_index; last={p:1 for p in [PIN_KEY1,PIN_KEY2,PIN_KEY3,PIN_JOY_UP,PIN_JOY_DOWN,PIN_JOY_LEFT,PIN_JOY_RIGHT,PIN_JOY_PRESS]}
+    draw_menu()
+    while not _btn_stop.is_set():
+        for pin in last:
+            val=GPIO.input(pin)
+            if val==0 and last[pin]==1:
+                if pin==PIN_JOY_UP: menu_index=(menu_index-1)%len(menu_items); draw_menu()
+                elif pin==PIN_JOY_DOWN: menu_index=(menu_index+1)%len(menu_items); draw_menu()
+                elif pin in (PIN_KEY1,PIN_JOY_PRESS): handle_select()
+                elif pin==PIN_KEY2 and state["running"]: lcd_text("Stopping\nTimelapse..."); stop_timelapse(); draw_menu()
+            last[pin]=val
+        _btn_stop.wait(0.05)
+def start_menu():
+    global hotspot_on; hotspot_on=ap_is_active()
+    menu_items[2]=f"Hotspot: {'On' if hotspot_on else 'Off'}"
+    _btn_stop.clear(); threading.Thread(target=_menu_buttons_loop,daemon=True).start()
+
+# ----------------- Flask -----------------
+app=Flask(__name__)
+@app.route("/")
+def index(): return render_template_string("<h2>Pi Timelapse</h2><p>Status: {{'Running' if running else 'Stopped'}} | Interval: {{interval_ms/1000}}s</p>",running=state["running"],interval_ms=state["interval_ms"])
+
+# ----------------- Cleanup -----------------
+def _cleanup(): 
+    try: stop_timelapse()
+    except: pass
+    try: _btn_stop.set()
+    except: pass
+    try: GPIO.cleanup()
+    except: pass
+@atexit.register
+def _on_exit(): _cleanup()
+def _handle_sigterm(s,f): _cleanup(); exit(0)
+signal.signal(signal.SIGTERM,_handle_sigterm)
+
+if __name__=="__main__":
+    _lcd_init(); start_menu()
+    app.run(host="0.0.0.0",port=5000)

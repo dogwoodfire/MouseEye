@@ -1,0 +1,203 @@
+import json, threading, time, os
+from datetime import datetime
+from flask import Blueprint, request, redirect, url_for
+
+# Optional: used to POST to your existing /start and /stop
+try:
+    import urllib.request, urllib.parse
+    DEFAULT_HTTP_TIMEOUT = 2
+except Exception:
+    urllib = None
+
+# Persistent file for schedule state
+SCHEDULE_FILE = os.environ.get("TL_SCHEDULE_FILE", "/home/pi/timelapse/schedule.json")
+
+# In-memory state and timers
+_lock = threading.Lock()
+_state = {}  # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
+_t_start = None
+_t_stop  = None
+
+bp = Blueprint("scheduler_v2", __name__)
+
+def _load():
+    try:
+        with open(SCHEDULE_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save(state):
+    try:
+        os.makedirs(os.path.dirname(SCHEDULE_FILE), exist_ok=True)
+        with open(SCHEDULE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+def _http_post(path, data=None, timeout=5):
+    if urllib is None:
+        return False, "urllib not available"
+    try:
+        if data is None:
+            data = {}
+        url = "http://127.0.0.1:5050" + path
+        body = urllib.parse.urlencode(data).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST")
+        with _safe_post(req, timeout=timeout) as resp:
+            return (200 <= resp.status < 400), "ok"
+    except Exception as e:
+        return False, str(e)
+
+def _arm_timers():
+    global _t_start, _t_stop
+    with _lock:
+        # cancel old timers
+        for t in (_t_start, _t_stop):
+            try:
+                if t: t.cancel()
+            except Exception:
+                pass
+        _t_start = _t_stop = None
+
+        st = _state.get("start_ts")
+        et = _state.get("end_ts")
+        if not (isinstance(st, int) and isinstance(et, int) and et > st and st > 0):
+            return
+
+        now = int(time.time())
+        start_in = max(0, st - now)
+        stop_in  = max(0, et - now)
+
+        def do_start():
+            _http_post("/start", {
+                "interval": str(_state.get("interval", 5)),
+                "fps":      str(_state.get("fps", 24)),
+            })
+
+        def do_stop():
+            _http_post("/stop", {})
+
+        _t_start = threading.Timer(start_in, do_start)
+        _t_start.daemon = True
+        _t_start.start()
+
+        _t_stop = threading.Timer(stop_in, do_stop)
+        _t_stop.daemon = True
+        _t_stop.start()
+
+def _fmt(ts):
+    try:
+        return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "-"
+
+@bp.route('/schedule', methods=['GET','POST'])
+def schedule_page():
+    # Accept POST from the form and delegate to schedule_arm
+    if request.method == 'POST':
+        return schedule_arm()
+    with _lock:
+        st = _state.get("start_ts", 0)
+        et = _state.get("end_ts", 0)
+        interval = _state.get("interval", 5)
+        fps = _state.get("fps", 24)
+        armed = bool(st and et and et > st)
+    html = []
+    html.append("<!doctype html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>")
+    html.append("<title>Schedule</title></head><body>")
+    html.append("<div style='max-width:520px;margin:16px auto;font-family:Arial,Helvetica,sans-serif'>")
+    html.append("<h2>Schedule a Timelapse</h2>")
+    html.append("<form method='post' action='/schedule/arm' style='display:block;padding:12px;border:1px solid #e1e5f0;border-radius:8px;background:#f7fbff'>")
+    html.append("<div style='display:flex;gap:8px;flex-wrap:wrap'>")
+    html.append("<div style='flex:1 1 220px'><label>Start (YYYY-MM-DD HH:MM)</label>")
+    html.append("<input name='start_at' placeholder='2025-08-31 21:00' style='width:100%;padding:8px;font-size:16px'></div>")
+    html.append("<div style='flex:1 1 160px'><label>Duration (minutes)</label>")
+    html.append("<input name='duration_min' type='number' min='1' max='1440' value='5' style='width:100%;padding:8px;font-size:16px'></div>")
+    html.append("<div style='flex:1 1 160px'><label>Interval (seconds)</label>")
+    html.append("<input name='interval' type='number' min='1' max='3600' value='" + str(interval) + "' style='width:100%;padding:8px;font-size:16px'></div>")
+    html.append("<div style='flex:1 1 160px'><label>FPS</label>")
+    html.append("<input name='fps' type='number' min='1' max='60' value='" + str(fps) + "' style='width:100%;padding:8px;font-size:16px'></div>")
+    html.append("</div>")
+    html.append("<div style='display:flex;gap:8px;margin-top:12px'>")
+    html.append("<button type='submit' style='padding:10px 14px;font-size:16px;background:#1976d2;color:#fff;border:1px solid #1976d2;border-radius:6px;cursor:pointer'>Arm Schedule</button>")
+    html.append("<a href='/' style='padding:10px 14px;font-size:16px;border:1px solid #ccc;border-radius:6px;text-decoration:none;color:#111;background:#f6f6f6'>Back Home</a>")
+    html.append("</div></form>")
+    html.append("<div style='margin-top:14px;padding:12px;border:1px solid #e1e5f0;border-radius:8px'>")
+    html.append("<b>Status:</b> " + ("Armed" if armed else "Not armed") + "<br>")
+    html.append("<b>Start:</b> " + _fmt(st) + " &nbsp; <b>End:</b> " + _fmt(et) + "<br>")
+    html.append("<b>Interval:</b> " + str(interval) + "s &nbsp; <b>FPS:</b> " + str(fps))
+    html.append("<form method='post' action='/schedule/cancel' style='margin-top:10px'>")
+    html.append("<button type='submit' " + ("" if armed else "disabled") + " style='padding:10px 14px;font-size:16px;background:#e53935;color:#fff;border:1px solid #e53935;border-radius:6px;cursor:pointer'>Cancel Schedule</button>")
+    html.append("</form></div></div></body></html>")
+    return "".join(html)
+
+@bp.post("/schedule/arm")
+def schedule_arm():
+    start_at = (request.form.get("start_at") or "").strip()
+    try:
+        duration_min = int(request.form.get("duration_min") or "5")
+    except Exception:
+        duration_min = 5
+    try:
+        interval = int(request.form.get("interval") or "5")
+    except Exception:
+        interval = 5
+    try:
+        fps = int(request.form.get("fps") or "24")
+    except Exception:
+        fps = 24
+
+    # Parse start time; if invalid, use now+60s
+    try:
+        dt = datetime.strptime(start_at, "%Y-%m-%d %H:%M")
+        start_ts = int(time.mktime(dt.timetuple()))
+    except Exception:
+        start_ts = int(time.time()) + 60
+    end_ts = start_ts + max(60, duration_min * 60)
+
+    with _lock:
+        _state.clear()
+        _state.update({"start_ts": start_ts, "end_ts": end_ts, "interval": interval, "fps": fps})
+        _save(_state)
+        _arm_timers()
+
+    return redirect("/schedule", code=302)
+
+@bp.route('/schedule/cancel', methods=['POST'])
+def schedule_cancel():
+    global _t_start, _t_stop
+    with _lock:
+        for t in (_t_start, _t_stop):
+            try:
+                if t: t.cancel()
+            except Exception:
+                pass
+        _t_start = _t_stop = None
+        _state.clear()
+        _save(_state)
+    return redirect("/schedule", code=302)
+
+def init(app):
+    st = _load()
+    if isinstance(st, dict):
+        with _lock:
+            _state.clear()
+            _state.update(st)
+        _arm_timers()
+    app.register_blueprint(bp)
+
+
+def _safe_post(path, data=None, timeout=None):
+    try:
+        if urllib is None:
+            return False
+        if timeout is None:
+            timeout = DEFAULT_HTTP_TIMEOUT
+        url = "http://127.0.0.1:5050" + path
+        payload = urllib.parse.urlencode(data or {}).encode()
+        req = urllib.request.Request(url, data=payload, method="POST")
+        _safe_post(req, timeout=timeout).read(1)
+        return True
+    except Exception:
+        return False

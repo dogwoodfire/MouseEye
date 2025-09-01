@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+# ======================= app.py (full) =======================
+import os, time, glob, atexit, signal, threading, subprocess, shutil
+from typing import List
+
+from flask import Flask, request, jsonify, send_from_directory, render_template_string
+
+import numpy as np
+from PIL import Image as PILImage
+from PIL import ImageDraw, ImageFont
+
+import RPi.GPIO as GPIO
+from luma.core.interface.serial import spi
+from luma.lcd.device import st7735
+
+# ----------------- Waveshare 1.44" LCD HAT pins (BCM) -----------------
+PIN_BL  = 24   # Backlight
+PIN_DC  = 25   # D/C
+PIN_RST = 27   # Reset
+PIN_KEY1 = 21  # Start
+PIN_KEY2 = 20  # Stop
+LCD_W, LCD_H = 128, 128
+
+# ----------------- App paths / state -----------------
+CAP_DIR = "/home/pi/timelapse/frames"
+UP_DIR  = "/home/pi/timelapse/uploads"
+os.makedirs(CAP_DIR, exist_ok=True)
+os.makedirs(UP_DIR,  exist_ok=True)
+
+state = {"running": False, "interval_ms": 30000, "last_frame": None}
+_capture_thread = None
+_stop_flag = threading.Event()
+
+# Button polling
+_btn_thread = None
+_btn_stop = threading.Event()
+_btn_last = {PIN_KEY1: 1, PIN_KEY2: 1}  # pull-ups → idle HIGH
+
+# ----------------- GPIO & LCD init -----------------
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+GPIO.setup(PIN_BL, GPIO.OUT, initial=GPIO.HIGH)
+GPIO.setup(PIN_KEY1, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(PIN_KEY2, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+_font = ImageFont.load_default()
+_lcd = None
+
+def _lcd_init():
+    """Init ST7735S with safe params to avoid red line/offset issues."""
+    global _lcd
+    try:
+        serial = spi(
+            port=0, device=0, gpio_DC=PIN_DC, gpio_RST=PIN_RST,
+            bus_speed_hz=16000000  # gentler than 32MHz
+        )
+        _lcd = st7735(
+            serial_interface=serial, width=LCD_W, height=LCD_H,
+            rotate=0, bgr=True, h_offset=2, v_offset=3
+        )
+    except Exception as e:
+        _lcd = None
+        print(f"[WARN] LCD init failed: {e}")
+
+def lcd_display_image(img: PILImage.Image):
+    if _lcd is None: return
+    try:
+        if img.size != (LCD_W, LCD_H):
+            img = img.resize((LCD_W, LCD_H))
+        _lcd.display(img.convert("RGB"))
+    except Exception as e:
+        print(f"[WARN] LCD display error: {e}")
+
+def lcd_text(msg: str):
+    # Sanitize to ASCII so PIL's default bitmap font doesn't choke on Unicode (e.g., …)
+    safe = msg.encode("ascii", "replace").decode()  # unknown chars become '?'
+    img = PILImage.new('RGB', (LCD_W, LCD_H), (0,0,0))
+    d = ImageDraw.Draw(img)
+    d.multiline_text((4,4), safe, fill=(255,255,255), font=_font, spacing=2)
+    lcd_display_image(img)
+
+# -------- Network status helpers (NetworkManager-friendly) --------
+def _sh(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True, text=True).strip()
+    except Exception:
+        return ""
+
+def _get_ip(dev="wlan0"):
+    out = _sh("ip -4 addr show dev %s | awk '/inet /{print $2}' | cut -d/ -f1" % dev)
+    return out.splitlines()[0] if out else None
+
+def _nm_active_wifi_ssid():
+    out = _sh("nmcli -t -f NAME,TYPE,DEVICE,ACTIVE connection show --active")
+    for line in out.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 4 and parts[1] == "wifi" and parts[3] == "yes":
+            return parts[0]
+    return None
+
+def _nm_is_ap_active(ap_name="PiCam-AP"):
+    out = _sh("nmcli -t -f NAME,TYPE,DEVICE,ACTIVE connection show --active")
+    for line in out.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 4 and parts[0] == ap_name and parts[1] == "wifi" and parts[3] == "yes":
+            return True
+    return False
+
+def net_status(ap_name="PiCam-AP"):
+    ip = _get_ip("wlan0")
+    ssid = _nm_active_wifi_ssid()
+    if ssid:
+        if ssid == ap_name:
+            if not ip: ip = "10.42.0.1"
+            return {"mode":"ap","ssid":ssid,"ip":ip}
+        return {"mode":"wifi","ssid":ssid,"ip":ip}
+    if _nm_is_ap_active(ap_name):
+        if not ip: ip = "10.42.0.1"
+        return {"mode":"ap","ssid":ap_name,"ip":ip}
+    return {"mode":"none","ssid":None,"ip":None}
+
+def lcd_show_net_status(wait_seconds=15, ap_name="PiCam-AP"):
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        ns = net_status(ap_name)
+        if ns["mode"] == "wifi" and ns["ip"]:
+            lcd_text(f"Wi-Fi...\n{ns['ssid']}\nIP {ns['ip']}\n:5000")
+            return ns
+        if ns["mode"] == "ap" and ns["ip"]:
+            lcd_text(f"AP... \n{ns['ssid']}\nIP {ns['ip']}\n:5000")
+            return ns
+        lcd_text("Networking…\nWaiting for IP")
+        time.sleep(1)
+    ns = net_status(ap_name)
+    if ns["mode"] == "none":
+        lcd_text("No network.\nAP may start…\nTry 10.42.0.1")
+    else:
+        label = "AP" if ns["mode"] == "ap" else "Wi-Fi"
+        ip = ns["ip"] or "no IP"
+        ssid = ns["ssid"] or "—"
+        lcd_text(f"{label}... \n{ssid}\nIP {ip}")
+    return ns
+
+# ----------------- Capture helpers -----------------
+def _wait_stable(path, tries=15, delay=0.05):
+    last = -1
+    for _ in range(tries):
+        if not os.path.exists(path):
+            time.sleep(delay); continue
+        sz = os.path.getsize(path)
+        if sz > 0 and sz == last:
+            return True
+        last = sz; time.sleep(delay)
+    return os.path.exists(path)
+
+def _capture_once():
+    """Capture one JPEG with libcamera/rpicam; show thumb on LCD."""
+    ts = int(time.time())
+    tmp = f"{CAP_DIR}/tmp_{ts}.jpg"
+    out = f"{CAP_DIR}/{ts}.jpg"
+    capt = "rpicam-still" if shutil.which("rpicam-still") else "libcamera-still"
+    cmd = [
+        capt, "-n",
+        "--timeout","1200",
+        "--width","1296","--height","972",   # OV5647-friendly
+        "-o", tmp
+    ]
+    # If you need brighter indoor shots, uncomment:
+    # cmd += ["--shutter","50000","--gain","4"]
+
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if not _wait_stable(tmp) or res.returncode != 0:
+        print("[WARN] capture failed:", res.stderr.strip())
+        return
+    os.rename(tmp, out)
+    state["last_frame"] = out
+    try:
+        thumb = PILImage.open(out).convert("RGB")
+        lcd_display_image(thumb)
+    except Exception:
+        pass
+
+def _loop():
+    lcd_text("Timelapse:\nRUNNING")
+    while not _stop_flag.is_set():
+        t0 = time.time()
+        _capture_once()
+        remaining = state["interval_ms"]/1000.0 - (time.time() - t0)
+        if remaining > 0: _stop_flag.wait(timeout=remaining)
+    lcd_text("Timelapse:\nSTOPPED")
+
+def start_timelapse():
+    global _capture_thread
+    if state["running"]: return
+    state["running"] = True
+    _stop_flag.clear()
+    _capture_thread = threading.Thread(target=_loop, daemon=True)
+    _capture_thread.start()
+
+def stop_timelapse():
+    if not state["running"]: return
+    _stop_flag.set()
+    state["running"] = False
+
+# ----------------- Button polling (KEY1 start / KEY2 stop) -----------------
+def _buttons_loop():
+    sample = 0.025
+    stable_needed = 5
+    counters = {PIN_KEY1:0, PIN_KEY2:0}
+    while not _btn_stop.is_set():
+        for pin in (PIN_KEY1, PIN_KEY2):
+            val = GPIO.input(pin)  # 1=up, 0=pressed
+            if val==0 and _btn_last[pin]==1:
+                counters[pin]+=1
+                if counters[pin]>=stable_needed:
+                    _btn_last[pin]=0; counters[pin]=0
+                    if pin==PIN_KEY1: start_timelapse()
+                    elif pin==PIN_KEY2: stop_timelapse()
+            elif val==1 and _btn_last[pin]==0:
+                _btn_last[pin]=1; counters[pin]=0
+            else:
+                counters[pin]=0
+        _btn_stop.wait(sample)
+
+def _start_button_polling():
+    global _btn_thread
+    _btn_stop.clear()
+    _btn_thread = threading.Thread(target=_buttons_loop, daemon=True)
+    _btn_thread.start()
+
+def _stop_button_polling():
+    _btn_stop.set()
+
+# ----------------- Processing helpers (deflicker + video) -----------------
+def make_video(out_mp4="timelapse.mp4", fps=24):
+    files = sorted(glob.glob(f"{CAP_DIR}/*.jpg"))
+    if not files: return None
+    out_path = f"/home/pi/timelapse/{out_mp4}"
+    cmd = f"ffmpeg -y -pattern_type glob -i '{CAP_DIR}/*.jpg' -vf fps={fps} -pix_fmt yuv420p {out_path}"
+    subprocess.run(cmd, shell=True, check=False)
+    return out_path if os.path.exists(out_path) else None
+
+def deflicker(image_paths: List[str]) -> List[str]:
+    paths = [p for p in image_paths if os.path.exists(p)]
+    if not paths: return []
+    meds = []
+    for p in paths:
+        try: meds.append(np.median(np.array(PILImage.open(p).convert("L"))))
+        except: meds.append(None)
+    meds = [m for m in meds if m is not None]
+    if not meds: return []
+    target = float(np.median(np.array(meds)))
+    out_paths = []
+    for p in paths:
+        try:
+            im = PILImage.open(p).convert("RGB")
+            arr = np.asarray(im, dtype=np.float32)
+            L = np.median(np.asarray(im.convert("L"))); L = 1.0 if L==0 else float(L)
+            arr = np.clip(arr * (target / L), 0, 255).astype(np.uint8)
+            out = p.rsplit(".",1)[0]+"_df.jpg"
+            PILImage.fromarray(arr).save(out, quality=90)
+            out_paths.append(out)
+        except Exception as e:
+            print(f"[WARN] deflicker error on {p}: {e}")
+    return out_paths
+
+# ----------------- Flask web app -----------------
+app = Flask(__name__)
+INDEX_HTML = """
+<h2>Pi Timelapse</h2>
+<p>Status: {{ 'Running' if running else 'Stopped' }} | Interval: {{ interval_ms/1000 }}s</p>
+<form method="post" action="/start">
+  <input type="number" name="interval" value="{{ interval_ms }}" min="1000" step="1000"> ms
+  <button type="submit">Start</button>
+</form>
+<form method="post" action="/stop"><button type="submit">Stop</button></form>
+<hr>
+<h3>Upload images to process</h3>
+<form method="post" action="/upload" enctype="multipart/form-data">
+  <input type="file" name="files" multiple>
+  <button type="submit">Upload</button>
+</form>
+<p><a href="/make_video">Make video from frames</a> | <a href="/last">View last frame</a> | <a href="/net">Network</a></p>
+"""
+
+@app.route("/")
+def index():
+    return render_template_string(INDEX_HTML, running=state["running"], interval_ms=state["interval_ms"])
+
+@app.route("/start", methods=["POST"])
+def route_start():
+    iv = request.form.get("interval", type=int) or state["interval_ms"]
+    state["interval_ms"] = max(1000, iv)
+    start_timelapse()
+    return ("<p>Started.</p><p><a href='/'>Back</a></p>")
+
+@app.route("/stop", methods=["POST"])
+def route_stop():
+    stop_timelapse()
+    return ("<p>Stopped.</p><p><a href='/'>Back</a></p>")
+
+@app.route("/status")
+def status():
+    return jsonify(state)
+
+@app.route("/last")
+def last():
+    if not state["last_frame"]:
+        return "No frame yet", 404
+    d, f = os.path.split(state["last_frame"])
+    return send_from_directory(d, f)
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    files = request.files.getlist("files")
+    saved = []
+    for f in files:
+        fn = f.filename.replace("/", "_")
+        path = os.path.join(UP_DIR, fn)
+        f.save(path)
+        saved.append(path)
+    df = deflicker(saved)
+    return jsonify({"saved": saved, "deflickered": df})
+
+@app.route("/make_video")
+def makevid():
+    mp4 = make_video()
+    if not mp4: return "No frames", 404
+    return send_from_directory("/home/pi/timelapse", os.path.basename(mp4), as_attachment=True)
+
+@app.route("/net")
+def net():
+    return jsonify(net_status())
+
+# ----------------- Cleanup & signals -----------------
+def _cleanup():
+    try: stop_timelapse()
+    except: pass
+    try: _stop_button_polling()
+    except: pass
+    try: GPIO.cleanup()
+    except: pass
+
+@atexit.register
+def _on_exit(): _cleanup()
+
+def _handle_sigterm(signum, frame): _cleanup()
+signal.signal(signal.SIGTERM, _handle_sigterm)
+
+# ----------------- Main -----------------
+if __name__ == "__main__":
+    _lcd_init()
+    lcd_show_net_status(wait_seconds=15, ap_name="PiCam-AP")  # shows Wi-Fi/AP on LCD first
+    lcd_text("Web UI on :5000")
+    _start_button_polling()
+    app.run(host="0.0.0.0", port=5000)
+# =================== END app.py ===================

@@ -1,0 +1,377 @@
+#!/usr/bin/env python3
+# ======================= app.py (menu + timelapse + hotspot) =======================
+import os, time, glob, atexit, signal, threading, subprocess, shutil
+from typing import List
+
+from flask import Flask, request, jsonify, send_from_directory, render_template_string
+
+import numpy as np
+from PIL import Image as PILImage
+from PIL import ImageDraw, ImageFont
+
+import RPi.GPIO as GPIO
+from luma.core.interface.serial import spi
+from luma.lcd.device import st7735
+
+# ----------------- Waveshare 1.44" LCD HAT pins (BCM) -----------------
+PIN_BL   = 24  # Backlight
+PIN_DC   = 25  # D/C
+PIN_RST  = 27  # Reset
+
+# Buttons
+PIN_KEY1      = 21  # Select / Start
+PIN_KEY2      = 20  # Stop
+PIN_KEY3      = 16  # (unused here)
+PIN_JOY_UP    = 6
+PIN_JOY_DOWN  = 19
+PIN_JOY_LEFT  = 5   # (unused here)
+PIN_JOY_RIGHT = 26  # (unused here)
+PIN_JOY_PRESS = 13  # Select
+
+LCD_W, LCD_H = 128, 128
+
+# ----------------- Paths / State -----------------
+CAP_DIR = "/home/pi/timelapse/frames"
+UP_DIR  = "/home/pi/timelapse/uploads"
+os.makedirs(CAP_DIR, exist_ok=True)
+os.makedirs(UP_DIR,  exist_ok=True)
+
+state = {"running": False, "interval_ms": 30000, "last_frame": None}
+_capture_thread = None
+_stop_flag = threading.Event()
+
+# Button polling control
+_btn_thread = None
+_btn_stop = threading.Event()
+
+# Menu state
+menu_items = ["Timelapse", "Wigglegram", "Hotspot: Off"]
+menu_index = 0
+hotspot_on = False
+AP_NAME = "PiCam-AP"
+
+# ----------------- GPIO & LCD init -----------------
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+GPIO.setup(PIN_BL, GPIO.OUT, initial=GPIO.HIGH)
+
+for pin in [PIN_KEY1, PIN_KEY2, PIN_KEY3,
+            PIN_JOY_UP, PIN_JOY_DOWN, PIN_JOY_LEFT, PIN_JOY_RIGHT, PIN_JOY_PRESS]:
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+_font = ImageFont.load_default()
+_lcd = None
+
+def _lcd_init():
+    """Init ST7735S with safe params to avoid red line/offset issues."""
+    global _lcd
+    try:
+        serial = spi(
+            port=0, device=0, gpio_DC=PIN_DC, gpio_RST=PIN_RST,
+            bus_speed_hz=16000000  # safer than 32 MHz
+        )
+        _lcd = st7735(
+            serial_interface=serial, width=LCD_W, height=LCD_H,
+            rotate=0, bgr=True, h_offset=2, v_offset=3
+        )
+    except Exception as e:
+        _lcd = None
+        print(f"[WARN] LCD init failed: {e}")
+
+def lcd_display_image(img: PILImage.Image):
+    if _lcd is None: return
+    try:
+        if img.size != (LCD_W, LCD_H):
+            img = img.resize((LCD_W, LCD_H))
+        _lcd.display(img.convert("RGB"))
+    except Exception as e:
+        print(f"[WARN] LCD display error: {e}")
+
+def lcd_text(msg: str):
+    # ASCII-sanitize so PIL bitmap font never chokes on Unicode
+    safe = msg.encode("ascii", "replace").decode()
+    img = PILImage.new('RGB', (LCD_W, LCD_H), (0,0,0))
+    d = ImageDraw.Draw(img)
+    d.multiline_text((4,4), safe, fill=(255,255,255), font=_font, spacing=2)
+    lcd_display_image(img)
+
+# ----------------- Network helpers -----------------
+def _sh(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True, text=True).strip()
+    except Exception:
+        return ""
+
+def ap_profile_exists(name=AP_NAME):
+    out = _sh("nmcli -t -f NAME connection show")
+    return any(line == name for line in out.splitlines())
+
+def ensure_ap_profile(name=AP_NAME):
+    """Create AP profile if missing. It will NOT autoconnect."""
+    if ap_profile_exists(name):
+        return
+    _sh(f'nmcli connection add type wifi ifname wlan0 con-name "{name}" ssid "{name}" mode ap')
+    _sh(f'nmcli connection modify "{name}" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "StrongPass123"')
+    _sh(f'nmcli connection modify "{name}" 802-11-wireless.band bg 802-11-wireless.channel 6')
+    _sh(f'nmcli connection modify "{name}" ipv4.method shared ipv6.method ignore')
+    _sh(f'nmcli connection modify "{name}" connection.autoconnect no')
+
+def ap_is_active(name=AP_NAME):
+    out = _sh("nmcli -t -f NAME,TYPE,DEVICE,ACTIVE connection show --active")
+    for line in out.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 4 and parts[0] == name and parts[1] == "wifi" and parts[3] == "yes":
+            return True
+    return False
+
+def hotspot_toggle():
+    global hotspot_on
+    ensure_ap_profile(AP_NAME)
+    if ap_is_active(AP_NAME):
+        _sh(f'nmcli connection down "{AP_NAME}"')
+        hotspot_on = False
+    else:
+        _sh(f'nmcli connection up "{AP_NAME}"')
+        hotspot_on = True
+    # Update menu label
+    menu_items[2] = f"Hotspot: {'On' if hotspot_on else 'Off'}"
+    draw_menu()
+
+# ----------------- Capture helpers -----------------
+def _wait_stable(path, tries=15, delay=0.05):
+    last = -1
+    for _ in range(tries):
+        if not os.path.exists(path):
+            time.sleep(delay); continue
+        sz = os.path.getsize(path)
+        if sz > 0 and sz == last:
+            return True
+        last = sz; time.sleep(delay)
+    return os.path.exists(path)
+
+def _capture_once():
+    """Capture one JPEG with libcamera/rpicam; show thumb on LCD."""
+    ts = int(time.time())
+    tmp = f"{CAP_DIR}/tmp_{ts}.jpg"
+    out = f"{CAP_DIR}/{ts}.jpg"
+    capt = "rpicam-still" if shutil.which("rpicam-still") else "libcamera-still"
+    cmd = [
+        capt, "-n",
+        "--timeout","1200",
+        "--width","1296","--height","972",   # OV5647-friendly
+        "-o", tmp
+    ]
+    # Uncomment for brighter indoor: cmd += ["--shutter","50000","--gain","4"]
+
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if not _wait_stable(tmp) or res.returncode != 0:
+        print("[WARN] capture failed:", res.stderr.strip())
+        return
+    os.rename(tmp, out)
+    state["last_frame"] = out
+    try:
+        thumb = PILImage.open(out).convert("RGB")
+        lcd_display_image(thumb)
+    except Exception:
+        pass
+
+def _loop():
+    lcd_text("Timelapse:\nRUNNING")
+    while not _stop_flag.is_set():
+        t0 = time.time()
+        _capture_once()
+        remaining = state["interval_ms"]/1000.0 - (time.time() - t0)
+        if remaining > 0: _stop_flag.wait(timeout=remaining)
+    lcd_text("Timelapse:\nSTOPPED")
+
+def start_timelapse():
+    global _capture_thread
+    if state["running"]: return
+    state["running"] = True
+    _stop_flag.clear()
+    _capture_thread = threading.Thread(target=_loop, daemon=True)
+    _capture_thread.start()
+
+def stop_timelapse():
+    if not state["running"]: return
+    _stop_flag.set()
+    state["running"] = False
+
+# ----------------- Menu UI -----------------
+def draw_menu():
+    img = PILImage.new("RGB", (LCD_W, LCD_H), (0, 0, 0))
+    d = ImageDraw.Draw(img)
+    y = 14
+    for i, item in enumerate(menu_items):
+        prefix = "> " if i == menu_index else "  "
+        color = (255, 255, 0) if i == menu_index else (200, 200, 200)
+        d.text((6, y), prefix + item, font=_font, fill=color)
+        y += 20
+    lcd_display_image(img)
+
+def handle_select():
+    if menu_index == 0:
+        lcd_text("Starting\nTimelapse...")
+        start_timelapse()
+    elif menu_index == 1:
+        lcd_text("Wigglegram\n(not yet)")
+        # TODO: implement wigglegram
+    elif menu_index == 2:
+        lcd_text("Toggling\nHotspot...")
+        hotspot_toggle()
+
+def _menu_buttons_loop():
+    global menu_index
+    # Debounce with simple edge tracking
+    last = {
+        PIN_KEY1:1, PIN_KEY2:1, PIN_KEY3:1,
+        PIN_JOY_UP:1, PIN_JOY_DOWN:1, PIN_JOY_LEFT:1, PIN_JOY_RIGHT:1, PIN_JOY_PRESS:1
+    }
+    draw_menu()
+    while not _btn_stop.is_set():
+        for pin in list(last.keys()):
+            val = GPIO.input(pin)
+            if val == 0 and last[pin] == 1:  # press
+                if pin == PIN_JOY_UP:
+                    menu_index = (menu_index - 1) % len(menu_items); draw_menu()
+                elif pin == PIN_JOY_DOWN:
+                    menu_index = (menu_index + 1) % len(menu_items); draw_menu()
+                elif pin in (PIN_KEY1, PIN_JOY_PRESS):
+                    handle_select()
+                elif pin == PIN_KEY2:
+                    # Quick stop anytime
+                    if state["running"]:
+                        lcd_text("Stopping\nTimelapse...")
+                        stop_timelapse()
+                        draw_menu()
+            if val == 1 and last[pin] == 0:
+                pass  # release edge (not used)
+            last[pin] = val
+        _btn_stop.wait(0.05)
+
+def start_menu():
+    # set initial hotspot label
+    global hotspot_on
+    hotspot_on = ap_is_active(AP_NAME)
+    menu_items[2] = f"Hotspot: {'On' if hotspot_on else 'Off'}"
+    _btn_stop.clear()
+    threading.Thread(target=_menu_buttons_loop, daemon=True).start()
+
+# ----------------- Processing helpers -----------------
+def make_video(out_mp4="timelapse.mp4", fps=24):
+    files = sorted(glob.glob(f"{CAP_DIR}/*.jpg"))
+    if not files: return None
+    out_path = f"/home/pi/timelapse/{out_mp4}"
+    cmd = f"ffmpeg -y -pattern_type glob -i '{CAP_DIR}/*.jpg' -vf fps={fps} -pix_fmt yuv420p {out_path}"
+    subprocess.run(cmd, shell=True, check=False)
+    return out_path if os.path.exists(out_path) else None
+
+def deflicker(image_paths: List[str]) -> List[str]:
+    paths = [p for p in image_paths if os.path.exists(p)]
+    if not paths: return []
+    meds = []
+    for p in paths:
+        try: meds.append(np.median(np.array(PILImage.open(p).convert("L"))))
+        except: meds.append(None)
+    meds = [m for m in meds if m is not None]
+    if not meds: return []
+    target = float(np.median(np.array(meds)))
+    out_paths = []
+    for p in paths:
+        try:
+            im = PILImage.open(p).convert("RGB")
+            arr = np.asarray(im, dtype=np.float32)
+            L = np.median(np.asarray(im.convert("L"))); L = 1.0 if L==0 else float(L)
+            arr = np.clip(arr * (target / L), 0, 255).astype(np.uint8)
+            out = p.rsplit(".",1)[0]+"_df.jpg"
+            PILImage.fromarray(arr).save(out, quality=90)
+            out_paths.append(out)
+        except Exception as e:
+            print(f"[WARN] deflicker error on {p}: {e}")
+    return out_paths
+
+# ----------------- Flask web app -----------------
+app = Flask(__name__)
+INDEX_HTML = """
+<h2>Pi Timelapse</h2>
+<p>Status: {{ 'Running' if running else 'Stopped' }} | Interval: {{ interval_ms/1000 }}s</p>
+<form method="post" action="/start">
+  <input type="number" name="interval" value="{{ interval_ms }}" min="1000" step="1000"> ms
+  <button type="submit">Start</button>
+</form>
+<form method="post" action="/stop"><button type="submit">Stop</button></form>
+<hr>
+<h3>Upload images to process</h3>
+<form method="post" action="/upload" enctype="multipart/form-data">
+  <input type="file" name="files" multiple>
+  <button type="submit">Upload</button>
+</form>
+<p><a href="/make_video">Make video from frames</a> | <a href="/last">View last frame</a></p>
+"""
+
+@app.route("/")
+def index():
+    return render_template_string(INDEX_HTML, running=state["running"], interval_ms=state["interval_ms"])
+
+@app.route("/start", methods=["POST"])
+def route_start():
+    iv = request.form.get("interval", type=int) or state["interval_ms"]
+    state["interval_ms"] = max(1000, iv)
+    start_timelapse()
+    return ("<p>Started.</p><p><a href='/'>Back</a></p>")
+
+@app.route("/stop", methods=["POST"])
+def route_stop():
+    stop_timelapse()
+    return ("<p>Stopped.</p><p><a href='/'>Back</a></p>")
+
+@app.route("/status")
+def status():
+    return jsonify(state)
+
+@app.route("/last")
+def last():
+    if not state["last_frame"]:
+        return "No frame yet", 404
+    d, f = os.path.split(state["last_frame"])
+    return send_from_directory(d, f)
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    files = request.files.getlist("files")
+    saved = []
+    for f in files:
+        fn = f.filename.replace("/", "_")
+        path = os.path.join(UP_DIR, fn)
+        f.save(path)
+        saved.append(path)
+    df = deflicker(saved)
+    return jsonify({"saved": saved, "deflickered": df})
+
+@app.route("/make_video")
+def makevid():
+    mp4 = make_video()
+    if not mp4: return "No frames", 404
+    return send_from_directory("/home/pi/timelapse", os.path.basename(mp4), as_attachment=True)
+
+# ----------------- Cleanup & signals -----------------
+def _cleanup():
+    try: stop_timelapse()
+    except: pass
+    try: _btn_stop.set()
+    except: pass
+    try: GPIO.cleanup()
+    except: pass
+
+@atexit.register
+def _on_exit(): _cleanup()
+
+def _handle_sigterm(signum, frame): _cleanup()
+signal.signal(signal.SIGTERM, _handle_sigterm)
+
+# ----------------- Main -----------------
+if __name__ == "__main__":
+    _lcd_init()
+    start_menu()  # draw menu and start polling buttons
+    app.run(host="0.0.0.0", port=5000)
+# =================== END app.py ===================

@@ -1,0 +1,378 @@
+# -*- coding: utf-8 -*-
+import os, time, threading, subprocess, shutil, glob
+from flask import Flask, render_template_string, send_file, request, redirect, url_for, jsonify, abort
+
+# ---------------- Config ----------------
+SESSIONS_DIR   = "/home/pi/timelapse/sessions"
+IMAGES_DIR     = "/home/pi/timelapse/images"
+os.makedirs(SESSIONS_DIR, exist_ok=True)
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+CAMERA_STILL   = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
+CAPTURE_WIDTH  = "1296"
+CAPTURE_HEIGHT = "972"
+CAPTURE_QUALITY= "90"
+
+FPS_CHOICES    = [10, 24, 30]
+DEFAULT_FPS    = 24
+CAPTURE_INTERVAL_SEC = 10
+
+# ---------------- State -----------------
+app = Flask(__name__)
+_state_lock = threading.Lock()
+_capture_thread = None
+_stop_event = threading.Event()
+_current_session = None
+_first_frame_done = False
+_encoding = {}  # {sid: {"progress":int,"total":int,"status":"idle|encoding|done|error","video":path}}
+
+# ---------------- Helpers ----------------
+def _now_session_id():
+    return time.strftime("session-%Y%m%d-%H%M%S")
+
+def _session_dir(sid):
+    return os.path.join(SESSIONS_DIR, sid)
+
+def _session_frames(sid):
+    return sorted(glob.glob(os.path.join(_session_dir(sid), "frame_*.jpg")))
+
+def _latest_image():
+    files = sorted(glob.glob(os.path.join(IMAGES_DIR, "*.jpg")))
+    return files[-1] if files else None
+
+def _rpicam_still(out_path):
+    cmd = [
+        CAMERA_STILL, "-n",
+        "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+        "-t", "1000", "--quality", CAPTURE_QUALITY,
+        "-o", out_path
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+def _capture_worker(interval_sec, sid):
+    global _first_frame_done
+    frames_dir = _session_dir(sid)
+    os.makedirs(frames_dir, exist_ok=True)
+    idx = 0
+    _first_frame_done = False
+    while not _stop_event.is_set():
+        idx += 1
+        fn = os.path.join(frames_dir, f"frame_{idx:06d}.jpg")
+        res = _rpicam_still(fn)
+        if res.returncode == 0:
+            _first_frame_done = True
+            try:
+                shutil.copy2(fn, os.path.join(IMAGES_DIR, f"last_{int(time.time())}.jpg"))
+            except Exception:
+                pass
+        else:
+            with open(os.path.join(frames_dir, f"error_{idx:06d}.txt"), "w") as f:
+                f.write(res.stdout + "\n" + res.stderr)
+        for _ in range(int(interval_sec*10)):
+            if _stop_event.is_set(): break
+            time.sleep(0.1)
+
+def _encode_thread(sid, fps):
+    enc = _encoding.setdefault(sid, {"progress": 0, "total": 0, "status": "encoding", "video": ""})
+    frames = _session_frames(sid)
+    if not frames:
+        enc.update({"status": "error"})
+        return
+    enc["total"] = len(frames)
+    worklist = os.path.join(_session_dir(sid), "frames.txt")
+    with open(worklist, "w") as w:
+        for f in frames:
+            w.write(f"file '{f}'\n")
+            enc["progress"] += 1
+    out_mp4 = os.path.join(_session_dir(sid), f"{sid}_{fps}fps.mp4")
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+        "-i", worklist, "-vf", f"fps={fps}", "-pix_fmt", "yuv420p", out_mp4
+    ]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60*30)
+        if p.returncode == 0:
+            enc.update({"status": "done", "video": out_mp4})
+        else:
+            enc.update({"status": "error"})
+    except Exception:
+        enc.update({"status": "error"})
+
+# ---------------- UI ----------------
+INDEX_HTML = r"""
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>📸 Pi Timelapse</title>
+<style>
+
+  :root { --btn-bg:#fff; --btn-fg:#111; --muted:#666; --border:#ccc; --accent:#0a84ff; }
+
+
+
+  body { font-family:-apple-system, BlinkMacSystemFont, sans-serif; margin:1em; background:#fafafa; }
+
+
+
+  button, .btn {
+
+    background:var(--btn-bg); color:var(--btn-fg); border:1px solid var(--border);
+
+    padding:8px 12px; border-radius:10px; font-size:16px;
+
+    cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:6px;
+
+  }
+
+  button:hover, .btn:hover { border-color:var(--accent); color:var(--accent); }
+
+  button:disabled { opacity:.45; cursor:not-allowed; }
+
+
+
+  .session {
+
+    border:1px solid var(--border);
+
+    border-radius:10px;
+
+    padding:10px;
+
+    margin-bottom:16px;
+
+    background:#fff;
+
+  }
+
+  .session.active { background:#e6f3ff; } /* light blue for current */
+
+  .session h3 { margin-top:0; }
+
+  .rename-box { display:flex; gap:6px; margin-top:6px; }
+
+  .rename-box input { flex:1; padding:6px; }
+
+</style>
+
+<div class="container">
+<header class="row controls">
+  <h2 style="margin:0 8px 0 0;">📸 Pi Timelapse</h2>
+  <form method="post" action="/start" class="row" style="margin-left:auto;">
+    <label>⏱ Every <input name="interval" type="number" min="1" value="{{ interval }}" style="width:80px"> s</label>
+    <button class="btn">▶️ Start</button>
+  </form>
+  <form method="post" action="/stop"><button class="btn" {% if not session_id %}disabled title="Not running"{% endif %}>⏹ Stop</button></form>
+  <a class="btn" href="/test-capture">📷 Test Capture</a>
+</header>
+
+<div class="card">
+  <h3 style="margin-top:0">Current session</h3>
+  {% if session_id %}
+    <p><b>ID:</b> {{ session_id }}</p>
+    {% if not first_frame %}
+      <div class="muted">⏳ Capturing…</div>
+    {% else %}
+      <img class="preview" src="/session/{{ session_id }}/preview?ts={{ ts }}" alt="preview">
+    {% endif %}
+    <form class="row" method="post" action="/encode/{{ session_id }}">
+      <label>🎞 FPS:
+        <select name="fps">
+          {% for f in fps_choices %}
+            <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="btn" {% if not first_frame %}disabled title="No frames yet"{% endif %}>🎬 Encode Video</button>
+    </form>
+</div>
+  {% else %}
+    <div class="card"><div class="muted">No active capture.</div></div>
+  {% endif %}
+
+<div class="card">
+  <h3 style="margin-top:0">🎞 Encodes</h3>
+  <div id="encodes"></div>
+  <div class="progress" id="progwrap" style="display:none;"><div id="bar" class="bar"></div></div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">📂 Sessions</h3>
+  {% for sid, has_frames in sessions %}
+    <div class="row sessions-row" style="justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div class="row" style="gap:10px; align-items:center;">
+        {% if has_frames %}
+          <img class="thumb" src="/session/{{ sid }}/preview" alt="preview">
+        {% endif %}
+        <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap;">
+          <b>{{ sid }}</b>
+          <a class="btn" href="/session/{{ sid }}/preview">🖼 Preview</a>
+          <form method="post" action="/encode/{{ sid }}" class="row" style="gap:8px;">
+            <label>🎞 FPS:
+              <select name="fps">
+                {% for f in fps_choices %}
+                  <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="btn">🎬 Encode</button>
+          </form>
+          {% if encoding.get(sid,{}).get('status')=='done' %}
+            <a class="btn" href="/download/{{ sid }}">⬇️ Download</a>
+          {% endif %}
+        </div>
+      </div>
+      <form method="post" action="/rename/{{ sid }}" class="row" style="gap:8px;">
+        <input name="new" type="text" placeholder="Rename…" required>
+        <button class="btn">✏️ Rename</button>
+      </form>
+      <form method="post" action="/delete/{{ sid }}">
+        <button class="btn" {% if session_id==sid %}disabled title="Stop capture first"{% endif %}>🗑️ Delete</button>
+      </form>
+    </div>
+  {% else %}
+    <div class="muted">No sessions yet.</div>
+  {% endfor %}
+</div>
+</div>
+
+<script>
+async function refreshEnc() {
+  try {
+    const r = await fetch('/jobs');
+    const j = await r.json();
+    const div = document.getElementById('encodes');
+    div.innerHTML = '';
+    let any = false;
+    for (const [sid, info] of Object.entries(j)) {
+      any = true;
+      const p = Math.min(100, info.total ? Math.round(100*info.progress/info.total) : 0);
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `<b>${sid}</b> — ${info.status} ${p ? '('+p+'%)' : ''} ` +
+        (info.status==='done' ? ` <a class="btn" href="/download/${sid}">⬇️ Download</a>` : '');
+      div.appendChild(row);
+      const wrap = document.getElementById('progwrap');
+      const bar = document.getElementById('bar');
+      if (info.status==='encoding') {
+        wrap.style.display='block'; bar.style.width=p+'%';
+      } else if (info.status==='done' || info.status==='error') {
+        wrap.style.display='none'; bar.style.width='0%';
+      }
+    }
+    if (!any) { document.getElementById('progwrap').style.display='none'; }
+  } catch(e) {}
+}
+setInterval(refreshEnc, 1000);
+refreshEnc();
+</script>
+"""
+
+# ---------------- Routes ----------------
+@app.get("/")
+def index():
+    all_sessions = sorted(os.listdir(SESSIONS_DIR))
+    sessions = []
+    for sid in all_sessions:
+        sessions.append((sid, len(_session_frames(sid)) > 0))
+    with _state_lock:
+        sid = _current_session
+        first = _first_frame_done
+    return render_template_string(
+        INDEX_HTML,
+        interval=CAPTURE_INTERVAL_SEC,
+        fps_choices=FPS_CHOICES, default_fps=DEFAULT_FPS,
+        session_id=sid, first_frame=first, ts=int(time.time()),
+        sessions=sessions, encoding=_encoding
+    )
+
+@app.get("/session/<sid>/preview")
+def session_preview(sid):
+    frames = _session_frames(sid)
+    if not frames: abort(404)
+    return send_file(frames[-1], mimetype="image/jpeg")
+
+@app.get("/download/<sid>")
+def download_video(sid):
+    info = _encoding.get(sid, {})
+    path = info.get("video")
+    if not path or not os.path.exists(path): abort(404)
+    return send_file(path, as_attachment=True)
+
+@app.get("/jobs")
+def jobs():
+    return jsonify(_encoding)
+
+@app.get("/test-capture")
+def test_capture():
+    out = os.path.join(IMAGES_DIR, "test_capture.jpg")
+    res = _rpicam_still(out)
+    if res.returncode != 0:
+        return f"<pre>Camera capture failed\n\n{res.stdout}\n{res.stderr}</pre>", 500
+    return f"<h3>✅ Captured</h3><img class='preview' src='/latest?ts={int(time.time())}'><p><a href='/'>Back</a></p>"
+
+@app.get("/latest")
+def latest():
+    img = _latest_image()
+    if not img: abort(404)
+    return send_file(img, mimetype="image/jpeg")
+
+@app.post("/start")
+def start():
+    try:
+        interval = max(1, int(request.form.get("interval", CAPTURE_INTERVAL_SEC)))
+    except Exception:
+        interval = CAPTURE_INTERVAL_SEC
+    with _state_lock:
+        global _capture_thread, _stop_event, _current_session, _first_frame_done
+        if _capture_thread and _capture_thread.is_alive():
+            return redirect(url_for("index"))
+        sid = _now_session_id()
+        _current_session = sid
+        _first_frame_done = False
+        _stop_event = threading.Event()
+        _capture_thread = threading.Thread(target=_capture_worker, args=(interval, sid), daemon=True)
+        _capture_thread.start()
+    return redirect(url_for("index"))
+
+@app.post("/stop")
+def stop():
+    with _state_lock:
+        global _stop_event, _current_session
+        _stop_event.set()
+        _current_session = None
+    return redirect(url_for("index"))
+
+@app.post("/encode/<sid>")
+def encode(sid):
+    try:
+        fps = int(request.form.get("fps", DEFAULT_FPS))
+    except Exception:
+        fps = DEFAULT_FPS
+    if fps not in FPS_CHOICES: fps = DEFAULT_FPS
+    _encoding[sid] = {"progress":0,"total":0,"status":"encoding","video":""}
+    threading.Thread(target=_encode_thread, args=(sid, fps), daemon=True).start()
+    return redirect(url_for("index"))
+
+@app.post("/rename/<sid>")
+def rename(sid):
+    new = request.form.get("new","").strip()
+    if not new: return redirect(url_for("index"))
+    oldp = _session_dir(sid)
+    newp = _session_dir(new)
+    if os.path.exists(oldp) and not os.path.exists(newp):
+        os.rename(oldp, newp)
+        if sid in _encoding:
+            _encoding[new] = _encoding.pop(sid)
+    return redirect(url_for("index"))
+
+@app.post("/delete/<sid>")
+def delete(sid):
+    p = _session_dir(sid)
+    if p and os.path.isdir(p):
+        shutil.rmtree(p, ignore_errors=True)
+    _encoding.pop(sid, None)
+    return redirect(url_for("index"))
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "5050"))
+    app.run(host="0.0.0.0", port=port)

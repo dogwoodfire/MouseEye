@@ -1,0 +1,405 @@
+import threading
+
+# capture thread globals (single source of truth)
+_stop_event = threading.Event()
+_capture_thread = None
+
+
+# capture thread globals
+
+# -*- coding: utf-8 -*-
+import os, time, threading, subprocess, shutil, glob, io
+from datetime import datetime
+from flask import Flask, request, redirect, url_for, send_file, render_template_string, abort, jsonify
+import threading
+try:
+    from PIL import Image
+    PIL_OK = True
+except Exception:
+    PIL_OK = False
+
+BASE       = "/home/pi/timelapse"
+SESS_DIR   = os.path.join(BASE, "sessions")
+IMG_DIR    = os.path.join(BASE, "images")
+os.makedirs(SESS_DIR, exist_ok=True)
+os.makedirs(IMG_DIR,  exist_ok=True)
+
+STILL_BIN  = shutil.which("rpicam-still") or "rpicam-still"
+WIDTH, HEIGHT = "1296", "972"
+JPG_QUALITY   = "90"
+FPS_CHOICES   = [10, 24, 30]
+DEFAULT_FPS   = 24
+
+app = Flask(__name__)
+
+_capture_lock     = threading.Lock()
+_capture_thread   = None
+_capturing        = False
+_interval_sec     = 10
+_current_session  = None
+
+_encode_lock  = threading.Lock()
+_encode_state = {}
+
+def list_sessions():
+    sessions = [d for d in os.listdir(SESS_DIR) if os.path.isdir(os.path.join(SESS_DIR, d))]
+    sessions = [s for s in sessions if s.startswith("session-")]
+    sessions.sort(key=lambda s: os.path.getmtime(os.path.join(SESS_DIR, s)), reverse=True)
+    return sessions
+
+def session_path(sid):
+    p = os.path.join(SESS_DIR, sid)
+    if not os.path.isdir(p): abort(404)
+    return p
+
+def latest_image(sid):
+    p = session_path(sid)
+    imgs = sorted(glob.glob(os.path.join(p, "*.jpg")))
+    return imgs[-1] if imgs else None
+
+def capture_one(path):
+    cmd = [STILL_BIN, "-n", "-t", "1000", "--width", WIDTH, "--height", HEIGHT, "--quality", JPG_QUALITY, "-o", path]
+    return subprocess.run(cmd, capture_output=True)
+
+def _capture_loop():
+    global _capturing, _current_session, _interval_sec
+    while True:
+        with _capture_lock:
+            if not _capturing or not _current_session:
+                break
+            sid = _current_session
+            interval = _interval_sec
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        out = os.path.join(SESS_DIR, sid, f"{ts}.jpg")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        capture_one(out)
+        # sleep in 1s steps so Stop is responsive
+        for _ in range(int(max(1, interval))):
+            with _capture_lock:
+                if not _capturing:
+                    break
+            time.sleep(1)
+
+def start_capture(interval):
+    global _capturing, _capture_thread, _current_session, _interval_sec
+    with _capture_lock:
+        if _capturing:
+            return
+        _interval_sec = int(max(1, interval))
+        _current_session = f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        os.makedirs(os.path.join(SESS_DIR, _current_session), exist_ok=True)
+        _capturing = True
+        _capture_thread.start()
+
+def stop_capture_old1():
+    global _capturing, _capture_thread
+    with _capture_lock:
+        _capturing = False
+    # don’t block forever
+    if _capture_thread and _capture_thread.is_alive():
+        _capture_thread.join(timeout=2)
+
+def encode_session(sid, fps):
+    with _encode_lock:
+        _encode_state[sid] = {"status":"working","progress":0}
+    sp  = session_path(sid)
+    out = os.path.join(sp, f"{sid}.mp4")
+    images = sorted(glob.glob(os.path.join(sp, "*.jpg")))
+    if not images:
+        with _encode_lock: _encode_state[sid] = {"status":"error","progress":0}
+        return
+    def worker():
+        try:
+            cmd = ["ffmpeg","-y","-framerate",str(fps),"-pattern_type","glob","-i","*.jpg",
+                   "-vf","scale=1280:-2:flags=lanczos","-r",str(fps),"-movflags","+faststart",out]
+            proc = subprocess.Popen(cmd,cwd=sp,stderr=subprocess.PIPE,stdout=subprocess.DEVNULL,text=True)
+            total=len(images); done=0
+            if proc.stderr:
+                for line in proc.stderr:
+                    if "frame=" in line:
+                        try:
+                            for tok in line.strip().split():
+                                if tok.startswith("frame="):
+                                    done = max(done, int(tok.split("=")[1] or 0))
+                                    break
+                        except: pass
+                        with _encode_lock:
+                            _encode_state[sid]={"status":"working","progress":max(0,min(99,int(done*100/max(1,total))))}
+            proc.wait()
+            with _encode_lock:
+                _encode_state[sid]={"status":"done" if proc.returncode==0 else "error",
+                                    "progress":100 if proc.returncode==0 else 0}
+        except:
+            with _encode_lock: _encode_state[sid]={"status":"error","progress":0}
+    threading.Thread(target=worker,daemon=True).start()
+
+@app.get("/")
+def index():
+    sessions = list_sessions()
+    encodes = []
+    for s in sessions:
+        mp4 = os.path.join(SESS_DIR, s, f"{s}.mp4")
+        if os.path.isfile(mp4):
+            encodes.append({"sid": s, "mp4": f"/download/{s}"})
+    # tell the template if the current session already has a frame
+    has_frame = False
+    if _current_session:
+        try:
+            has_frame = bool(latest_image(_current_session))
+        except:  # session might have just switched
+            has_frame = False
+    return render_template_string(TPL,
+        interval=_interval_sec, capturing=_capturing, current_session=_current_session,
+        current_has_frame=has_frame,
+        sessions=sessions, encodes=encodes, fps_choices=FPS_CHOICES, default_fps=DEFAULT_FPS,
+        now=int(time.time())
+    )
+
+@app.post("/start")
+def start():
+    try: interval = int(request.form.get("interval", _interval_sec))
+    except: interval = _interval_sec
+    start_capture(interval)
+    return redirect(url_for("index"))
+
+# Accept both POST and GET for robustness
+@app.post("/stop")
+@app.get("/stop")
+def stop():
+    # Accept GET or POST; stop the capture thread safely
+    try:
+        stop_timelapse()
+    except Exception as e:
+        print("[stop]", e)
+    return redirect(url_for("index"))
+    return redirect(url_for("index"))
+
+@app.get("/test-capture")
+def test_capture():
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out = os.path.join(IMG_DIR, f"test_{ts}.jpg")
+    res = capture_one(out)
+    if res.returncode != 0:
+        err = res.stderr.decode() if isinstance(res.stderr, bytes) else (res.stderr or "")
+        return f"Camera capture failed:<pre>{err}</pre>", 500
+    return send_file(out, mimetype="image/jpeg")
+
+@app.get("/session/<sid>/preview")
+def session_preview(sid):
+    p = latest_image(sid)
+    if not p: return ("No frames yet", 404)
+    w = request.args.get("w", type=int); h = request.args.get("h", type=int)
+    if PIL_OK and (w or h):
+        try:
+            im = Image.open(p); im.thumbnail((w or 9999, h or 9999))
+            buf = io.BytesIO(); im.save(buf, format="JPEG", quality=85); buf.seek(0)
+            return send_file(buf, mimetype="image/jpeg")
+        except: pass
+    return send_file(p, mimetype="image/jpeg")
+
+@app.post("/encode/<sid>")
+def encode(sid):
+    fps = request.form.get("fps", type=int) or DEFAULT_FPS
+    if fps not in FPS_CHOICES: fps = DEFAULT_FPS
+    encode_session(sid, fps)
+    return redirect(url_for("index"))
+
+@app.get("/download/<sid>")
+def download(sid):
+    mp4 = os.path.join(session_path(sid), f"{sid}.mp4")
+    if not os.path.isfile(mp4): abort(404)
+    return send_file(mp4, as_attachment=True, download_name=f"{sid}.mp4")
+
+@app.post("/rename/<sid>")
+def rename(sid):
+    newname = (request.form.get("newname") or "").strip()
+    if not newname or "/" in newname or newname == sid: return redirect(url_for("index"))
+    if sid == _current_session: return redirect(url_for("index"))
+    src = session_path(sid); dst = os.path.join(SESS_DIR, newname)
+    if os.path.exists(dst): return redirect(url_for("index"))
+    os.rename(src, dst)
+    return redirect(url_for("index"))
+
+@app.post("/delete/<sid>")
+def delete(sid):
+    if sid == _current_session: return redirect(url_for("index"))
+    shutil.rmtree(session_path(sid), ignore_errors=True)
+    return redirect(url_for("index"))
+
+@app.get("/jobs")
+def jobs():
+    with _encode_lock: return jsonify(_encode_state)
+
+TPL = r"""
+<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>📸 Pi Timelapse</title>
+<style>
+  html,body{margin:0;padding:0}
+  body{background:#eef3f6;color:#111;font:16px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";}
+  a{color:inherit;text-decoration:none}
+  button{font:inherit}
+  input,select{font:inherit}
+  *{box-sizing:border-box}
+  .wrap{max-width:800px;margin:18px auto;padding:0 12px}
+  h1{font-size:28px;margin:6px 0 16px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  input[type=number]{width:90px;padding:8px 10px;border-radius:10px;border:1px solid #ccc;background:#fff}
+  .btn{display:inline-block;padding:10px 14px;border-radius:12px;border:1px solid #cfd3d7;background:#e9ecef;color:#111;cursor:pointer;text-decoration:none}
+  .btn:hover{background:#dfe3e7}
+  .btn.primary{background:#0b6efd;color:#fff;border-color:#0b6efd}
+  .btn.danger{background:#fee;color:#900;border-color:#f1b0b0}
+  .card{background:#fff;border-radius:16px;border:1px solid #e6e8eb;padding:14px;margin:14px 0}
+  .title{font-weight:700;font-size:20px;margin-bottom:8px}
+  .muted{color:#666}
+  .current-box{min-height:260px;border:1px dashed #d0d4d9;border-radius:12px;display:flex;align-items:center;justify-content:center;padding:8px}
+  .current-img{max-width:100%;max-height:260px;display:block;margin:auto;background:#000;border-radius:10px}
+  .session-list{display:flex;flex-direction:column;gap:18px}
+  .session-card{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:12px;border:1px solid #e6e8eb;border-radius:14px;background:#fff}
+  .session-card.active{background:#e7f1ff;border-color:#b5d7ff}
+  .thumb{width:110px;height:78px;border-radius:10px;object-fit:cover;background:#000}
+  .meta b{display:block;margin-bottom:6px;font-size:16px}
+  .meta .row{margin:6px 0}
+  .rename-wrap{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .rename-wrap input{flex:1;min-width:160px;padding:8px 10px;border:1px solid #cfd3d7;border-radius:10px}
+  /* keep preview area steady even with no image yet */
+  .thumb{width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;display:block;
+         border:2px dashed #e0e6ef;border-radius:14px;background:#f8fafc}
+  .thumb.loading{background:#f0f7ff}
+</style>
+
+<div class="wrap">
+  <h1>📸 Pi Timelapse</h1>
+
+  <div class="row">
+    <form class="row" method="post" action="/start">
+      <span>⏱ Every</span>
+      <input type="number" min="1" name="interval" value="{{ interval }}">
+      <span>s</span>
+      <button class="btn primary" type="submit">▶️ Start</button>
+    </form>
+    <form method="post" action="/stop">
+      <button class="btn danger" type="submit">🟥 Stop</button>
+    </form>
+    <a class="btn" href="/test-capture" target="_blank">🧪 Test Capture</a>
+  </div>
+
+  <div class="card">
+    <div class="title">Current session</div>
+    {% if current_session %}
+      <div class="muted">ID: {{ current_session }}</div>
+      {% if current_has_frame %}
+        <div class="current-box">
+          <img class="current-img" src="/session/{{ current_session }}/preview?ts={{ now }}">
+        </div>
+      {% else %}
+        <div class="current-box muted">capturing…</div>
+      {% endif %}
+      <div class="row">
+        <form method="post" action="/encode/{{ current_session }}">
+          <label>🎞 FPS:
+            <select name="fps">
+              {% for f in fps_choices %}
+                <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button class="btn" type="submit">🎬 Encode Video</button>
+        </form>
+      </div>
+    {% else %}
+      <div class="current-box muted">No active capture.</div>
+    {% endif %}
+  </div>
+
+  {% if encodes %}
+  <div class="card">
+    <div class="title">🎞 Encodes</div>
+    {% for e in encodes %}
+      <div class="row" style="justify-content:space-between;">
+        <div><b>{{ e.sid }}</b> — done (100%)</div>
+        <a class="btn" href="{{ e.mp4 }}">⬇️ Download</a>
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="title">📁 Sessions</div>
+    <div class="session-list">
+      {% for sess in sessions %}
+      <div class="session-card {% if sess == current_session %}active{% endif %}">
+        <img class="thumb" src="/session/{{ sess }}/preview?w=220" onerror="this.style.display='none'">
+        <div class="meta">
+          <b>{{ sess if sess != current_session else sess ~ ' (active)' }}</b>
+
+          <div class="row">
+            <a class="btn" href="/session/{{ sess }}/preview" target="_blank">🖼️ Preview</a>
+            <form method="post" action="/encode/{{ sess }}">
+              <label>🎞 FPS:
+                <select name="fps">
+                  {% for f in fps_choices %}
+                    <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <button class="btn" type="submit">🎬 Encode</button>
+            </form>
+            <a class="btn" href="/download/{{ sess }}">⬇️ Download</a>
+          </div>
+
+          <div class="rename-wrap">
+            {% if sess == current_session %}
+              <input type="text" value="{{ sess }}" disabled>
+              <button class="btn" disabled>✏️ Rename</button>
+              <button class="btn" disabled>🗑️ Delete</button>
+            {% else %}
+              <form method="post" action="/rename/{{ sess }}" class="rename-wrap">
+                <input type="text" name="newname" placeholder="Rename…">
+                <button class="btn" type="submit">✏️ Rename</button>
+              </form>
+              <form method="post" action="/delete/{{ sess }}" onsubmit="return confirm('Delete {{ sess }}?')">
+                <button class="btn" type="submit">🗑️ Delete</button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+"""
+
+
+# ---------- fallback stop helper (added by patch) ----------
+def stop_timelapse():
+    """Stop the background capture thread if present."""
+    # event may not exist yet
+    ev = globals().get("_stop_event")
+    if ev:
+        try:
+            ev.set()
+        except Exception:
+            pass
+
+    t = globals().get("_capture_thread")
+    if t and getattr(t, "is_alive", lambda: False)():
+        try:
+            t.join(timeout=5)
+        except Exception:
+            pass
+    # clear references
+    globals()["_capture_thread"] = None
+
+
+
+
+@app.route('/stop', methods=['GET','POST'])
+def stop():
+    try:
+        stop_timelapse()
+    except Exception as e:
+        print("[stop]", e)
+    from flask import redirect, url_for
+    return redirect(url_for('index'))

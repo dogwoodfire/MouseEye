@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+timelapse-venv/
+sessions/
+images/
+schedule.json
+*.log
