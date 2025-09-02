@@ -51,6 +51,35 @@ _jobs = {}                # encode job progress by session
 _capture_stop_timer = None
 _capture_end_ts     = None
 
+# ---------- Session status API ----------
+# This endpoint returns whether the session is active, the number of frames
+# captured so far and the remaining time (if a duration was set).  The
+# front-end can poll this to update the UI for the active session.
+@app.get("/session_status/<sess>")
+def session_status(sess):
+    """Return JSON with number of frames and remaining seconds for a session."""
+    active = (_current_session == sess)
+    frames_count = 0
+    try:
+        sess_dir = _session_path(sess)
+        if os.path.isdir(sess_dir):
+            frames_count = len(glob.glob(os.path.join(sess_dir, "*.jpg")))
+    except Exception:
+        frames_count = 0
+    remaining_sec = None
+    try:
+        if active and _capture_end_ts:
+            rem = int(_capture_end_ts - time.time())
+            if rem > 0:
+                remaining_sec = rem
+    except Exception:
+        remaining_sec = None
+    return jsonify({
+        "active": active,
+        "frames": frames_count,
+        "remaining_sec": remaining_sec
+    })
+
 # ---------- Helpers ----------
 def _session_path(name): return os.path.join(SESSIONS_DIR, name)
 def _session_latest_jpg(sess_dir):
@@ -441,7 +470,15 @@ TPL_INDEX = r"""
           {{ s.name }}
         {% endif %}
       </div>
-      <div class="sub">{{ s.count }} frame{{ '' if s.count==1 else 's' }}{% if s.has_video %} • 🎞 ready{% endif %}</div>
+      <div class="sub">
+        <span id="frames-{{ s.name }}">{{ s.count }} frame{{ '' if s.count==1 else 's' }}</span>
+        {% if s.has_video %} • 🎞 ready{% endif %}
+        {% if current_session == s.name %}
+          <span id="timeleft-{{ s.name }}">
+            {% if remaining_min is not none %} • ⏳ {{ remaining_min }}m{{ remaining_sec_padded }}s left{% endif %}
+          </span>
+        {% endif %}
+      </div>
 
       <div class="controls">
         {% if not s.has_video and current_session != s.name %}
@@ -570,17 +607,52 @@ async function testCapture(){
 
   // This listener should be outside of showProgress(), so it runs
   // immediately when the page loads and resumes polling if needed.
-  document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Existing code to resume encoding progress bars …
+  try {
+    const resp = await fetch("{{ url_for('jobs') }}");
+    const jobs = await resp.json();
+    for (const [key, job] of Object.entries(jobs)) {
+      if (job && job.status === 'encoding') {
+        setTimeout(() => showProgress(key), 10);
+      }
+    }
+  } catch (e) { console.log(e); }
+
+  // Poll the active session for frames and remaining time
+  const currentSession = {{ current_session | tojson }};
+  const statusUrlBase = "{{ url_for('session_status', sess='') }}";
+  async function pollActive() {
+    if (!currentSession) return;
     try {
-      const resp = await fetch("{{ url_for('jobs') }}");
-      const jobs = await resp.json();
-      for (const [name, job] of Object.entries(jobs)) {
-        if (job && job.status === 'encoding') {
-          setTimeout(() => showProgress(name), 10);
+      const r = await fetch(statusUrlBase + currentSession);
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.active) {
+        // update frame count
+        const fSpan = document.getElementById('frames-' + currentSession);
+        if (fSpan) {
+          const count = d.frames;
+          fSpan.textContent = count + (count === 1 ? ' frame' : ' frames');
+        }
+        // update time remaining
+        const tSpan = document.getElementById('timeleft-' + currentSession);
+        if (tSpan) {
+          if (d.remaining_sec !== null) {
+            const mins = Math.floor(d.remaining_sec / 60);
+            const secs = d.remaining_sec % 60;
+            const secStr = String(secs).padStart(2, '0');
+            tSpan.textContent = ' • ⏳ ' + mins + 'm' + secStr + 's left';
+          } else {
+            tSpan.textContent = '';
+          }
         }
       }
-    } catch (e) { console.log(e); }
-  });
+    } catch (err) { console.log(err); }
+  }
+  // poll every 2 seconds
+  setInterval(pollActive, 2000);
+});
 </script>
 """
 
