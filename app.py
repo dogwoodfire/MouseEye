@@ -175,6 +175,22 @@ def index():
         remaining_sec_only = remaining_sec % 60
         remaining_sec_padded = f"{remaining_sec_only:02d}"
 
+    # Next schedule card
+    next_sched = None
+    try:
+        if _sched_state and _sched_state.get("end_ts", 0) > time.time():
+            ns = type("S", (), _sched_state)
+            start_h = datetime.fromtimestamp(ns.start_ts).strftime("%a %Y-%m-%d %H:%M")
+            end_h   = datetime.fromtimestamp(ns.end_ts).strftime("%a %Y-%m-%d %H:%M")
+            next_sched = {
+                "start_human": start_h,
+                "end_human": end_h,
+                "interval": ns.interval,
+                "fps": ns.fps,
+            }
+    except Exception:
+        next_sched = None
+
     return render_template_string(
         TPL_INDEX,
         sessions=sessions,
@@ -185,7 +201,8 @@ def index():
         remaining_sec=remaining_sec,
         remaining_min=remaining_min,
         remaining_sec_only=remaining_sec_only,
-        remaining_sec_padded=remaining_sec_padded
+        remaining_sec_padded=remaining_sec_padded,
+        next_sched=next_sched
     )
 
 @app.route("/start", methods=["POST"])
@@ -481,6 +498,31 @@ TPL_INDEX = r"""
       <a class="btn" href="{{ url_for('stop_route') }}" onclick="event.preventDefault(); postStop();">⏹ Stop</a>
     </div>
   </form>
+    {% if next_sched %}
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-weight:600">⏰ Next schedule</div>
+        <div class="sub">
+          {{ next_sched.start_human }} → {{ next_sched.end_human }}
+          • every {{ next_sched.interval }}s
+          • {{ next_sched.fps }} FPS
+        </div>
+      </div>
+      <a class="btn" href="{{ url_for('schedule_page') }}">⚙️ Edit schedule</a>
+    </div>
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-weight:600">⏰ No schedule armed</div>
+        <div class="sub">Set one up to run later.</div>
+      </div>
+      <a class="btn" href="{{ url_for('schedule_page') }}">➕ New schedule</a>
+    </div>
+  </div>
+  {% endif %}
 
   {% for s in sessions %}
   <div class="card session {% if current_session == s.name %}active{% endif %}">
@@ -739,18 +781,6 @@ def _sched_http_post(path, data=None, timeout=5):
     except Exception:
         return False
 
-
-def _sched_fire_start(interval, fps):
-    try:
-        from flask import current_app
-        app = current_app._get_current_object()
-    except Exception:
-        app = globals().get('app')
-    if not app: return
-    with app.app_context():
-        with app.test_client() as c:
-            c.post('/start', data={'interval': interval, 'fps': fps})
-
 def _sched_fire_stop():
     try:
         from flask import current_app
@@ -790,7 +820,7 @@ SCHED_TPL = '''<!doctype html>
 <form method="post" action="{{ url_for('schedule_arm') }}">
   <label>Start (local time)</label>
   <input type="datetime-local" name="start_local" required>
-  <label>Duration</label>
+  <label>Duration (hours & minutes)</label>
   <input type="number" name="duration_hr"  value="0"  min="0" placeholder="hrs">
   <input type="number" name="duration_min" value="60" min="0" placeholder="mins">
   <label>Interval (seconds)</label>
@@ -807,8 +837,8 @@ SCHED_TPL = '''<!doctype html>
 {% if sched %}
 <div class="card">
   <div><b>Current schedule</b></div>
-  <div>Start: {{ sched.start_ts }} (unix)</div>
-  <div>End: {{ sched.end_ts }} (unix)</div>
+  <div>Start: {{ sched_start_human }}</div>
+  <div>End: {{ sched_end_human }}</div>
   <div>Interval: {{ sched.interval }}s &nbsp; FPS: {{ sched.fps }}</div>
   <form method="post" action="{{ url_for('schedule_cancel') }}" style="margin-top:8px">
     <button type="submit">Cancel Schedule</button>
@@ -840,43 +870,55 @@ def _sched_fire_stop():
         with app.test_client() as c:
             c.post('/stop')
 
-@app.get("/my_schedule")
+@app.get("/schedule")
 def schedule_page():
     cur = type("S", (), _sched_state) if _sched_state else None
-    
+
+    sched_start_human = sched_end_human = None
+    if cur:
+        try:
+            sched_start_human = datetime.fromtimestamp(cur.start_ts).strftime("%a %Y-%m-%d %H:%M")
+            sched_end_human   = datetime.fromtimestamp(cur.end_ts).strftime("%a %Y-%m-%d %H:%M")
+        except Exception:
+            pass
+
     return render_template_string(
         SCHED_TPL,
-        fps_choices=globals().get("FPS_CHOICES", [10,24,30]),
+        fps_choices=globals().get("FPS_CHOICES", [10, 24, 30]),
         default_fps=globals().get("DEFAULT_FPS", 24),
         interval_default=globals().get("CAPTURE_INTERVAL_SEC", 10),
-        sched=cur
+        sched=cur,
+        sched_start_human=sched_start_human,
+        sched_end_human=sched_end_human
     )
 
-@app.post("/my_schedule/arm")
+@app.post("/schedule/arm")
 def schedule_arm():
-    start_local = request.form.get("start_local","").strip()
-    # parse duration fields: hours and minutes (default to 60 minutes if both are zero)
+    start_local = request.form.get("start_local", "").strip()
+
+    # Duration: hours + minutes
     hr_str  = request.form.get("duration_hr",  "0") or "0"
     min_str = request.form.get("duration_min", "60") or "60"
-    try:
-        dur_hr  = int(hr_str.strip())
-    except Exception:
-        dur_hr  = 0
-    try:
-        dur_min = int(min_str.strip())
-    except Exception:
-        dur_min = 0
-    if dur_hr == 0 and dur_min == 0:
-        duration_min = 60
-    else:
-        duration_min = dur_hr * 60 + dur_min
-    interval = int(request.form.get("interval","10") or 10)
-    fps = int(request.form.get("fps","24") or 24)
+    try:    dur_hr  = int(hr_str.strip())
+    except: dur_hr  = 0
+    try:    dur_min = int(min_str.strip())
+    except: dur_min = 0
+    duration_min = dur_hr * 60 + dur_min
+    if duration_min <= 0:
+        duration_min = 60  # fallback so you don't arm a zero-length schedule
+
+    # Other params
+    try:    interval = int(request.form.get("interval", "10") or 10)
+    except: interval = 10
+    try:    fps = int(request.form.get("fps", "24") or 24)
+    except: fps = 24
+
+    # Parse local datetime
     try:
         start_ts = int(datetime.strptime(start_local, "%Y-%m-%dT%H:%M").timestamp())
     except Exception:
-        start_ts = int(time.time()) + 60
-    end_ts = start_ts + duration_min*60
+        start_ts = int(time.time()) + 60  # 1 min from now
+    end_ts = start_ts + duration_min * 60
 
     now = int(time.time())
     delay_start = max(0, start_ts - now)
@@ -892,15 +934,22 @@ def schedule_arm():
             try: _sched_stop_t.cancel()
             except: pass
             _sched_stop_t = None
+
         _sched_state.clear()
-        _sched_state.update(dict(start_ts=start_ts,end_ts=end_ts,interval=interval,fps=fps))
-        _sched_start_t = threading.Timer(delay_start,_sched_fire_start,args=(interval,fps))
-        _sched_stop_t  = threading.Timer(delay_stop,_sched_fire_stop)
-        _sched_start_t.daemon=True; _sched_stop_t.daemon=True
-        _sched_start_t.start(); _sched_stop_t.start()
+        _sched_state.update(dict(
+            start_ts=start_ts, end_ts=end_ts, interval=interval, fps=fps
+        ))
+
+        _sched_start_t = threading.Timer(delay_start, _sched_fire_start, args=(interval, fps))
+        _sched_stop_t  = threading.Timer(delay_stop,  _sched_fire_stop)
+        _sched_start_t.daemon = True
+        _sched_stop_t.daemon  = True
+        _sched_start_t.start()
+        _sched_stop_t.start()
+
     return redirect(url_for("schedule_page"))
 
-@app.post("/my_schedule/cancel")
+@app.post("/schedule/cancel")
 def schedule_cancel():
     global _sched_start_t, _sched_stop_t
     with _sched_lock:
