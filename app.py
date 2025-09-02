@@ -261,6 +261,30 @@ def download(sess):
     if not os.path.exists(p): abort(404)
     return send_file(p, as_attachment=True, download_name=f"{sess}.mp4")
 
+
+@app.get("/test_capture")
+def test_capture():
+    """Capture a single still and return it as JPEG."""
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+    cmd = [
+        CAMERA_STILL, "-o", path,
+        "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+        "--quality", CAPTURE_QUALITY,
+        "--immediate", "--nopreview"
+    ]
+    try:
+        subprocess.run(cmd, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return send_file(path, mimetype="image/jpeg")
+    except Exception:
+        abort(500)
+    finally:
+        try: os.unlink(path)
+        except Exception:
+            pass
+
 # ---------- Template (single file) ----------
 TPL_INDEX = r"""
 <!doctype html>
@@ -344,7 +368,7 @@ TPL_INDEX = r"""
     <div class="row">
       <label>📝 Session name:</label>
       <input name="name" type="text" placeholder="(auto)" style="min-width:160px">
-      <button class="btn" type="button" onclick="testCapture()">🧪 Take a test photo</button>
+      <button class="btn" type="button" onclick="testCapture()">📷 Check the viewfinder</button>
     </div>
   </form>
 
@@ -407,11 +431,63 @@ TPL_INDEX = r"""
       location.reload();
     }catch(e){ console.log(e); }
   }
-  async function testCapture(){
-    try{
-      // quick single still just to test camera; non-blocking
-      await fetch("{{ url_for('preview', sess=(current_session or (sessions[0].name if sessions else '')) ) }}");
-    }catch(e){ console.log(e); }
+async function testCapture(){
+    try {
+      // Call /test_capture to take a single still
+      const resp = await fetch("{{ url_for('test_capture') }}");
+      if (!resp.ok) throw new Error('test capture failed');
+      const blob = await resp.blob();
+      const url  = URL.createObjectURL(blob);
+
+      // Create an overlay that covers the screen
+      const overlay = document.createElement('div');
+      overlay.id = 'test-overlay';
+      overlay.style.position = 'fixed';
+      overlay.style.top = '0';
+      overlay.style.left = '0';
+      overlay.style.width = '100%';
+      overlay.style.height = '100%';
+      overlay.style.background = 'rgba(0,0,0,0.7)';
+      overlay.style.display = 'flex';
+      overlay.style.justifyContent = 'center';
+      overlay.style.alignItems = 'center';
+      overlay.style.zIndex = '1000';
+
+      // Container for the image and button
+      const container = document.createElement('div');
+      container.style.background    = '#fff';
+      container.style.borderRadius  = '8px';
+      container.style.padding       = '10px';
+      container.style.maxWidth      = '90%';
+      container.style.maxHeight     = '90%';
+      container.style.overflow      = 'auto';
+      container.style.textAlign     = 'center';
+
+      // Insert the captured image
+      const img = document.createElement('img');
+      img.src = url;
+      img.style.maxWidth = '100%';
+      img.style.height   = 'auto';
+      img.style.display  = 'block';
+      img.style.marginBottom = '10px';
+
+      // Back button to dismiss the overlay
+      const btn = document.createElement('button');
+      btn.textContent = 'Back';
+      btn.style.padding   = '8px 16px';
+      btn.style.fontSize  = '16px';
+      btn.onclick = () => {
+        document.body.removeChild(overlay);
+        URL.revokeObjectURL(url);
+      };
+
+      container.appendChild(img);
+      container.appendChild(btn);
+      overlay.appendChild(container);
+      document.body.appendChild(overlay);
+    } catch(e) {
+      console.log(e);
+    }
   }
 
   let pollTimer = null;
