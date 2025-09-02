@@ -187,6 +187,9 @@ def index():
                 "end_human": end_h,
                 "interval": ns.interval,
                 "fps": ns.fps,
+                "sess": getattr(ns, "sess", None),
+                "auto_encode": bool(getattr(ns, "auto_encode", False)),
+
             }
     except Exception:
         next_sched = None
@@ -448,6 +451,11 @@ TPL_INDEX = r"""
   .btn-strong { background: var(--btn-strong-bg); color: var(--btn-strong-text); border-color: transparent;}
   button:disabled { opacity:.5; }
 
+  a.btn.disabled {
+  pointer-events: none;
+  opacity: 0.5;
+  }
+
   label { font-size:14px; color: var(--muted); margin-right:6px; }
   input[type=number], input[type=text], select { font-size:16px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; }
 
@@ -491,11 +499,19 @@ TPL_INDEX = r"""
     <div class="row">
       <label>📝 Session name:</label>
       <input name="name" type="text" placeholder="(auto)" style="min-width:160px">
-      <button class="btn" type="button" onclick="testCapture()">📷 Check the viewfinder - testing</button>
+      <button class="btn" type="button" onclick="testCapture()">📷 Check the viewfinder</button>
     </div>
     <div class="row">
-      <button class="btn-strong" type="submit">▶️ Start</button>
-      <a class="btn" href="{{ url_for('stop_route') }}" onclick="event.preventDefault(); postStop();">⏹ Stop</a>
+      <button class="btn-strong" type="submit"
+              {% if current_session %}disabled title="Stop current capture first"{% endif %}>
+        ▶️ Start
+      </button>
+      <a class="btn {% if not current_session %}disabled{% endif %}"
+        href="{{ url_for('stop_route') }}"
+        onclick="if({{ 'true' if current_session else 'false' }}){ event.preventDefault(); postStop(); } else { return false; }"
+        {% if not current_session %}aria-disabled="true"{% endif %}>
+        ⏹ Stop
+      </a>
     </div>
   </form>
     {% if next_sched %}
@@ -507,6 +523,8 @@ TPL_INDEX = r"""
           {{ next_sched.start_human }} → {{ next_sched.end_human }}
           • every {{ next_sched.interval }}s
           • {{ next_sched.fps }} FPS
+          • Schedule name: {{next_sched.sess}}
+          • Auto-encode: {{ 'on' if next_sched.auto_encode else 'off' }}
         </div>
       </div>
       <a class="btn" href="{{ url_for('schedule_page') }}">⚙️ Edit schedule</a>
@@ -516,7 +534,7 @@ TPL_INDEX = r"""
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:center;">
       <div>
-        <div style="font-weight:600">⏰ No schedule armed</div>
+        <div style="font-weight:600">⏰ No schedule set</div>
         <div class="sub">Set one up to run later.</div>
       </div>
       <a class="btn" href="{{ url_for('schedule_page') }}">➕ New schedule</a>
@@ -815,60 +833,79 @@ SCHED_TPL = '''<!doctype html>
   label{font-weight:600}
   input,select,button{padding:10px;font-size:16px}
   .card{background:#f6f9ff;border:1px solid #d7e4ff;border-radius:8px;padding:12px;margin-top:12px}
+  .full_width_button{color: white; font-size:16px; font-weight:600; line-height:1; text-decoration:none; width:100%;background:#47b870;border:1px solid #d7e4ff;border-radius:20px;padding:12px;margin-top:12px}
 </style>
 <h2>Schedule a timelapse</h2>
 <form method="post" action="{{ url_for('schedule_arm') }}">
   <label>Start (local time)</label>
   <input type="datetime-local" name="start_local" required>
   <label>Duration (hours & minutes)</label>
-  <input type="number" name="duration_hr"  value="0"  min="0" placeholder="hrs">
-  <input type="number" name="duration_min" value="60" min="0" placeholder="mins">
+  <input type="number" name="duration_hr"  value=""  min="0" placeholder="hrs">
+  <input type="number" name="duration_min" value="" min="0" placeholder="mins">
   <label>Interval (seconds)</label>
   <input type="number" name="interval" value="{{ interval_default }}" min="1">
   <label>FPS</label>
   <select name="fps">
-    {% for f in fps_choices %}
-      <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
-    {% endfor %}
+              {% for f in fps_choices %}
+                <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
+              {% endfor %}
   </select>
-  <button type="submit">Arm Schedule</button>
+
+  <label style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+    <input type="checkbox" name="auto_encode" checked>
+    Auto-encode when finished
+  </label>
+
+  <button type="submit">Create Schedule</button>
 </form>
 
 {% if sched %}
 <div class="card">
   <div><b>Current schedule</b></div>
+  {% if sched.sess %}<div>Session: {{ sched.sess }}</div>{% endif %}
   <div>Start: {{ sched_start_human }}</div>
   <div>End: {{ sched_end_human }}</div>
   <div>Interval: {{ sched.interval }}s &nbsp; FPS: {{ sched.fps }}</div>
+  <div>Auto-encode: {{ 'on' if sched.auto_encode else 'off' }}</div>
   <form method="post" action="{{ url_for('schedule_cancel') }}" style="margin-top:8px">
     <button type="submit">Cancel Schedule</button>
   </form>
 </div>
 {% endif %}
+  <button class="full_width_button" type="button"
+        onclick="window.location='{{ url_for('index') }}'">
+  📷 Go back
+</button>
 '''
 
-def _sched_fire_start(interval, fps):
-    # call your existing /start route via test_client
+def _sched_fire_start(interval, fps, sess_name):
     try:
         from flask import current_app
         app = current_app._get_current_object()
     except Exception:
         app = globals().get('app')
-    if not app: return
+    if not app:
+        return
     with app.app_context():
         with app.test_client() as c:
-            c.post('/start', data={'interval': interval, 'fps': fps})
+            c.post('/start', data={'interval': interval, 'fps': fps, 'name': sess_name})
 
-def _sched_fire_stop():
+def _sched_fire_stop(sess_name, fps, auto_encode):
     try:
         from flask import current_app
         app = current_app._get_current_object()
     except Exception:
         app = globals().get('app')
-    if not app: return
+    if not app:
+        return
     with app.app_context():
         with app.test_client() as c:
             c.post('/stop')
+            if auto_encode:
+                try:
+                    c.post(f'/encode/{sess_name}', data={'fps': fps})
+                except Exception:
+                    pass
 
 @app.get("/schedule")
 def schedule_page():
@@ -896,33 +933,35 @@ def schedule_page():
 def schedule_arm():
     start_local = request.form.get("start_local", "").strip()
 
-    # Duration: hours + minutes
+    # Duration (hrs + mins)
     hr_str  = request.form.get("duration_hr",  "0") or "0"
     min_str = request.form.get("duration_min", "60") or "60"
-    try:    dur_hr  = int(hr_str.strip())
-    except: dur_hr  = 0
-    try:    dur_min = int(min_str.strip())
+    try: dur_hr  = int(hr_str.strip())
+    except: dur_hr = 0
+    try: dur_min = int(min_str.strip())
     except: dur_min = 0
-    duration_min = dur_hr * 60 + dur_min
-    if duration_min <= 0:
-        duration_min = 60  # fallback so you don't arm a zero-length schedule
+    duration_min = max(1, dur_hr * 60 + dur_min)  # don’t allow zero
 
     # Other params
-    try:    interval = int(request.form.get("interval", "10") or 10)
+    try: interval = int(request.form.get("interval", "10") or 10)
     except: interval = 10
-    try:    fps = int(request.form.get("fps", "24") or 24)
+    try: fps = int(request.form.get("fps", "24") or 24)
     except: fps = 24
+    auto_encode = bool(request.form.get("auto_encode"))  # checkbox -> 'on' present
 
-    # Parse local datetime
+    # Parse local time
     try:
         start_ts = int(datetime.strptime(start_local, "%Y-%m-%dT%H:%M").timestamp())
     except Exception:
-        start_ts = int(time.time()) + 60  # 1 min from now
+        start_ts = int(time.time()) + 60
     end_ts = start_ts + duration_min * 60
 
     now = int(time.time())
     delay_start = max(0, start_ts - now)
     delay_stop  = max(0, end_ts - now)
+
+    # Deterministic session name for this schedule
+    sess_name = f"scheduled-{datetime.fromtimestamp(start_ts).strftime('%Y%m%d-%H%M')}"
 
     global _sched_start_t, _sched_stop_t
     with _sched_lock:
@@ -937,11 +976,20 @@ def schedule_arm():
 
         _sched_state.clear()
         _sched_state.update(dict(
-            start_ts=start_ts, end_ts=end_ts, interval=interval, fps=fps
+            start_ts=start_ts,
+            end_ts=end_ts,
+            interval=interval,
+            fps=fps,
+            sess=sess_name,
+            auto_encode=auto_encode,
         ))
 
-        _sched_start_t = threading.Timer(delay_start, _sched_fire_start, args=(interval, fps))
-        _sched_stop_t  = threading.Timer(delay_stop,  _sched_fire_stop)
+        _sched_start_t = threading.Timer(
+            delay_start, _sched_fire_start, args=(interval, fps, sess_name)
+        )
+        _sched_stop_t  = threading.Timer(
+            delay_stop,  _sched_fire_stop,  args=(sess_name, fps, auto_encode)
+        )
         _sched_start_t.daemon = True
         _sched_stop_t.daemon  = True
         _sched_start_t.start()
