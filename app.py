@@ -204,7 +204,21 @@ def start():
         interval = CAPTURE_INTERVAL_SEC
 
     # --- NEW: read optional duration in minutes ---
-    duration_min = None
+    # optional duration for automatic stop: accept hours and minutes
+    # Treat missing or invalid values as zero, and a non‑positive total as “no duration”
+    hr_str = request.form.get("duration_hours", "0") or "0"
+    mn_str = request.form.get("duration_minutes", "0") or "0"
+    try:
+        hr_val = int(hr_str.strip())
+    except Exception:
+        hr_val = 0
+    try:
+        mn_val = int(mn_str.strip())
+    except Exception:
+        mn_val = 0
+    duration_min = hr_val * 60 + mn_val
+    if duration_min <= 0:
+        duration_min = None
     duration_str = request.form.get("duration", "").strip()
     if duration_str:
         try:
@@ -463,8 +477,9 @@ TPL_INDEX = r"""
       <input name="interval" type="number" min="1" step="1" value="{{ interval_default }}" style="width:90px">
     </div>
     <div class="row">
-      <label>⏲ Duration (min):</label>
-      <input name="duration" type="number" min="1" step="1" placeholder="(optional)" style="width:90px">
+      <label>⏲ Duration:</label>
+      <input name="duration_hours" type="number" min="0" step="1" placeholder="hrs" style="width:60px">
+      <input name="duration_minutes" type="number" min="0" step="1" placeholder="mins" style="width:60px">
     </div>
     <div class="row">
       <label>📝 Session name:</label>
