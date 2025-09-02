@@ -206,35 +206,42 @@ def encode(sess):
     _jobs[job_key] = {"status":"encoding","progress":0}
 
     def _worker():
-        try:
-            # build ffmpeg command
-            # input: %06d.jpg
-            cmd = [
-                FFMPEG, "-y",
-                "-framerate", str(fps),
-                "-i", os.path.join(sess_dir, "%06d.jpg"),
-                "-vf", f"scale={CAPTURE_WIDTH}:{CAPTURE_HEIGHT}",
-                "-pix_fmt", "yuv420p",
-                out
-            ]
-            # track progress approximately by polling file size / time
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            # crude progress tick
-            ticks = 0
-            while True:
-                line = proc.stdout.readline()
-                if not line and proc.poll() is not None:
-                    break
-                ticks += 1
-                # fake a 0-95% progress while running
-                _jobs[job_key]["progress"] = min(95, ticks % 96)
-            rc = proc.wait()
-            if rc == 0 and os.path.exists(out):
-                _jobs[job_key] = {"status":"done","progress":100}
-            else:
-                _jobs[job_key] = {"status":"error","progress":0}
-        except Exception:
-            _jobs[job_key] = {"status":"error","progress":0}
+      total_frames = len(frames)
+      if total_frames == 0:
+          _jobs[job_key] = {"status": "error", "progress": 0}
+          return
+      try:
+          # launch ffmpeg as before
+          cmd = [
+              FFMPEG, "-y",
+              "-framerate", str(fps),
+              "-i", os.path.join(sess_dir, "%06d.jpg"),
+              "-vf", f"scale={CAPTURE_WIDTH}:{CAPTURE_HEIGHT}",
+              "-pix_fmt", "yuv420p",
+              out
+          ]
+          proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True)
+
+          # monitor ffmpeg’s output
+          while True:
+              line = proc.stdout.readline()
+              if not line and proc.poll() is not None:
+                  break
+              if "frame=" in line:
+                  parts = line.split("frame=")[-1].strip().split()
+                  frame_num = int(parts[0])
+                  progress = int((frame_num / total_frames) * 99)
+                  progress = max(0, min(99, progress))
+                  _jobs[job_key]["progress"] = progress
+
+          rc = proc.wait()
+          if rc == 0 and os.path.exists(out):
+              _jobs[job_key] = {"status": "done", "progress": 100}
+          else:
+              _jobs[job_key] = {"status": "error", "progress": 0}
+      except Exception:
+          _jobs[job_key] = {"status": "error", "progress": 0}
 
     threading.Thread(target=_worker, daemon=True).start()
     return redirect(url_for("index"))
@@ -277,7 +284,7 @@ TPL_INDEX = r"""
   header h1 { margin: 0; font-size: 18px; }
   main { padding: 12px; max-width: 820px; margin: 0 auto; }
 
-  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding: 5px 0px}
   .card {
     background: var(--card-bg);
     border:1px solid var(--border); border-radius:12px;
@@ -329,11 +336,15 @@ TPL_INDEX = r"""
     <div class="row">
       <button class="btn-strong" type="submit">▶️ Start</button>
       <a class="btn" href="{{ url_for('stop_route') }}" onclick="event.preventDefault(); postStop();">⏹ Stop</a>
+    </div>
+    <div class="row">
       <label>⏱ Interval (s):</label>
       <input name="interval" type="number" min="1" step="1" value="{{ interval_default }}" style="width:90px">
+    </div>
+    <div class="row">
       <label>📝 Session name:</label>
       <input name="name" type="text" placeholder="(auto)" style="min-width:160px">
-      <button class="btn" type="button" onclick="testCapture()">🧪 Test</button>
+      <button class="btn" type="button" onclick="testCapture()">🧪 Take a test photo</button>
     </div>
   </form>
 
@@ -375,7 +386,7 @@ TPL_INDEX = r"""
 
         <form action="{{ url_for('rename', sess=s.name) }}" method="post">
           <input name="new_name" type="text" placeholder="rename…" {% if current_session == s.name %}disabled title="Stop capture first"{% endif %}>
-          <button class="btn" type="submit" {% if current_session == s.name %}disabled title="Stop capture first"{% endif %}>✏️ Rename</button>
+          <button class="btn" type="submit" {% if current_session == s.name %}disabled title="Stop capture first"{% endif %}>✏️</button>
         </form>
 
         <form action="{{ url_for('delete', sess=s.name) }}" method="post" onsubmit="return confirm('Delete {{ s.name }}?')" >
@@ -403,27 +414,45 @@ TPL_INDEX = r"""
     }catch(e){ console.log(e); }
   }
 
-  let pollTimer=null;
-  function showProgress(name){
-    const wrap = document.getElementById('prog-'+name);
-    const bar  = document.getElementById('bar-'+name);
-    if(!wrap||!bar) return;
+  let pollTimer = null;
+  function showProgress(name) {
+    const wrap = document.getElementById('prog-' + name);
+    const bar  = document.getElementById('bar-' + name);
+    if (!wrap || !bar) return;
     wrap.classList.add('show');
-    if(pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(async ()=>{
-      try{
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      try {
         const r = await fetch("{{ url_for('jobs') }}");
         const j = await r.json();
         const job = j[name];
-        if(!job){ return; }
-        bar.style.width = (job.progress||0) + "%";
-        if(job.status==='done' || job.status==='error'){
+        if (!job) return;
+        bar.style.width = (job.progress || 0) + "%";
+        if (job.status === 'done' || job.status === 'error') {
           clearInterval(pollTimer);
-          setTimeout(()=>{ wrap.classList.remove('show'); bar.style.width='0%'; location.reload(); }, 400);
+          setTimeout(() => {
+            wrap.classList.remove('show');
+            bar.style.width = '0%';
+            location.reload();
+          }, 400);
         }
-      }catch(e){ console.log(e); }
+      } catch (e) { console.log(e); }
     }, 600);
   }
+
+  // This listener should be outside of showProgress(), so it runs
+  // immediately when the page loads and resumes polling if needed.
+  document.addEventListener('DOMContentLoaded', async () => {
+    try {
+      const resp = await fetch("{{ url_for('jobs') }}");
+      const jobs = await resp.json();
+      for (const [name, job] of Object.entries(jobs)) {
+        if (job && job.status === 'encoding') {
+          setTimeout(() => showProgress(name), 10);
+        }
+      }
+    } catch (e) { console.log(e); }
+  });
 </script>
 """
 
