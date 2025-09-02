@@ -27,19 +27,19 @@ DEFAULT_FPS = 24
 app = Flask(__name__)
 
 # --- schedule_addon absolute-path import & init ---
-try:
-    import importlib.util
-    _sched_path = "/home/pi/timelapse/schedule_addon.py"
-    _spec = importlib.util.spec_from_file_location("schedule_addon", _sched_path)
-    schedule_addon = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(schedule_addon)
-    # register blueprint(s)
-    try:
-        schedule_addon.init(app)
-    except AttributeError:
-        pass
-except Exception as e:
-    print("[schedule] init failed:", e)
+# try:
+#     import importlib.util
+#     _sched_path = "/home/pi/timelapse/schedule_addon.py"
+#     _spec = importlib.util.spec_from_file_location("schedule_addon", _sched_path)
+#     schedule_addon = importlib.util.module_from_spec(_spec)
+#     _spec.loader.exec_module(schedule_addon)
+#     # register blueprint(s)
+#     try:
+#         schedule_addon.init(app)
+#     except AttributeError:
+#         pass
+# except Exception as e:
+#     print("[schedule] init failed:", e)
 
 
 _stop_event = threading.Event()
@@ -203,9 +203,7 @@ def start():
     except Exception:
         interval = CAPTURE_INTERVAL_SEC
 
-    # --- NEW: read optional duration in minutes ---
     # optional duration for automatic stop: accept hours and minutes
-    # Treat missing or invalid values as zero, and a non‑positive total as “no duration”
     hr_str = request.form.get("duration_hours", "0") or "0"
     mn_str = request.form.get("duration_minutes", "0") or "0"
     try:
@@ -219,14 +217,6 @@ def start():
     duration_min = hr_val * 60 + mn_val
     if duration_min <= 0:
         duration_min = None
-    duration_str = request.form.get("duration", "").strip()
-    if duration_str:
-        try:
-            val = int(duration_str)
-            if val > 0:
-                duration_min = val
-        except Exception:
-            duration_min = None
 
     # Set up the session
     sess_dir = _session_path(name)
@@ -484,7 +474,7 @@ TPL_INDEX = r"""
     <div class="row">
       <label>📝 Session name:</label>
       <input name="name" type="text" placeholder="(auto)" style="min-width:160px">
-      <button class="btn" type="button" onclick="testCapture()">📷 Check the viewfinder</button>
+      <button class="btn" type="button" onclick="testCapture()">📷 Check the viewfinder - testing</button>
     </div>
     <div class="row">
       <button class="btn-strong" type="submit">▶️ Start</button>
@@ -727,18 +717,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 </script>
 """
 
-# ---------- Main ----------
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5050)
 
 
-# ======== Simple Scheduler (adds /schedule page) ========
+# ======== Simple Scheduler ========
 import threading, time, urllib.request, urllib.parse
 
 _sched_lock = threading.Lock()
-_sched_state = {}  # {'start_ts':int,'end_ts':int,'interval':int,'fps':int}
-_sched_start_timer = None
-_sched_stop_timer  = None
+_sched_state = {}       # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
+_sched_start_t = None   # handle to the scheduled start timer
+_sched_stop_t  = None   # handle to the scheduled stop timer
 
 def _sched_http_post(path, data=None, timeout=5):
     try:
@@ -784,10 +771,10 @@ import threading, time
 from datetime import datetime
 from flask import render_template_string, request, redirect, url_for
 
-_sched_lock = threading.Lock()
-_sched_state = {}        # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
-_sched_start_t = None    # threading.Timer
-_sched_stop_t  = None
+# _sched_lock = threading.Lock()
+# _sched_state = {}        # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
+# _sched_start_t = None    # threading.Timer
+# _sched_stop_t  = None
 
 SCHED_TPL = '''<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -803,8 +790,9 @@ SCHED_TPL = '''<!doctype html>
 <form method="post" action="{{ url_for('schedule_arm') }}">
   <label>Start (local time)</label>
   <input type="datetime-local" name="start_local" required>
-  <label>Duration (minutes)</label>
-  <input type="number" name="duration_min" value="60" min="1">
+  <label>Duration</label>
+  <input type="number" name="duration_hr"  value="0"  min="0" placeholder="hrs">
+  <input type="number" name="duration_min" value="60" min="0" placeholder="mins">
   <label>Interval (seconds)</label>
   <input type="number" name="interval" value="{{ interval_default }}" min="1">
   <label>FPS</label>
@@ -852,7 +840,7 @@ def _sched_fire_stop():
         with app.test_client() as c:
             c.post('/stop')
 
-@app.get("/schedule")
+@app.get("/my_schedule")
 def schedule_page():
     cur = type("S", (), _sched_state) if _sched_state else None
     
@@ -864,10 +852,24 @@ def schedule_page():
         sched=cur
     )
 
-@app.post("/schedule/arm")
+@app.post("/my_schedule/arm")
 def schedule_arm():
     start_local = request.form.get("start_local","").strip()
-    duration_min = int(request.form.get("duration_min","60") or 60)
+    # parse duration fields: hours and minutes (default to 60 minutes if both are zero)
+    hr_str  = request.form.get("duration_hr",  "0") or "0"
+    min_str = request.form.get("duration_min", "60") or "60"
+    try:
+        dur_hr  = int(hr_str.strip())
+    except Exception:
+        dur_hr  = 0
+    try:
+        dur_min = int(min_str.strip())
+    except Exception:
+        dur_min = 0
+    if dur_hr == 0 and dur_min == 0:
+        duration_min = 60
+    else:
+        duration_min = dur_hr * 60 + dur_min
     interval = int(request.form.get("interval","10") or 10)
     fps = int(request.form.get("fps","24") or 24)
     try:
@@ -898,7 +900,7 @@ def schedule_arm():
         _sched_start_t.start(); _sched_stop_t.start()
     return redirect(url_for("schedule_page"))
 
-@app.post("/schedule/cancel")
+@app.post("/my_schedule/cancel")
 def schedule_cancel():
     global _sched_start_t, _sched_stop_t
     with _sched_lock:
@@ -922,8 +924,6 @@ if __name__ == "__main__":
 
 
 
-# --- init scheduler blueprint (safe to run multiple times) ---
-try:
-    schedule_addon.init(app)
-except Exception as e:
-    print('[schedule] init failed:', e)
+# # ---------- Main ----------
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5050)
