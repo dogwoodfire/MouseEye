@@ -156,12 +156,36 @@ def stop_timelapse():
 @app.route("/", methods=["GET"])
 def index():
     sessions = _list_sessions()
-    return render_template_string(TPL_INDEX,
+    # compute remaining seconds for active session if a duration was set
+    remaining_sec = None
+    try:
+        if _current_session and _capture_end_ts:
+            rem = int(_capture_end_ts - time.time())
+            if rem > 0:
+                remaining_sec = rem
+    except Exception:
+        remaining_sec = None
+
+    # compute minutes and seconds for display
+    remaining_min = None
+    remaining_sec_only = None
+    remaining_sec_padded = None
+    if remaining_sec:
+        remaining_min = remaining_sec // 60
+        remaining_sec_only = remaining_sec % 60
+        remaining_sec_padded = f"{remaining_sec_only:02d}"
+
+    return render_template_string(
+        TPL_INDEX,
         sessions=sessions,
         current_session=_current_session,
         fps_choices=FPS_CHOICES,
         default_fps=DEFAULT_FPS,
-        interval_default=CAPTURE_INTERVAL_SEC
+        interval_default=CAPTURE_INTERVAL_SEC,
+        remaining_sec=remaining_sec,
+        remaining_min=remaining_min,
+        remaining_sec_only=remaining_sec_only,
+        remaining_sec_padded=remaining_sec_padded
     )
 
 @app.route("/start", methods=["POST"])
@@ -376,7 +400,7 @@ TPL_INDEX = r"""
     --muted: #6b7280;
     --btn: #f3f4f6;
     --btn-text: #111827;
-    --btn-strong-bg: #2563eb;
+    --btn-strong-bg: #47b870;
     --btn-strong-text: #ffffff;
   }
   * { box-sizing: border-box; }
@@ -400,7 +424,7 @@ TPL_INDEX = r"""
     border:1px solid var(--border); background: var(--btn); color: var(--btn-text);
     border-radius:10px; padding:10px 12px; font-size:16px; line-height:1; text-decoration:none; display:inline-flex; align-items:center; gap:8px;
   }
-  .btn-strong { background: var(--btn-strong-bg); color: var(--btn-strong-text); border-color: transparent; }
+  .btn-strong { background: var(--btn-strong-bg); color: var(--btn-strong-text); border-color: transparent;}
   button:disabled { opacity:.5; }
 
   label { font-size:14px; color: var(--muted); margin-right:6px; }
@@ -435,10 +459,6 @@ TPL_INDEX = r"""
 <main>
   <form class="card" action="{{ url_for('start') }}" method="post">
     <div class="row">
-      <button class="btn-strong" type="submit">▶️ Start</button>
-      <a class="btn" href="{{ url_for('stop_route') }}" onclick="event.preventDefault(); postStop();">⏹ Stop</a>
-    </div>
-    <div class="row">
       <label>⏱ Interval (s):</label>
       <input name="interval" type="number" min="1" step="1" value="{{ interval_default }}" style="width:90px">
     </div>
@@ -451,15 +471,19 @@ TPL_INDEX = r"""
       <input name="name" type="text" placeholder="(auto)" style="min-width:160px">
       <button class="btn" type="button" onclick="testCapture()">📷 Check the viewfinder</button>
     </div>
+    <div class="row">
+      <button class="btn-strong" type="submit">▶️ Start</button>
+      <a class="btn" href="{{ url_for('stop_route') }}" onclick="event.preventDefault(); postStop();">⏹ Stop</a>
+    </div>
   </form>
 
   {% for s in sessions %}
   <div class="card session {% if current_session == s.name %}active{% endif %}">
     <div class="thumb">
       {% if s.has_frame %}
-        <img src="{{ url_for('preview', sess=s.name) }}?ts={{ s.latest }}" alt="preview" loading="lazy">
+        <img id="preview-{{ s.name }}" src="{{ url_for('preview', sess=s.name) }}?ts={{ s.latest }}" alt="preview" loading="lazy">
       {% else %}
-        <div class="placeholder">⏳ capturing…</div>
+        <div id="preview-placeholder-{{ s.name }}" class="placeholder">⏳ capturing…</div>
       {% endif %}
     </div>
     <div class="meta">
@@ -474,7 +498,9 @@ TPL_INDEX = r"""
         <span id="frames-{{ s.name }}">{{ s.count }} frame{{ '' if s.count==1 else 's' }}</span>
         {% if s.has_video %} • 🎞 ready{% endif %}
         {% if current_session == s.name %}
-          <span id="timeleft-{{ s.name }}">
+          {# The time-left span is hidden by default unless a remaining time exists #}
+          <span id="timeleft-{{ s.name }}"
+                {% if remaining_min is none %}style="display:none;"{% endif %}>
             {% if remaining_min is not none %} • ⏳ {{ remaining_min }}m{{ remaining_sec_padded }}s left{% endif %}
           </span>
         {% endif %}
@@ -620,8 +646,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch (e) { console.log(e); }
 
   // Poll the active session for frames and remaining time
-  const currentSession = {{ current_session | tojson }};
+   const currentSession = {{ current_session | tojson }};
   const statusUrlBase = "{{ url_for('session_status', sess='') }}";
+  const previewBase = "/session/"; // Base path for preview images
+
   async function pollActive() {
     if (!currentSession) return;
     try {
@@ -635,22 +663,50 @@ document.addEventListener('DOMContentLoaded', async () => {
           const count = d.frames;
           fSpan.textContent = count + (count === 1 ? ' frame' : ' frames');
         }
-        // update time remaining
+        // update time left
         const tSpan = document.getElementById('timeleft-' + currentSession);
         if (tSpan) {
-          if (d.remaining_sec !== null) {
+          if (d.remaining_sec !== null && d.remaining_sec > 0) {
             const mins = Math.floor(d.remaining_sec / 60);
             const secs = d.remaining_sec % 60;
             const secStr = String(secs).padStart(2, '0');
             tSpan.textContent = ' • ⏳ ' + mins + 'm' + secStr + 's left';
+            tSpan.style.display = '';
           } else {
+            tSpan.style.display = 'none';
             tSpan.textContent = '';
           }
         }
+        // update preview image if frames > 0
+        if (d.frames > 0) {
+          const placeholder = document.getElementById('preview-placeholder-' + currentSession);
+          if (placeholder) {
+            // replace placeholder with an <img>
+            const img = document.createElement('img');
+            img.id = 'preview-' + currentSession;
+            img.src = previewBase + currentSession + '/preview?ts=' + Date.now();
+            img.alt = 'preview';
+            img.loading = 'lazy';
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'cover';
+            placeholder.parentNode.replaceChild(img, placeholder);
+          } else {
+            // update existing img source to bust cache
+            const pimg = document.getElementById('preview-' + currentSession);
+            if (pimg) {
+              const base = pimg.src.split('?')[0];
+              pimg.src = base + '?ts=' + Date.now();
+            }
+          }
+        }
       }
-    } catch (err) { console.log(err); }
+    } catch (err) {
+      console.log(err);
+    }
   }
-  // poll every 2 seconds
+
+  // Poll every 2 seconds
   setInterval(pollActive, 2000);
 });
 </script>
@@ -784,6 +840,7 @@ def _sched_fire_stop():
 @app.get("/schedule")
 def schedule_page():
     cur = type("S", (), _sched_state) if _sched_state else None
+    
     return render_template_string(
         SCHED_TPL,
         fps_choices=globals().get("FPS_CHOICES", [10,24,30]),
