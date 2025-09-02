@@ -47,6 +47,10 @@ _capture_thread = None
 _current_session = None   # session name (string) while capturing
 _jobs = {}                # encode job progress by session
 
+# Globals for timed captures
+_capture_stop_timer = None
+_capture_end_ts     = None
+
 # ---------- Helpers ----------
 def _session_path(name): return os.path.join(SESSIONS_DIR, name)
 def _session_latest_jpg(sess_dir):
@@ -101,7 +105,9 @@ def _capture_loop(sess_dir, interval):
 # ---------- Stop helper (idempotent) ----------
 def stop_timelapse():
     global _stop_event, _capture_thread, _current_session
-    try: _stop_event.set()
+    global _capture_stop_timer, _capture_end_ts
+    try:
+        _stop_event.set()
     except Exception: pass
     if _capture_thread and getattr(_capture_thread, "is_alive", lambda: False)():
         try: _capture_thread.join(timeout=5)
@@ -109,6 +115,13 @@ def stop_timelapse():
     _capture_thread = None
     _stop_event = threading.Event()
     _current_session = None
+    if _capture_stop_timer:
+        try:
+            _capture_stop_timer.cancel()
+        except Exception:
+            pass
+    _capture_stop_timer = None
+    _capture_end_ts = None
 
 # ---------- Routes ----------
 @app.route("/", methods=["GET"])
@@ -124,16 +137,31 @@ def index():
 
 @app.route("/start", methods=["POST"])
 def start():
-    global _current_session, _capture_thread
-    # if already running, do nothing
+    global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts
+
+    # Don’t restart if a capture is already running
     if _capture_thread and _capture_thread.is_alive():
         return redirect(url_for("index"))
 
     name = _safe_name(request.form.get("name") or _timestamped_session())
     interval = request.form.get("interval", str(CAPTURE_INTERVAL_SEC))
-    try: interval = max(1, int(interval))
-    except: interval = CAPTURE_INTERVAL_SEC
+    try:
+        interval = max(1, int(interval))
+    except Exception:
+        interval = CAPTURE_INTERVAL_SEC
 
+    # --- NEW: read optional duration in minutes ---
+    duration_min = None
+    duration_str = request.form.get("duration", "").strip()
+    if duration_str:
+        try:
+            val = int(duration_str)
+            if val > 0:
+                duration_min = val
+        except Exception:
+            duration_min = None
+
+    # Set up the session
     sess_dir = _session_path(name)
     os.makedirs(sess_dir, exist_ok=True)
     _current_session = name
@@ -142,6 +170,26 @@ def start():
     t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
     _capture_thread = t
     t.start()
+
+    # --- NEW: schedule automatic stop if duration provided ---
+    # Cancel any prior auto‑stop timer
+    if _capture_stop_timer:
+        try:
+            _capture_stop_timer.cancel()
+        except Exception:
+            pass
+        _capture_stop_timer = None
+        _capture_end_ts = None
+
+    if duration_min:
+        # Compute when this capture should end (seconds from now)
+        end_ts = time.time() + duration_min * 60
+        _capture_end_ts = end_ts
+        # Schedule a call to stop_timelapse() at that point
+        _capture_stop_timer = threading.Timer(duration_min * 60, stop_timelapse)
+        _capture_stop_timer.daemon = True
+        _capture_stop_timer.start()
+
     return redirect(url_for("index"))
 
 @app.route("/stop", methods=["GET","POST"], endpoint="stop_route")
@@ -364,6 +412,10 @@ TPL_INDEX = r"""
     <div class="row">
       <label>⏱ Interval (s):</label>
       <input name="interval" type="number" min="1" step="1" value="{{ interval_default }}" style="width:90px">
+    </div>
+    <div class="row">
+      <label>⏲ Duration (min):</label>
+      <input name="duration" type="number" min="1" step="1" placeholder="(optional)" style="width:90px">
     </div>
     <div class="row">
       <label>📝 Session name:</label>
