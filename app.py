@@ -711,7 +711,7 @@ TPL_INDEX = r"""
       </button>
       <a class="btn {% if not current_session %}disabled{% endif %}"
         href="{{ url_for('stop_route') }}"
-        onclick="if({{ 'true' if current_session else 'false' }}){ event.preventDefault(); postStop(); } else { return false; }"
+        onclick="return stopClick(event)"
         {% if not current_session %}aria-disabled="true"{% endif %}>
         ⏹ Stop
       </a>
@@ -821,30 +821,36 @@ TPL_INDEX = r"""
 </main>
 
 <script>
-  async function postStop(){
-    try{
-      // Disable the button and show feedback
-      const btn = event?.currentTarget;
-      if (btn) { btn.classList.add('disabled'); btn.textContent = '⏳ Stopping…'; }
+  function stopClick(evt){
+    if (evt && evt.preventDefault) evt.preventDefault();
+    const btn = evt?.currentTarget;
+    if (btn) { btn.classList.add('disabled'); btn.textContent = '⏳ Stopping…'; }
 
-      // Kick the stop request but don't wait for it
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 1500);
-      fetch("{{ url_for('stop_route') }}", {method:"POST", signal: ctrl.signal}).catch(()=>{});
+    // Fire stop, then poll until capture is actually inactive, then refresh
+    fetch("{{ url_for('stop_route') }}", { method:"POST" }).catch(()=>{});
 
-      // Force the preview image to update immediately (last frame)
-      const currentSession = {{ current_session | tojson }};
-      if (currentSession) {
-        const pimg = document.getElementById('preview-' + currentSession);
-        if (pimg) {
-          const base = pimg.src.split('?')[0];
-          pimg.src = base + '?ts=' + Date.now();
+    const sessionName = {{ current_session | tojson }};
+    const statusUrl   = "{{ url_for('session_status', sess='') }}";
+
+    const startT = Date.now();
+    const maxWaitMs = 15000;   // up to 15s
+    const tickMs    = 400;
+
+    const poll = async () => {
+      // if we no longer have a session name, just reload
+      if (!sessionName) { location.reload(); return; }
+      try {
+        const r = await fetch(statusUrl + sessionName, { cache:'no-store' });
+        if (r.ok) {
+          const j = await r.json();
+          if (!j.active) { location.reload(); return; }
         }
-      }
-    } finally {
-      // light pause so the UI updates, then reload
-      setTimeout(() => location.reload(), 400);
-    }
+      } catch(_) {}
+      if (Date.now() - startT > maxWaitMs) { location.reload(); return; }
+      setTimeout(poll, tickMs);
+    };
+    setTimeout(poll, tickMs);
+    return false;
   }
 async function testCapture(){
     try {
@@ -993,12 +999,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusUrlBase = "{{ url_for('session_status', sess='') }}";
   const previewBase = "/session/"; // Base path for preview images
 
+  let activeCapture = {{ 'true' if current_session else 'false' }};
+  let encodingBusy  = false;
+
+  //combine flags to drive the UI ---
+  function applyControlState(){
+    setControlsDisabled(encodingBusy || activeCapture);
+  }
+
   async function pollActive() {
     if (!currentSession) return;
     try {
       const r = await fetch(statusUrlBase + currentSession);
       if (!r.ok) return;
       const d = await r.json();
+
+      // keep the "capture is running" flag updated ---
+      activeCapture = !!d.active;
+      applyControlState();
+
       if (d.active) {
         // update frame count
         const fSpan = document.getElementById('frames-' + currentSession);
@@ -1068,12 +1087,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  function applyBusyFromJobs(jobs) {
-    const busy = Object.values(jobs || {}).some(
-      j => j && (j.status === 'queued' || j.status === 'encoding')
-    );
-    setControlsDisabled(busy);
-  }
+function applyBusyFromJobs(jobs) {
+  // --- NEW: set encodingBusy and recompute control state ---
+  encodingBusy = Object.values(jobs || {}).some(
+    j => j && (j.status === 'queued' || j.status === 'encoding')
+  );
+  applyControlState();
+}
 
   // Poll /jobs regularly to keep UI state in sync
   async function pollJobsAndUpdateUI() {
@@ -1096,22 +1116,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (_) {}
   }
 
-  // Initial read + interval
+  // Initial UI state + start polling loops
+  applyControlState();
   pollJobsAndUpdateUI();
   setInterval(pollJobsAndUpdateUI, 1000);
-  // Poll every 2 seconds
+
+  pollActive();
   setInterval(pollActive, 2000);
- try {
-    const r = await fetch("{{ url_for('jobs') }}");
-    if (r.ok) {
-      const jobs = await r.json();
-      for (const [sess, job] of Object.entries(jobs)) {
-        if (job && (job.status === 'queued' || job.status === 'encoding')) {
-          setTimeout(() => showProgress(sess), 10);
-        }
-      }
-    }
-  } catch (e) {}
 });
 </script>
 """
