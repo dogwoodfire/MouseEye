@@ -445,12 +445,11 @@ def start():
     return redirect(url_for("index"))
 
 def _finalize_stop_background():
-    """Wait for the capture thread to exit (but do it off the request thread)."""
     global _capture_thread, _stop_event, _current_session, _capture_stop_timer, _capture_end_ts
     try:
         t = _capture_thread
         if t and getattr(t, "is_alive", lambda: False)():
-            t.join(timeout=10)  # give it time to finish current frame
+            t.join(timeout=10)
     except Exception:
         pass
     finally:
@@ -464,18 +463,13 @@ def _finalize_stop_background():
         _capture_end_ts = None
 
 def stop_timelapse():
-    """Signal stop; don’t block here."""
-    try:
-        _stop_event.set()
-    except Exception:
-        pass
-    # kick a background cleaner
+    try: _stop_event.set()
+    except Exception: pass
     threading.Thread(target=_finalize_stop_background, daemon=True).start()
 
-@app.route("/stop", methods=["GET", "POST"], endpoint="stop_route")
+@app.route("/stop", methods=["GET","POST"], endpoint="stop_route")
 def stop_route():
     stop_timelapse()
-    # Return immediately; UI can reload
     return ("", 204)
 
 @app.post("/rename/<sess>")
@@ -513,20 +507,17 @@ def preview(sess):
     if not os.path.isdir(p): abort(404)
     jpg = _session_latest_jpg(p)
     if not jpg:
-        # 1x1 gif to avoid broken image icon
+        # tiny 1x1 gif
         data = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x01\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
-        return app.response_class(data, mimetype="image/gif")
+        resp = app.response_class(data, mimetype="image/gif")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
-    # prefer thumbnail
     tpath = _thumb_for(p, jpg)
-    if os.path.exists(tpath):
-        return send_file(tpath)
-    # fallback to full frame (and try to generate thumb for next time)
-    try:
-        _make_thumb(jpg, tpath)
-    except Exception:
-        pass
-    return send_file(jpg)
+    path_to_send = tpath if os.path.exists(tpath) else jpg
+    resp = send_file(path_to_send, conditional=False)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 @app.post("/encode/<sess>")
 def encode(sess):
@@ -813,15 +804,27 @@ TPL_INDEX = r"""
 <script>
   async function postStop(){
     try{
-      const btn = event?.currentTarget || document.querySelector('a.btn');
+      // Disable the button and show feedback
+      const btn = event?.currentTarget;
       if (btn) { btn.classList.add('disabled'); btn.textContent = '⏳ Stopping…'; }
-      // Fire-and-forget with a short timeout
+
+      // Kick the stop request but don't wait for it
       const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 2000);
+      setTimeout(() => ctrl.abort(), 1500);
       fetch("{{ url_for('stop_route') }}", {method:"POST", signal: ctrl.signal}).catch(()=>{});
+
+      // Force the preview image to update immediately (last frame)
+      const currentSession = {{ current_session | tojson }};
+      if (currentSession) {
+        const pimg = document.getElementById('preview-' + currentSession);
+        if (pimg) {
+          const base = pimg.src.split('?')[0];
+          pimg.src = base + '?ts=' + Date.now();
+        }
+      }
     } finally {
-      // Don’t wait for the response; the server already set the stop flag
-      setTimeout(() => location.reload(), 300);
+      // light pause so the UI updates, then reload
+      setTimeout(() => location.reload(), 400);
     }
   }
 async function testCapture(){
@@ -1298,7 +1301,7 @@ except Exception:
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", "5050"))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
 
 
 
