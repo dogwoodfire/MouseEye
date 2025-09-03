@@ -337,6 +337,7 @@ def _capture_loop(sess_dir, interval):
 # ---------- Routes ----------
 @app.route("/", methods=["GET"])
 def index():
+    # flags for live view
     encoding_active = _any_encoding_active()
     idle_now = ((_capture_thread is None or not _capture_thread.is_alive()) and not encoding_active)
 
@@ -394,7 +395,7 @@ def index():
         remaining_sec_padded=remaining_sec_padded,
         next_sched=next_sched,
         disk=disk_info,
-        # new flags for template:
+        # NEW flags used by the template for live view
         encoding_active=encoding_active,
         idle_now=idle_now,
     )
@@ -618,6 +619,13 @@ def test_capture():
         try: os.unlink(path)
         except Exception:
             pass
+
+@app.get("/live_status")
+def live_status():
+    try:
+        return jsonify({"idle": _idle_now()})
+    except Exception:
+        return jsonify({"idle": False})
 
 @app.get("/live.mjpg")
 def live_mjpg():
@@ -876,8 +884,11 @@ TPL_INDEX = r"""
         <div class="sub">Refreshes continuously until you start a capture or encode.</div>
       </div>
     </div>
-    <div class="thumb" style="width:100%; height:auto; border:none; background:#000; max-height:360px; overflow:hidden;">
-      <img src="{{ url_for('live_mjpg') }}" style="width:100%; height:auto; display:block;" alt="live view">
+    <div style="position:relative; background:#000; border-radius:8px; overflow:hidden; max-height:360px;">
+      <div id="live-msg" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#e5e7eb; font-size:14px; background:rgba(0,0,0,.35);">
+        Connecting to camera…
+      </div>
+      <img id="live-img" src="" style="width:100%; height:auto; display:block;" alt="live view">
     </div>
   </div>
 {% endif %}
@@ -1072,7 +1083,44 @@ async function testCapture(){
       } catch (e) { console.log(e); }
     }, 600);
   }
+  const LIVE_URL = "{{ url_for('live_mjpg') }}";
+    const LIVE_STATUS_URL = "{{ url_for('live_status') }}";
 
+    async function updateLiveUIOnce() {
+      const msgEl = document.getElementById('live-msg');
+      const imgEl = document.getElementById('live-img');
+      if (!msgEl || !imgEl) return;
+
+      try {
+        const r = await fetch(LIVE_STATUS_URL, { cache: 'no-store' });
+        if (!r.ok) throw new Error('status not ok');
+        const j = await r.json();
+        if (j.idle) {
+          // Show connecting (briefly) then hide overlay
+          msgEl.textContent = 'Connecting to camera…';
+          if (!imgEl.src) imgEl.src = LIVE_URL;
+          setTimeout(() => { msgEl.style.display = 'none'; }, 800);
+        } else {
+          // Busy: show message and remove stream src so the img stops trying
+          msgEl.style.display = 'flex';
+          msgEl.textContent = 'Camera busy (capturing/encoding)…';
+          if (imgEl.src) imgEl.src = '';
+        }
+      } catch (e) {
+        // Unknown: keep a gentle message
+        const msgEl = document.getElementById('live-msg');
+        if (msgEl) {
+          msgEl.style.display = 'flex';
+          msgEl.textContent = 'Checking camera…';
+        }
+      }
+    }
+
+    // Call once at load, then every few seconds
+    document.addEventListener('DOMContentLoaded', () => {
+      updateLiveUIOnce();
+      setInterval(updateLiveUIOnce, 3000);
+    });
   // This listener should be outside of showProgress(), so it runs
   // immediately when the page loads and resumes polling if needed.
 document.addEventListener('DOMContentLoaded', async () => {
