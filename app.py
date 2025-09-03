@@ -624,40 +624,57 @@ def live_mjpg():
     # Only stream when idle, otherwise tell the browser "busy"
     if not _idle_now():
         abort(503, "Busy")
-    bin_rv = shutil.which("rpicam-vid") or "/usr/bin/rpicam-vid"
-    if not os.path.exists(bin_rv):
-        abort(500, "rpicam-vid not found; install rpicam-apps")
-    ...
-    cmd = [
-        bin_rv,
-        "--codec", "mjpeg",
-        "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
-        "-t", "0",
-        "-o", "-",
-        "--inline"
-    ]
+
     global LIVE_PROC
     with LIVE_LOCK:
+        # choose binary
+        vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid") or "/usr/bin/rpicam-vid"
         if LIVE_PROC is None or LIVE_PROC.poll() is not None:
-            # Use rpicam-vid to output MJPEG to stdout forever (-t 0)
-            # --codec mjpeg gives JPEG frames; --width/--height from your capture defaults
             cmd = [
-                shutil.which("rpicam-vid") or "/usr/bin/rpicam-vid",
+                vid_bin,
                 "--codec", "mjpeg",
-                "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+                "--width", str(CAPTURE_WIDTH), "--height", str(CAPTURE_HEIGHT),
                 "-t", "0",
-                "-o", "-",              # to stdout
+                "-o", "-",
                 "--inline"
             ]
-            LIVE_PROC = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            # Some libcamera builds want -n to disable on-screen preview:
+            if "libcamera-vid" in vid_bin:
+                cmd.insert(1, "-n")
+            LIVE_PROC = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
+            )
 
     boundary = b"--frame"
 
-    def gen():
+    def cleanup_proc():
+        """Terminate and reap the live process safely."""
+        global LIVE_PROC
+        with LIVE_LOCK:
+            proc = LIVE_PROC
+            LIVE_PROC = None
+        if not proc:
+            return
         try:
-            # rpicam-vid outputs a continuous MJPEG bitstream; frames are JPEGs back-to-back.
-            # We'll read by simple JPEG scan; robust enough for Pi cams.
-            buf = b""
+            # try gentle
+            proc.terminate()
+            try:
+                proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=1.0)
+        except Exception:
+            pass
+        try:
+            # close our pipe to avoid fd leaks
+            if proc.stdout:
+                proc.stdout.close()
+        except Exception:
+            pass
+
+    def gen():
+        buf = b""
+        try:
             while True:
                 # Stop streaming immediately if we become busy
                 if not _idle_now():
@@ -668,25 +685,28 @@ def live_mjpg():
                     break
                 buf += chunk
 
-                # Search for JPEG SOI/EOI markers
+                # find JPEG frames (SOI..EOI)
                 while True:
                     soi = buf.find(b"\xff\xd8")
-                    eoi = buf.find(b"\xff\xd9", soi + 2) if soi != -1 else -1
-                    if soi != -1 and eoi != -1:
-                        frame = buf[soi:eoi+2]
-                        buf = buf[eoi+2:]  # consume
-                        # yield one multipart frame
-                        yield boundary + b"\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n"
-                    else:
+                    if soi == -1:
                         break
+                    eoi = buf.find(b"\xff\xd9", soi + 2)
+                    if eoi == -1:
+                        break
+                    frame = buf[soi:eoi+2]
+                    buf = buf[eoi+2:]
+                    yield (
+                        boundary
+                        + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                        + str(len(frame)).encode()
+                        + b"\r\n\r\n"
+                        + frame
+                        + b"\r\n"
+                    )
         finally:
-            # If no client is connected and still idle, let the process keep running,
-            # but kill it if someone triggered a capture/encode
-            with LIVE_LOCK:
-                if LIVE_PROC and (not _idle_now() or LIVE_PROC.poll() is not None):
-                    try: LIVE_PROC.kill()
-                    except Exception: pass
-                    LIVE_PROC = None
+            # If we’re no longer idle, or the process ended, clean it up
+            if LIVE_PROC is None or not _idle_now() or LIVE_PROC.poll() is not None:
+                cleanup_proc()
 
     headers = {
         "Content-Type": "multipart/x-mixed-replace; boundary=frame",
