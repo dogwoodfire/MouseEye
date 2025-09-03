@@ -41,11 +41,78 @@ app = Flask(__name__)
 # except Exception as e:
 #     print("[schedule] init failed:", e)
 
-
+_last_frame_ts = 0
 _stop_event = threading.Event()
 _capture_thread = None
 _current_session = None   # session name (string) while capturing
 _jobs = {}                # encode job progress by session
+
+# --- Encode queue/worker (back-pressure + low priority) ---
+import queue
+_encode_q = queue.Queue()
+
+def _start_encode_worker_once():
+    if getattr(_start_encode_worker_once, "_started", False):
+        return
+    _start_encode_worker_once._started = True
+
+    def _encode_worker():
+        while True:
+            task = _encode_q.get()  # (sess, fps)
+            if not task:
+                _encode_q.task_done()
+                continue
+            sess, fps = task
+            try:
+                sess_dir = _session_path(sess)
+                out = _video_path(sess_dir)
+                frames = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
+                total_frames = len(frames)
+                if total_frames == 0:
+                    _jobs[sess] = {"status": "error", "progress": 0}
+                    _encode_q.task_done()
+                    continue
+
+                _jobs[sess] = {"status": "encoding", "progress": 0}
+
+                # Run ffmpeg with very low CPU/IO priority so UI stays responsive
+                cmd = [
+                    "ionice","-c3", "nice","-n","19",
+                    FFMPEG, "-y",
+                    "-framerate", str(fps),
+                    "-i", os.path.join(sess_dir, "%06d.jpg"),
+                    "-vf", f"scale={CAPTURE_WIDTH}:{CAPTURE_HEIGHT}",
+                    "-pix_fmt", "yuv420p",
+                    out
+                ]
+
+                # Progress parser (best-effort)
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, text=True)
+                while True:
+                    line = proc.stdout.readline()
+                    if not line and proc.poll() is not None:
+                        break
+                    if "frame=" in line:
+                        try:
+                            parts = line.split("frame=")[-1].strip().split()
+                            frame_num = int(parts[0])
+                            prog = int((frame_num / max(1, total_frames)) * 99)
+                            _jobs[sess]["progress"] = max(0, min(99, prog))
+                        except Exception:
+                            pass
+                rc = proc.wait()
+                if rc == 0 and os.path.exists(out):
+                    _jobs[sess] = {"status": "done", "progress": 100}
+                else:
+                    _jobs[sess] = {"status": "error", "progress": 0}
+            except Exception:
+                _jobs[sess] = {"status": "error", "progress": 0}
+            finally:
+                _encode_q.task_done()
+
+# kick the worker
+_start_encode_worker_once()
 
 # Globals for timed captures
 _capture_stop_timer = None
@@ -189,8 +256,12 @@ def _arm_timers_from_state():
 
 # ---------- Capture thread ----------
 def _capture_loop(sess_dir, interval):
-    global _stop_event
+    global _stop_event, _last_frame_ts
     i = 0
+    timeout_s = max(2, min(10, interval + 2))  # don't let a single capture block forever
+    thumbs_dir = os.path.join(sess_dir, "thumbs")
+    os.makedirs(thumbs_dir, exist_ok=True)
+
     while not _stop_event.is_set():
         i += 1
         jpg = os.path.join(sess_dir, f"{i:06d}.jpg")
@@ -200,13 +271,32 @@ def _capture_loop(sess_dir, interval):
             "--quality", CAPTURE_QUALITY, "--immediate", "--nopreview"
         ]
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # ensure camera call can't hang the whole thread
+            subprocess.run(cmd, check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=timeout_s)
+            _last_frame_ts = time.time()
+
+            # make/update thumbnail (non-fatal)
+            try:
+                _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
+            except Exception:
+                pass
+
+        except subprocess.TimeoutExpired:
+            # camera stalled — skip this frame and try again
+            time.sleep(0.5)
         except Exception:
-            # If capture fails, sleep a little and keep trying
+            # transient failure — short backoff
             time.sleep(min(2, interval))
-        # wait for next frame, but allow early stop
-        for _ in range(int(interval*10)):
-            if _stop_event.is_set(): break
+
+        # between frames wait, but allow early stop
+        for _ in range(int(interval * 10)):
+            if _stop_event.is_set():
+                break
+            # soft watchdog: if no good frame for a long time, break early to attempt another shot
+            if _last_frame_ts and (time.time() - _last_frame_ts) > (3 * interval):
+                break
             time.sleep(0.1)
 
 # ---------- Stop helper (idempotent) ----------
@@ -301,6 +391,10 @@ def start():
     except Exception:
         interval = CAPTURE_INTERVAL_SEC
 
+    # refuse to start if low on disk
+    if not _enough_space(500):  # tweak threshold as you like
+        abort(507)  # Insufficient Storage
+
     # optional duration for automatic stop: accept hours and minutes
     hr_str = request.form.get("duration_hours", "0") or "0"
     mn_str = request.form.get("duration_minutes", "0") or "0"
@@ -387,9 +481,19 @@ def preview(sess):
     if not os.path.isdir(p): abort(404)
     jpg = _session_latest_jpg(p)
     if not jpg:
-        # No frame yet; serve a 1x1 transparent gif to avoid broken image icon
+        # 1x1 gif to avoid broken image icon
         data = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x01\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
         return app.response_class(data, mimetype="image/gif")
+
+    # prefer thumbnail
+    tpath = _thumb_for(p, jpg)
+    if os.path.exists(tpath):
+        return send_file(tpath)
+    # fallback to full frame (and try to generate thumb for next time)
+    try:
+        _make_thumb(jpg, tpath)
+    except Exception:
+        pass
     return send_file(jpg)
 
 @app.post("/encode/<sess>")
@@ -401,52 +505,12 @@ def encode(sess):
 
     sess_dir = _session_path(sess)
     if not os.path.isdir(sess_dir): abort(404)
-    frames = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
-    if not frames: return redirect(url_for("index"))
-
-    out = _video_path(sess_dir)
-    job_key = sess
-    _jobs[job_key] = {"status":"encoding","progress":0}
-
-    def _worker():
-      total_frames = len(frames)
-      if total_frames == 0:
-          _jobs[job_key] = {"status": "error", "progress": 0}
-          return
-      try:
-          # launch ffmpeg as before
-          cmd = [
-              FFMPEG, "-y",
-              "-framerate", str(fps),
-              "-i", os.path.join(sess_dir, "%06d.jpg"),
-              "-vf", f"scale={CAPTURE_WIDTH}:{CAPTURE_HEIGHT}",
-              "-pix_fmt", "yuv420p",
-              out
-          ]
-          proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                  stderr=subprocess.STDOUT, text=True)
-
-          # monitor ffmpeg’s output
-          while True:
-              line = proc.stdout.readline()
-              if not line and proc.poll() is not None:
-                  break
-              if "frame=" in line:
-                  parts = line.split("frame=")[-1].strip().split()
-                  frame_num = int(parts[0])
-                  progress = int((frame_num / total_frames) * 99)
-                  progress = max(0, min(99, progress))
-                  _jobs[job_key]["progress"] = progress
-
-          rc = proc.wait()
-          if rc == 0 and os.path.exists(out):
-              _jobs[job_key] = {"status": "done", "progress": 100}
-          else:
-              _jobs[job_key] = {"status": "error", "progress": 0}
-      except Exception:
-          _jobs[job_key] = {"status": "error", "progress": 0}
-
-    threading.Thread(target=_worker, daemon=True).start()
+    if not _enough_space(300):
+      _jobs[sess] = {"status":"error","progress":0, "reason":"low_disk"}
+    return redirect(url_for("index"))
+    # queue the job and return immediately; UI will poll /jobs
+    _jobs[sess] = {"status":"queued","progress":0}
+    _encode_q.put((sess, fps))
     return redirect(url_for("index"))
 
 @app.get("/jobs")
@@ -864,6 +928,25 @@ _sched_lock = threading.Lock()
 _sched_state = {}       # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
 _sched_start_t = None   # handle to the scheduled start timer
 _sched_stop_t  = None   # handle to the scheduled stop timer
+
+def _thumb_for(sess_dir, jpg_path):
+    # thumbs in sessions/<name>/thumbs/<filename>.jpg
+    tdir = os.path.join(sess_dir, "thumbs")
+    os.makedirs(tdir, exist_ok=True)
+    return os.path.join(tdir, os.path.basename(jpg_path))
+
+def _make_thumb(src_jpg, dst_jpg, width=320):
+    # use ffmpeg to generate a small preview; very light
+    cmd = [FFMPEG, "-y", "-i", src_jpg, "-vf", f"scale={width}:-1", "-q:v", "5", dst_jpg]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def _free_mb(path):
+    st = shutil.disk_usage(path)
+    return int(st.free / (1024 * 1024))
+
+def _enough_space(required_mb=500):
+    # Require at least this many MB free before we start or encode
+    return _free_mb(SESSIONS_DIR) >= required_mb
 
 def _sched_http_post(path, data=None, timeout=5):
     try:
