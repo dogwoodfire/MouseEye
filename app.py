@@ -887,7 +887,7 @@ TPL_INDEX = r"""
     </div>
       {% if idle_now %}
         <div class="row">
-          <a class="btn" href="{{ url_for('live_page') }}">👀 Open viewfinder</a>
+          <a class="{% if current_session %}disabled{% endif %}" href="{{ url_for('live_page') }}"{% if current_session %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
       </div>
     {% endif %}
     
