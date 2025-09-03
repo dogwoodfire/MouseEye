@@ -25,6 +25,7 @@ DEFAULT_FPS = 24
 
 # ---------- Globals ----------
 app = Flask(__name__)
+app.jinja_env.globals.update(datetime=datetime)
 
 # --- schedule_addon absolute-path import & init ---
 # try:
@@ -339,13 +340,8 @@ def index():
     encoding_active = _any_encoding_active()
     idle_now = ((_capture_thread is None or not _capture_thread.is_alive()) and not encoding_active)
 
-    return render_template_string(
-        TPL_INDEX,
-        ...,
-        encoding_active=encoding_active,
-        idle_now=idle_now,
-    )
     sessions = _list_sessions()
+
     # compute remaining seconds for active session if a duration was set
     remaining_sec = None
     try:
@@ -379,7 +375,6 @@ def index():
                 "fps": ns.fps,
                 "sess": _sched_state.get("sess") or None,
                 "auto_encode": bool(getattr(ns, "auto_encode", False)),
-
             }
     except Exception:
         next_sched = None
@@ -399,12 +394,20 @@ def index():
         remaining_sec_padded=remaining_sec_padded,
         next_sched=next_sched,
         disk=disk_info,
+        # new flags for template:
+        encoding_active=encoding_active,
+        idle_now=idle_now,
     )
 
 @app.route("/start", methods=["POST"])
 def start():
     global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts
-
+    # Set up the session
+    sess_dir = _session_path(name)
+    os.makedirs(sess_dir, exist_ok=True)
+    _current_session = name
+    _stop_live_proc()  # <-- add this line to free the camera if live view is running
+    _stop_event.clear()
     # Block starting while an encode is active
     if _any_encoding_active():
         return redirect(url_for("index"))
@@ -468,6 +471,16 @@ def start():
         _capture_stop_timer.start()
 
     return redirect(url_for("index"))
+
+def _stop_live_proc():
+    global LIVE_PROC
+    with LIVE_LOCK:
+        if LIVE_PROC and LIVE_PROC.poll() is None:
+            try:
+                LIVE_PROC.terminate()
+            except Exception:
+                pass
+        LIVE_PROC = None
 
 def _finalize_stop_background():
     global _capture_thread, _stop_event, _current_session, _capture_stop_timer, _capture_end_ts
@@ -611,7 +624,18 @@ def live_mjpg():
     # Only stream when idle, otherwise tell the browser "busy"
     if not _idle_now():
         abort(503, "Busy")
-
+    bin_rv = shutil.which("rpicam-vid") or "/usr/bin/rpicam-vid"
+    if not os.path.exists(bin_rv):
+        abort(500, "rpicam-vid not found; install rpicam-apps")
+    ...
+    cmd = [
+        bin_rv,
+        "--codec", "mjpeg",
+        "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+        "-t", "0",
+        "-o", "-",
+        "--inline"
+    ]
     global LIVE_PROC
     with LIVE_LOCK:
         if LIVE_PROC is None or LIVE_PROC.poll() is not None:
