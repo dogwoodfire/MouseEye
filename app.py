@@ -937,11 +937,11 @@ TPL_INDEX = r"""
   }
   .diskbar .fill {
     height:100%; width:0%;
-    background:#10b981; /* green */
+    background:#5ca5d6; /* light blue */
   }
   .footer .label { color: var(--muted); font-size: 13px; }
   .diskbar .fill { height:100%; width:0%; transition:width .25s ease; }
-  .diskbar .fill.ok   { background:#10b981; } /* green */
+  .diskbar .fill.ok   { background:#5ca5d6; } /* light blue */
   .diskbar .fill.warn { background:#f59e0b; } /* amber */
   .diskbar .fill.crit { background:#ef4444; } /* red */
 
