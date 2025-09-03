@@ -362,6 +362,8 @@ def index():
     except Exception:
         next_sched = None
 
+    disk_info = _disk_stats()
+
     return render_template_string(
         TPL_INDEX,
         sessions=sessions,
@@ -373,7 +375,8 @@ def index():
         remaining_min=remaining_min,
         remaining_sec_only=remaining_sec_only,
         remaining_sec_padded=remaining_sec_padded,
-        next_sched=next_sched
+        next_sched=next_sched,
+        disk=disk_info,
     )
 
 @app.route("/start", methods=["POST"])
@@ -616,6 +619,20 @@ TPL_INDEX = r"""
   .progress.show { display:block; }
   .bar { position:absolute; left:0; top:0; bottom:0; width:0%; background:#10b981; }
 
+  .footer {
+  position: sticky; bottom: 0; background:#fff;
+  border-top:1px solid var(--border); padding:10px 12px;
+  }
+  .footer .row { align-items:center; justify-content:space-between; }
+  .diskbar {
+    height:10px; background:#e5e7eb; border-radius:999px; overflow:hidden; width:220px;
+  }
+  .diskbar .fill {
+    height:100%; width:0%;
+    background:#f59e0b; /* amber-ish to contrast with green encode bar */
+  }
+  .footer .label { color: var(--muted); font-size: 13px; }
+
   @media (max-width: 460px) {
     .session { grid-template-columns: 104px 1fr; }
     .thumb { width: 104px; height: 78px; }
@@ -744,6 +761,17 @@ TPL_INDEX = r"""
     </div>
   </div>
   {% endfor %}
+
+  <div class="footer card">
+  <div class="row">
+    <div class="label" id="disk-text">
+      Storage: {{ disk.free_gb }} GB free of {{ disk.total_gb }} GB ({{ 100 - disk.pct_free }}% used)
+    </div>
+    <div class="diskbar" aria-label="disk usage">
+      <div class="fill" id="disk-fill" style="width: {{ 100 - disk.pct_free }}%;"></div>
+    </div>
+  </div>
+</div>
 </main>
 
 <script>
@@ -841,6 +869,25 @@ async function testCapture(){
   // This listener should be outside of showProgress(), so it runs
   // immediately when the page loads and resumes polling if needed.
 document.addEventListener('DOMContentLoaded', async () => {
+  async function pollDisk() {
+    try {
+      const r = await fetch("{{ url_for('disk') }}");
+      if (!r.ok) return;
+      const d = await r.json();
+      const txt = document.getElementById('disk-text');
+      const fill = document.getElementById('disk-fill');
+      if (txt) {
+        txt.textContent = `Storage: ${d.free_gb} GB free of ${d.total_gb} GB (${d.pct_used}% used)`;
+      }
+      if (fill) {
+        fill.style.width = d.pct_used + '%';
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // kick it off immediately and every 15s
+  pollDisk();
+  setInterval(pollDisk, 15000);
   // Existing code to resume encoding progress bars …
   try {
     const resp = await fetch("{{ url_for('jobs') }}");
@@ -928,6 +975,23 @@ _sched_lock = threading.Lock()
 _sched_state = {}       # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
 _sched_start_t = None   # handle to the scheduled start timer
 _sched_stop_t  = None   # handle to the scheduled stop timer
+
+def _disk_stats(path=BASE):
+    """Return total/used/free and percents for the filesystem containing `path`."""
+    st = shutil.disk_usage(path)
+    total = st.total
+    free  = st.free
+    used  = total - free
+    to_gb = lambda b: round(b / (1024**3), 1)
+    pct_used = int((used / total) * 100) if total else 0
+    pct_free = 100 - pct_used
+    return {
+        "total_gb": to_gb(total),
+        "free_gb":  to_gb(free),
+        "used_gb":  to_gb(used),
+        "pct_used": pct_used,
+        "pct_free": pct_free,
+    }
 
 def _thumb_for(sess_dir, jpg_path):
     # thumbs in sessions/<name>/thumbs/<filename>.jpg
@@ -1068,6 +1132,10 @@ def _sched_fire_stop(sess_name="", fps=24, auto_encode=False):
                     c.post(f'/encode/{sess_name}', data={'fps': fps})
                 except Exception:
                     pass
+
+@app.get("/disk")
+def disk():
+    return jsonify(_disk_stats())
 
 @app.get("/schedule")
 def schedule_page():
