@@ -163,6 +163,13 @@ def _timestamped_session():
 def _any_encoding_active():
     return any(v.get("status") in ("queued", "encoding") for v in _jobs.values())
 
+# ---- Live viewfinder ----
+LIVE_PROC = None
+LIVE_LOCK = threading.Lock()
+
+def _idle_now():
+    return (_capture_thread is None or not _capture_thread.is_alive()) and not _any_encoding_active()
+
 def _list_sessions():
     out = []
     for d in sorted(os.listdir(SESSIONS_DIR)):
@@ -329,6 +336,15 @@ def _capture_loop(sess_dir, interval):
 # ---------- Routes ----------
 @app.route("/", methods=["GET"])
 def index():
+    encoding_active = _any_encoding_active()
+    idle_now = ((_capture_thread is None or not _capture_thread.is_alive()) and not encoding_active)
+
+    return render_template_string(
+        TPL_INDEX,
+        ...,
+        encoding_active=encoding_active,
+        idle_now=idle_now,
+    )
     sessions = _list_sessions()
     # compute remaining seconds for active session if a duration was set
     remaining_sec = None
@@ -590,6 +606,70 @@ def test_capture():
         except Exception:
             pass
 
+@app.get("/live.mjpg")
+def live_mjpg():
+    # Only stream when idle, otherwise tell the browser "busy"
+    if not _idle_now():
+        abort(503, "Busy")
+
+    global LIVE_PROC
+    with LIVE_LOCK:
+        if LIVE_PROC is None or LIVE_PROC.poll() is not None:
+            # Use rpicam-vid to output MJPEG to stdout forever (-t 0)
+            # --codec mjpeg gives JPEG frames; --width/--height from your capture defaults
+            cmd = [
+                shutil.which("rpicam-vid") or "/usr/bin/rpicam-vid",
+                "--codec", "mjpeg",
+                "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+                "-t", "0",
+                "-o", "-",              # to stdout
+                "--inline"
+            ]
+            LIVE_PROC = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    boundary = b"--frame"
+
+    def gen():
+        try:
+            # rpicam-vid outputs a continuous MJPEG bitstream; frames are JPEGs back-to-back.
+            # We'll read by simple JPEG scan; robust enough for Pi cams.
+            buf = b""
+            while True:
+                # Stop streaming immediately if we become busy
+                if not _idle_now():
+                    break
+
+                chunk = LIVE_PROC.stdout.read(4096)
+                if not chunk:
+                    break
+                buf += chunk
+
+                # Search for JPEG SOI/EOI markers
+                while True:
+                    soi = buf.find(b"\xff\xd8")
+                    eoi = buf.find(b"\xff\xd9", soi + 2) if soi != -1 else -1
+                    if soi != -1 and eoi != -1:
+                        frame = buf[soi:eoi+2]
+                        buf = buf[eoi+2:]  # consume
+                        # yield one multipart frame
+                        yield boundary + b"\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n"
+                    else:
+                        break
+        finally:
+            # If no client is connected and still idle, let the process keep running,
+            # but kill it if someone triggered a capture/encode
+            with LIVE_LOCK:
+                if LIVE_PROC and (not _idle_now() or LIVE_PROC.poll() is not None):
+                    try: LIVE_PROC.kill()
+                    except Exception: pass
+                    LIVE_PROC = None
+
+    headers = {
+        "Content-Type": "multipart/x-mixed-replace; boundary=frame",
+        "Cache-Control": "no-store"
+    }
+    return app.response_class(gen(), headers=headers)
+
 # ---------- Template (single file) ----------
 TPL_INDEX = r"""
 <!doctype html>
@@ -744,7 +824,19 @@ TPL_INDEX = r"""
     </div>
   </div>
   {% endif %}
-
+  {% if idle_now %}
+  <div class="card">
+    <div class="row" style="align-items:center; justify-content:space-between;">
+      <div>
+        <div style="font-weight:600">👀 Live view (idle)</div>
+        <div class="sub">Refreshes continuously until you start a capture or encode.</div>
+      </div>
+    </div>
+    <div class="thumb" style="width:100%; height:auto; border:none; background:#000; max-height:360px; overflow:hidden;">
+      <img src="{{ url_for('live_mjpg') }}" style="width:100%; height:auto; display:block;" alt="live view">
+    </div>
+  </div>
+{% endif %}
   {% for s in sessions %}
   <div class="card session {% if current_session == s.name %}active{% endif %}">
     <div class="thumb">
