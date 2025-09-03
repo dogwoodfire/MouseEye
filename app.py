@@ -665,11 +665,11 @@ TPL_INDEX = r"""
   }
   .footer .row { align-items:center; justify-content:space-between; }
   .diskbar {
-    height:10px; background:#e5e7eb; border-radius:999px; overflow:hidden; width:220px;
+    height:10px; background:#e5e7eb; border-radius:999px; overflow:hidden; width:300px;
   }
   .diskbar .fill {
     height:100%; width:0%;
-    background:#10b981; /* amber-ish to contrast with green encode bar */
+    background:#10b981; /* green */
   }
   .footer .label { color: var(--muted); font-size: 13px; }
   .diskbar .fill { height:100%; width:0%; transition:width .25s ease; }
@@ -811,7 +811,7 @@ TPL_INDEX = r"""
   <div class="footer card">
   <div class="row">
     <div class="label" id="disk-text">
-      Storage: {{ disk.free_gb }} GB free of {{ disk.total_gb }} GB ({{ 100 - disk.pct_free }}% used)
+      Storage: {{ disk.free_gb }}GB free of {{ disk.total_gb }}GB ({{ 100 - disk.pct_free }}% used)
     </div>
     <div class="diskbar" aria-label="disk usage">
       <div class="fill" id="disk-fill" style="width: {{ 100 - disk.pct_free }}%;"></div>
