@@ -1045,11 +1045,11 @@ TPL_INDEX = r"""
         {% if not s.has_video and current_session != s.name %}
           <form action="{{ url_for('encode', sess=s.name) }}" method="post" onsubmit="showProgress('{{ s.name }}')">
             <label>🎞 FPS:</label>
-            <select name="fps">
-              {% for f in fps_choices %}
-                <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
-              {% endfor %}
-            </select>
+              <select name="fps" {% if encoding_active %}disabled{% endif %}>
+                {% for f in fps_choices %}
+                  <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
+                {% endfor %}
+              </select>
             <button class="btn" type="submit">🧩 Encode</button>
           </form>
         {% endif %}
@@ -1383,6 +1383,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       'form[action="{{ url_for("start") }}"] button[type="submit"]', // Start
       'button[onclick^="testCapture"]',                               // Viewfinder test
       'form[action*="/encode/"] button[type="submit"]',               // Encode buttons
+      'form[action*="/encode/"] select[name="fps"]',                  // FPS dropdown
       'form[action*="/delete/"] button[type="submit"]',               // Delete buttons
       'form[action*="/rename/"] input[name="new_name"]',              // Rename input
       'form[action*="/rename/"] button[type="submit"]'                // Rename button
