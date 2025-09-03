@@ -887,15 +887,7 @@ TPL_INDEX = r"""
     </div>
       {% if idle_now %}
         <div class="row">
-      <div class="card">
-        <div class="row" style="align-items:center; justify-content:space-between;">
-          <div>
-            <div style="font-weight:600">👀 Open viewfinder</div>
-            <div class="sub">Opens on its own page and only works when the camera is idle.</div>
-          </div>
-          <a class="btn" href="{{ url_for('live_page') }}">Open live view</a>
-        </div>
-      </div>
+          <a class="btn" href="{{ url_for('live_page') }}">👀 Open viewfinder</a>
       </div>
     {% endif %}
     
