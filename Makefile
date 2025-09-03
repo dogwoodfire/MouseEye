@@ -4,16 +4,19 @@ PI_DIR  ?= /home/pi/timelapse
 SERVICE ?= timelapse.service
 BRANCH  ?= main
 
+# Commit message (override: make deploy MSG="your message")
+MSG ?= quick deploy
+
 # -------- Helpers --------
 define yellow
-	@printf "\033[33m%s\033[0m\n" "$(1)"
+    @printf "\033[33m%s\033[0m\n" "$(1)"
 endef
 
 # -------- Git steps (local) --------
 .PHONY: commit push
 commit:
 	git add -A
-	git commit -m "quick deploy" || true
+	git commit -m "$(MSG)" || true
 
 push:
 	$(call yellow,"[local] Pushing to origin $(BRANCH)…")
