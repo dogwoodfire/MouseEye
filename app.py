@@ -624,92 +624,123 @@ def live_status():
 
 @app.get("/live.mjpg")
 def live_mjpg():
+    # Only stream when idle, otherwise 503
     if not _idle_now():
         abort(503, "Busy")
 
-    def pick_cmd(vid_bin):
-        base = [vid_bin, "--codec", "mjpeg", "--framerate", "8",
-                "--width", "640", "--height", "480",
-                "-t", "0", "-o", "-", "--inline"]
-        if os.path.basename(vid_bin) == "libcamera-vid":
-            return base[:1] + ["-n"] + base[1:]
-        else:
-            return base + ["--nopreview"]
+    _stop_live_proc()  # ensure no stale proc
 
-    # Try primary bin then fallback
-    bins = [p for p in (shutil.which("rpicam-vid"), shutil.which("libcamera-vid")) if p]
-    if not bins:
-        abort(500, "No camera video binary found.")
+    global LIVE_PROC
+    with LIVE_LOCK:
+        vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
+        if not vid_bin:
+            abort(500, "No camera video binary found (rpicam-vid/libcamera-vid).")
+
+        if LIVE_PROC is None or LIVE_PROC.poll() is not None:
+            cmd = [
+                vid_bin,
+                "--codec", "mjpeg",
+                "--width", str(CAPTURE_WIDTH),
+                "--height", str(CAPTURE_HEIGHT),
+                "-t", "0",           # run forever
+                "-o", "-",           # write MJPEG to stdout
+                "--inline",
+            ]
+            if os.path.basename(vid_bin) == "libcamera-vid":
+                # disable on-screen preview for libcamera-vid
+                cmd.insert(1, "-n")
+
+            # Environment: reduce libcamera chatter to errors only
+            env = dict(os.environ)
+            env.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")  # or "*:0" on some builds
+            env.setdefault("RPI_LOG_LEVEL", "error")
+
+            # Start process: stdout=stream, stderr=PIPE (we’ll drain it)
+            LIVE_PROC = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+                env=env,
+                start_new_session=True,
+            )
+
+            # Drain stderr so logs never block or leak
+            def _drain_stderr(p):
+                try:
+                    if p.stderr:
+                        for _ in iter(lambda: p.stderr.read(4096), b""):
+                            pass
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        if p.stderr:
+                            p.stderr.close()
+                    except Exception:
+                        pass
+            threading.Thread(target=_drain_stderr, args=(LIVE_PROC,), daemon=True).start()
 
     boundary = b"--frame"
 
-    def spawn(vid_bin):
-        cmd = pick_cmd(vid_bin)
-        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    def cleanup_proc():
+        global LIVE_PROC
+        with LIVE_LOCK:
+            proc = LIVE_PROC
+            LIVE_PROC = None
+        if not proc:
+            return
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=1.0)
+        except Exception:
+            pass
+        try:
+            if proc.stdout:
+                proc.stdout.close()
+        except Exception:
+            pass
 
-    # We keep a local proc within the generator (not the global LIVE_PROC) to avoid any stale state
     def gen():
         buf = b""
-        tried = []
-        for attempt in range(len(bins)):
-            vid_bin = bins[attempt]
-            tried.append(os.path.basename(vid_bin))
-            proc = spawn(vid_bin)
-            first_deadline = time.time() + 2.0  # must see first frame quickly
-
-            try:
+        try:
+            while True:
+                if not _idle_now():
+                    break
+                # read camera bytes
+                chunk = LIVE_PROC.stdout.read(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                # find complete JPEGs (SOI..EOI)
                 while True:
-                    if not _idle_now():
-                        return
-                    chunk = proc.stdout.read(4096)
-                    if not chunk:
-                        # No data yet — if we exceeded first_deadline, give up on this binary and try next
-                        if time.time() > first_deadline:
-                            break
-                        time.sleep(0.02)
-                        continue
-
-                    buf += chunk
-                    while True:
-                        soi = buf.find(b"\xff\xd8")
-                        if soi == -1: break
-                        eoi = buf.find(b"\xff\xd9", soi + 2)
-                        if eoi == -1: break
-                        frame = buf[soi:eoi+2]
-                        buf = buf[eoi+2:]
-                        yield (boundary +
-                               b"\r\nContent-Type: image/jpeg\r\nContent-Length: " +
-                               str(len(frame)).encode() +
-                               b"\r\n\r\n" + frame + b"\r\n")
-                        # once we’ve produced a frame, extend deadline so we keep going
-                        first_deadline = time.time() + 5.0
-
-                    # If the process died, stop and maybe retry fallback
-                    if proc.poll() is not None:
+                    soi = buf.find(b"\xff\xd8")
+                    if soi == -1:
                         break
-            finally:
-                try:
-                    proc.terminate()
-                    try: proc.wait(timeout=0.5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill(); proc.wait(timeout=0.5)
-                except Exception:
-                    pass
-                try:
-                    if proc.stdout: proc.stdout.close()
-                    if proc.stderr: proc.stderr.close()
-                except Exception:
-                    pass
-
-            # If we got here without yielding any frame, loop to fallback (if any)…
-            buf = b""
-
-        # No frames from any binary → just stop the stream cleanly
-        return
+                    eoi = buf.find(b"\xff\xd9", soi + 2)
+                    if eoi == -1:
+                        break
+                    frame = buf[soi:eoi+2]
+                    buf = buf[eoi+2:]
+                    yield (
+                        boundary
+                        + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                        + str(len(frame)).encode()
+                        + b"\r\n\r\n"
+                        + frame
+                        + b"\r\n"
+                    )
+        finally:
+            if LIVE_PROC is None or not _idle_now() or LIVE_PROC.poll() is not None:
+                cleanup_proc()
 
     headers = {
         "Content-Type": "multipart/x-mixed-replace; boundary=frame",
-        "Cache-Control": "no-store"
+        "Cache-Control": "no-store",
     }
     return app.response_class(gen(), headers=headers)
 
