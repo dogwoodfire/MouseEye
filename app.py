@@ -818,7 +818,18 @@ def live_page():
               msgEl.style.display='flex';
               msgEl.textContent='Connecting to camera…';
               imgEl.src = LIVE_URL;
-
+                if (!imgEl._firstFrameWatcher) {
+                imgEl._firstFrameWatcher = true;
+                let tries = 0;
+                const tick = () => {
+                  if (imgEl.naturalWidth > 0) {
+                    msgEl.style.display = 'none';
+                    return;
+                  }
+                  if (++tries < 20) setTimeout(tick, 100);
+                };
+                setTimeout(tick, 100);
+              }
               // After ~2.5s, if still no image, show reason
               setTimeout(async ()=>{
                 if (msgEl.style.display !== 'none') {
