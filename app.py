@@ -408,15 +408,14 @@ def start():
     if _any_encoding_active():
         return redirect(url_for("index"))
 
-    # Block if a capture is already running
     if _capture_thread and _capture_thread.is_alive():
         return redirect(url_for("index"))
 
-    # Read form inputs
+    # --- read form values ---
     name = _safe_name(request.form.get("name") or _timestamped_session())
-    interval = request.form.get("interval", str(CAPTURE_INTERVAL_SEC))
+    interval_raw = request.form.get("interval", str(CAPTURE_INTERVAL_SEC))
     try:
-        interval = max(1, int(interval))
+        interval = max(1, int(interval_raw))
     except Exception:
         interval = CAPTURE_INTERVAL_SEC
 
@@ -435,16 +434,15 @@ def start():
     if duration_min <= 0:
         duration_min = None
 
-    # Prepare session dir
-    sess_dir = _session_path(name)
-    os.makedirs(sess_dir, exist_ok=True)
-
-    # Make sure live view isn’t holding the camera
+    # --- IMPORTANT: ensure live view isn’t holding the camera ---
     _stop_live_proc()
 
-    # Start capture thread
+    # Set up the session
+    sess_dir = _session_path(name)
+    os.makedirs(sess_dir, exist_ok=True)
     _current_session = name
     _stop_event.clear()
+
     t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
     _capture_thread = t
     t.start()
@@ -622,6 +620,9 @@ def live_status():
 def live_mjpg():
     if not _idle_now():
         abort(503, "Busy")
+
+    # If a stale process exists for some reason, stop it before starting a new one
+    _stop_live_proc()
 
     global LIVE_PROC
     with LIVE_LOCK:
@@ -832,7 +833,7 @@ TPL_INDEX = r"""
         ▶️ Start
       </button>
       <a class="btn {% if not current_session %}disabled{% endif %}"
-        href="{{ url_for('stop_route') }}"
+        href="#"
         onclick="return stopClick(event)"
         {% if not current_session %}aria-disabled="true"{% endif %}>
         ⏹ Stop
@@ -1068,7 +1069,7 @@ async function testCapture(){
             wrap.classList.remove('show');
             bar.style.width = '0%';
             location.reload();
-          }, 400);
+          }, 1200);
         }
       } catch (e) { console.log(e); }
     }, 600);
@@ -1078,48 +1079,51 @@ async function testCapture(){
 
     async function updateLiveUIOnce() {
   const LIVE_URL = "{{ url_for('live_mjpg') }}";
-  const LIVE_STATUS_URL = "{{ url_for('live_status') }}";
+const LIVE_STATUS_URL = "{{ url_for('live_status') }}";
 
-  async function updateLiveUIOnce() {
-    const msgEl = document.getElementById('live-msg');
-    const imgEl = document.getElementById('live-img');
-    if (!msgEl || !imgEl) return;
+async function updateLiveUIOnce() {
+  const msgEl = document.getElementById('live-msg');
+  const imgEl = document.getElementById('live-img');
+  if (!msgEl || !imgEl) return;
 
-    try {
-      const r = await fetch(LIVE_STATUS_URL, { cache: 'no-store' });
-      if (!r.ok) throw new Error('status not ok');
-      const j = await r.json();
+  try {
+    const r = await fetch(LIVE_STATUS_URL, { cache: 'no-store' });
+    const j = r.ok ? await r.json() : { idle: false };
 
-      if (j.idle) {
-        // Only wire handlers the first time
-        if (!imgEl._handlersAttached) {
-          imgEl._handlersAttached = true;
-          imgEl.addEventListener('load', () => {
-            // First frame arrived -> hide overlay
-            msgEl.style.display = 'none';
-          });
-          imgEl.addEventListener('error', () => {
-            msgEl.style.display = 'flex';
-            msgEl.textContent = 'Live stream unavailable (camera idle but stream failed).';
-          });
-        }
-        // (Re)set the src if empty or previously cleared; cache-bust to avoid stale connections
-        if (!imgEl.src) {
+    if (j.idle) {
+      // (Re)bind handlers once
+      if (!imgEl._handlersBound) {
+        imgEl._handlersBound = true;
+        imgEl.addEventListener('load', () => {
+          // We only get a 'load' for the first multipart header; good enough to hide the overlay
+          msgEl.style.display = 'none';
+        });
+        imgEl.addEventListener('error', () => {
           msgEl.style.display = 'flex';
-          msgEl.textContent = 'Connecting to camera…';
-          imgEl.src = LIVE_URL + '?t=' + Date.now();
-        }
-      } else {
-        // Busy: keep overlay visible and clear the src to stop fetching
-        msgEl.style.display = 'flex';
-        msgEl.textContent = 'Camera busy (capturing/encoding)…';
-        if (imgEl.src) imgEl.src = '';
+          msgEl.textContent = 'Failed to open camera stream';
+        });
       }
-    } catch (e) {
+
+      if (!imgEl.src) {
+        msgEl.style.display = 'flex';
+        msgEl.textContent = 'Connecting to camera…';
+        imgEl.src = LIVE_URL;
+      }
+    } else {
       msgEl.style.display = 'flex';
-      msgEl.textContent = 'Checking camera…';
+      msgEl.textContent = 'Camera busy (capturing/encoding)…';
+      if (imgEl.src) imgEl.src = ''; // stop requesting stream
     }
+  } catch {
+    msgEl.style.display = 'flex';
+    msgEl.textContent = 'Checking camera…';
   }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  updateLiveUIOnce();
+  setInterval(updateLiveUIOnce, 3000);
+});
 
   document.addEventListener('DOMContentLoaded', () => {
     updateLiveUIOnce();
@@ -1189,6 +1193,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let activeCapture = {{ 'true' if current_session else 'false' }};
   let encodingBusy  = false;
+  // Assume busy until we know otherwise so buttons are conservative at page load.
+  applyControlState();
 
   //combine flags to drive the UI ---
   function applyControlState(){
