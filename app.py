@@ -109,6 +109,84 @@ def _list_sessions():
     out.sort(key=lambda x: x["name"], reverse=True)
     return out
 
+# ===== Persistence for scheduler =====
+SCHED_FILE = os.path.join(BASE, "schedule.json")
+
+def _save_sched_state():
+    try:
+        tmp = SCHED_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(_sched_state, f)
+        os.replace(tmp, SCHED_FILE)
+    except Exception:
+        pass
+
+def _load_sched_state():
+    try:
+        if os.path.exists(SCHED_FILE):
+            with open(SCHED_FILE, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                _sched_state.clear()
+                _sched_state.update(data)
+                return True
+    except Exception:
+        pass
+    return False
+def _arm_timers_from_state():
+    """(Re)arm timers according to _sched_state and current time."""
+    global _sched_start_t, _sched_stop_t
+
+    with _sched_lock:
+        # Cancel any existing timers
+        if _sched_start_t:
+            try: _sched_start_t.cancel()
+            except: pass
+            _sched_start_t = None
+        if _sched_stop_t:
+            try: _sched_stop_t.cancel()
+            except: pass
+            _sched_stop_t = None
+
+        if not _sched_state:
+            return
+
+        now        = int(time.time())
+        start_ts   = int(_sched_state.get("start_ts", 0))
+        end_ts     = int(_sched_state.get("end_ts",   0))
+        interval   = int(_sched_state.get("interval", 10))
+        fps        = int(_sched_state.get("fps",      24))
+        sess_name  = _sched_state.get("sess", "") or ""
+        auto_encode = bool(_sched_state.get("auto_encode", False))
+
+        # If schedule already ended, clear it
+        if end_ts <= now:
+            _sched_state.clear()
+            _save_sched_state()
+            return
+
+        # If we are in the window, start immediately and schedule stop
+        if start_ts <= now < end_ts:
+            _sched_fire_start(interval, fps, sess_name)
+            delay_stop = max(0, end_ts - now)
+            _sched_stop_t = threading.Timer(delay_stop, _sched_fire_stop,
+                                            args=(sess_name, fps, auto_encode))
+            _sched_stop_t.daemon = True
+            _sched_stop_t.start()
+            return
+
+        # Otherwise schedule future start and stop
+        delay_start = max(0, start_ts - now)
+        delay_stop  = max(0, end_ts   - now)
+        _sched_start_t = threading.Timer(delay_start, _sched_fire_start,
+                                         args=(interval, fps, sess_name))
+        _sched_stop_t  = threading.Timer(delay_stop,  _sched_fire_stop,
+                                         args=(sess_name, fps, auto_encode))
+        _sched_start_t.daemon = True
+        _sched_stop_t.daemon  = True
+        _sched_start_t.start()
+        _sched_stop_t.start()
+
 # ---------- Capture thread ----------
 def _capture_loop(sess_dir, interval):
     global _stop_event
@@ -187,7 +265,7 @@ def index():
                 "end_human": end_h,
                 "interval": ns.interval,
                 "fps": ns.fps,
-                "sess": getattr(ns, "sess", None),
+                "sess": _sched_state.get("sess") or None,
                 "auto_encode": bool(getattr(ns, "auto_encode", False)),
 
             }
@@ -855,7 +933,8 @@ SCHED_TPL = '''<!doctype html>
     <input type="checkbox" name="auto_encode" checked>
     Auto-encode when finished
   </label>
-
+  <label>Session name (optional)</label>
+  <input type="text" name="sess_name" placeholder="(auto)">
   <button type="submit">Create Schedule</button>
 </form>
 
@@ -878,7 +957,7 @@ SCHED_TPL = '''<!doctype html>
 </button>
 '''
 
-def _sched_fire_start(interval, fps, sess_name):
+def _sched_fire_start(interval, fps, sess_name=""):
     try:
         from flask import current_app
         app = current_app._get_current_object()
@@ -890,7 +969,7 @@ def _sched_fire_start(interval, fps, sess_name):
         with app.test_client() as c:
             c.post('/start', data={'interval': interval, 'fps': fps, 'name': sess_name})
 
-def _sched_fire_stop(sess_name, fps, auto_encode):
+def _sched_fire_stop(sess_name="", fps=24, auto_encode=False):
     try:
         from flask import current_app
         app = current_app._get_current_object()
@@ -901,7 +980,7 @@ def _sched_fire_stop(sess_name, fps, auto_encode):
     with app.app_context():
         with app.test_client() as c:
             c.post('/stop')
-            if auto_encode:
+            if auto_encode and sess_name:
                 try:
                     c.post(f'/encode/{sess_name}', data={'fps': fps})
                 except Exception:
@@ -947,7 +1026,8 @@ def schedule_arm():
     except: interval = 10
     try: fps = int(request.form.get("fps", "24") or 24)
     except: fps = 24
-    auto_encode = bool(request.form.get("auto_encode"))  # checkbox -> 'on' present
+    auto_encode = bool(request.form.get("auto_encode"))
+    sess_name = (request.form.get("sess_name") or "").strip()
 
     # Parse local time
     try:
@@ -956,13 +1036,25 @@ def schedule_arm():
         start_ts = int(time.time()) + 60
     end_ts = start_ts + duration_min * 60
 
-    now = int(time.time())
-    delay_start = max(0, start_ts - now)
-    delay_stop  = max(0, end_ts - now)
+    # Save state once
+    with _sched_lock:
+        _sched_state.clear()
+        _sched_state.update(dict(
+            start_ts=start_ts,
+            end_ts=end_ts,
+            interval=interval,
+            fps=fps,
+            sess=sess_name,
+            auto_encode=auto_encode,
+        ))
+        _save_sched_state()
 
-    # Deterministic session name for this schedule
-    sess_name = f"scheduled-{datetime.fromtimestamp(start_ts).strftime('%Y%m%d-%H%M')}"
+    # (Re)arm timers centrally
+    _arm_timers_from_state()
+    return redirect(url_for("schedule_page"))
 
+@app.post("/schedule/cancel")
+def schedule_cancel():
     global _sched_start_t, _sched_stop_t
     with _sched_lock:
         if _sched_start_t:
@@ -973,46 +1065,17 @@ def schedule_arm():
             try: _sched_stop_t.cancel()
             except: pass
             _sched_stop_t = None
-
         _sched_state.clear()
-        _sched_state.update(dict(
-            start_ts=start_ts,
-            end_ts=end_ts,
-            interval=interval,
-            fps=fps,
-            sess=sess_name,
-            auto_encode=auto_encode,
-        ))
-
-        _sched_start_t = threading.Timer(
-            delay_start, _sched_fire_start, args=(interval, fps, sess_name)
-        )
-        _sched_stop_t  = threading.Timer(
-            delay_stop,  _sched_fire_stop,  args=(sess_name, fps, auto_encode)
-        )
-        _sched_start_t.daemon = True
-        _sched_stop_t.daemon  = True
-        _sched_start_t.start()
-        _sched_stop_t.start()
-
+        _save_sched_state()
     return redirect(url_for("schedule_page"))
 
-@app.post("/schedule/cancel")
-def schedule_cancel():
-    global _sched_start_t, _sched_stop_t
-    with _sched_lock:
-        if _sched_start_t:
-            try: _sched_start_t.cancel()
-            except: pass
-            _sched_start_t=None
-        if _sched_stop_t:
-            try: _sched_stop_t.cancel()
-            except: pass
-            _sched_stop_t=None
-        _sched_state.clear()
-    return redirect(url_for("schedule_page"))
 # ================== /Simple Scheduler ==================
-
+# Load persisted schedule and re-arm timers on process start
+try:
+    if _load_sched_state():
+        _arm_timers_from_state()
+except Exception:
+    pass
 
 if __name__ == "__main__":
     import os
