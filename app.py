@@ -272,16 +272,16 @@ def _arm_timers_from_state():
 def _capture_loop(sess_dir, interval):
     global _stop_event, _last_frame_ts
     i = 0
-    timeout_s = 3  # hard cap shot time
+    timeout_s = 3
     thumbs_dir = os.path.join(sess_dir, "thumbs")
     os.makedirs(thumbs_dir, exist_ok=True)
 
-    t0 = time.time()
-    next_due = t0  # shoot immediately
+    # shoot immediately, then every interval seconds on-the-second
+    next_due = time.time()
 
     while not _stop_event.is_set():
         now = time.time()
-        if now < next_due - 0.02:  # light sleep until due
+        if now < next_due - 0.01:
             time.sleep(min(0.05, next_due - now))
             continue
 
@@ -292,32 +292,32 @@ def _capture_loop(sess_dir, interval):
             "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
             "--quality", CAPTURE_QUALITY, "--immediate", "--nopreview"
         ]
-
         try:
-            subprocess.run(
-                cmd,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=timeout_s
-            )
+            subprocess.run(cmd, check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=timeout_s)
             _last_frame_ts = time.time()
-            try:
-                _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
-            except Exception:
-                pass
+
+            # make a small thumb only every 3rd frame to reduce load
+            if i % 3 == 1:
+                try:
+                    _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
+                except Exception:
+                    pass
+
         except subprocess.TimeoutExpired:
-            # camera stalled — skip this frame
+            # skip; camera took too long
             pass
         except Exception:
-            # transient failure — ignore and keep schedule
+            # transient failure; keep schedule
             pass
         finally:
-            # schedule next shot on strict interval, no drift
-            next_due += max(1, int(interval))
-            # if we’re very late (missed cycles), jump ahead
-            while next_due < time.time() - 0.1:
-                next_due += max(1, int(interval))
+            # schedule next tick strictly
+            step = max(1, int(interval))
+            next_due += step
+            # if we fell behind by more than one tick, catch up
+            while next_due < time.time() - 0.05:
+                next_due += step
 
 # ---------- Stop helper (idempotent) ----------
 # def stop_timelapse():
@@ -627,102 +627,154 @@ def live_mjpg():
     if not _idle_now():
         abort(503, "Busy")
 
-    # If a stale process exists for some reason, stop it before starting a new one
-    _stop_live_proc()
+    _stop_live_proc()  # nuke any stale process
 
     global LIVE_PROC
     with LIVE_LOCK:
         vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
         if not vid_bin:
-            abort(500, "No camera video binary found (rpicam-vid/libcamera-vid).")
-        if LIVE_PROC is None or LIVE_PROC.poll() is not None:
-            cmd = [
-                vid_bin,
-                "--codec", "mjpeg",
-                "--width", str(CAPTURE_WIDTH), "--height", str(CAPTURE_HEIGHT),
-                "-t", "0",
-                "-o", "-",
-                "--inline",
-            ]
-            # Disable on-screen preview for both binaries
-            if os.path.basename(vid_bin) == "libcamera-vid":
-                cmd.insert(1, "-n")
-            else:
-                cmd.append("--nopreview")
-            if os.path.basename(vid_bin) == "libcamera-vid":
-                cmd.insert(1, "-n")
-            LIVE_PROC = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
-            )
+            abort(500, "No camera video binary found.")
+        cmd = [
+            vid_bin,
+            "--codec", "mjpeg",
+            "--framerate", "8",
+            "--width", str(CAPTURE_WIDTH), "--height", str(CAPTURE_HEIGHT),
+            "-t", "0",
+            "-o", "-",
+            "--inline",
+        ]
+        if os.path.basename(vid_bin) == "libcamera-vid":
+            cmd.insert(1, "-n")
+        else:
+            cmd.append("--nopreview")
+
+        # capture stderr to a ring buffer so we can show a helpful error if nothing comes out
+        LIVE_PROC = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0
+        )
 
     boundary = b"--frame"
 
-    def cleanup_proc():
-        """Terminate and reap the live process safely."""
+    def cleanup():
         global LIVE_PROC
         with LIVE_LOCK:
             proc = LIVE_PROC
             LIVE_PROC = None
-        if not proc:
-            return
+        if not proc: return
         try:
-            # try gentle
             proc.terminate()
-            try:
-                proc.wait(timeout=1.0)
+            try: proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=1.0)
-        except Exception:
-            pass
+                proc.kill(); proc.wait(timeout=1.0)
+        except Exception: pass
         try:
-            # close our pipe to avoid fd leaks
-            if proc.stdout:
-                proc.stdout.close()
-        except Exception:
-            pass
+            if proc.stdout: proc.stdout.close()
+            if proc.stderr: proc.stderr.close()
+        except Exception: pass
 
     def gen():
         buf = b""
+        first_deadline = time.time() + 2.0  # give it up to 2s to produce first frame
         try:
             while True:
-                # Stop streaming immediately if we become busy
-                if not _idle_now():
-                    break
-
+                if not _idle_now(): break
                 chunk = LIVE_PROC.stdout.read(4096)
                 if not chunk:
-                    break
+                    # if we never got a frame, surface stderr
+                    if time.time() > first_deadline:
+                        err = b""
+                        try:
+                            err = LIVE_PROC.stderr.read(4096) or b""
+                        except Exception:
+                            pass
+                        break
+                    time.sleep(0.02)
+                    continue
                 buf += chunk
-
-                # find JPEG frames (SOI..EOI)
                 while True:
                     soi = buf.find(b"\xff\xd8")
-                    if soi == -1:
-                        break
-                    eoi = buf.find(b"\xff\xd9", soi + 2)
-                    if eoi == -1:
-                        break
+                    if soi == -1: break
+                    eoi = buf.find(b"\xff\xd9", soi+2)
+                    if eoi == -1: break
                     frame = buf[soi:eoi+2]
                     buf = buf[eoi+2:]
-                    yield (
-                        boundary
-                        + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
-                        + str(len(frame)).encode()
-                        + b"\r\n\r\n"
-                        + frame
-                        + b"\r\n"
-                    )
+                    yield (boundary +
+                           b"\r\nContent-Type: image/jpeg\r\nContent-Length: " +
+                           str(len(frame)).encode() + b"\r\n\r\n" +
+                           frame + b"\r\n")
         finally:
-            # If we’re no longer idle, or the process ended, clean it up
-            if LIVE_PROC is None or not _idle_now() or LIVE_PROC.poll() is not None:
-                cleanup_proc()
+            cleanup()
 
     headers = {
         "Content-Type": "multipart/x-mixed-replace; boundary=frame",
         "Cache-Control": "no-store"
     }
     return app.response_class(gen(), headers=headers)
+
+@app.get("/live")
+def live_page():
+    tpl = r"""
+    <!doctype html>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live View</title>
+    <style>
+      body{margin:0;background:#0b0b0b;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+      header{display:flex;gap:10px;align-items:center;padding:10px;border-bottom:1px solid #222}
+      main{padding:10px}
+      .wrap{position:relative;max-width:1024px;margin:0 auto;background:#000;border-radius:8px;overflow:hidden}
+      #live-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);font-size:14px}
+      #live-img{width:100%;height:auto;display:block}
+      .row{display:flex;gap:10px;align-items:center}
+      a.btn{color:#111827;background:#f3f4f6;border:1px solid #374151;border-radius:8px;padding:8px 12px;text-decoration:none}
+    </style>
+    <header>
+      <a class="btn" href="{{ url_for('index') }}">← Back</a>
+      <h1 style="margin:0;font-size:16px">Live View (idle only)</h1>
+    </header>
+    <main>
+      <div class="wrap">
+        <div id="live-msg">Connecting to camera…</div>
+        <img id="live-img" alt="live view">
+      </div>
+    </main>
+    <script>
+      const LIVE_URL = "{{ url_for('live_mjpg') }}";
+      const STATUS_URL = "{{ url_for('live_status') }}";
+      const msgEl = document.getElementById('live-msg');
+      const imgEl = document.getElementById('live-img');
+
+      async function tick(){
+        try{
+          const r = await fetch(STATUS_URL, {cache:'no-store'});
+          const j = r.ok ? await r.json() : {idle:false};
+          if(j.idle){
+            if(!imgEl._bound){
+              imgEl._bound = true;
+              imgEl.addEventListener('load', ()=>{ msgEl.style.display='none'; });
+              imgEl.addEventListener('error', ()=>{
+                msgEl.style.display='flex';
+                msgEl.textContent='Failed to open camera stream';
+              });
+            }
+            if(!imgEl.src){ msgEl.style.display='flex'; msgEl.textContent='Connecting to camera…'; imgEl.src = LIVE_URL; }
+          }else{
+            msgEl.style.display='flex';
+            msgEl.textContent='Camera busy (capturing/encoding)…';
+            if(imgEl.src){ imgEl.src = ''; }
+          }
+        }catch(_){
+          msgEl.style.display='flex';
+          msgEl.textContent='Checking camera…';
+        }
+      }
+      tick();
+      setInterval(tick, 3000);
+    </script>
+    """
+    return render_template_string(tpl)
 
 # ---------- Template (single file) ----------
 TPL_INDEX = r"""
@@ -882,15 +934,10 @@ TPL_INDEX = r"""
   <div class="card">
     <div class="row" style="align-items:center; justify-content:space-between;">
       <div>
-        <div style="font-weight:600">👀 Live view (idle)</div>
-        <div class="sub">Refreshes continuously until you start a capture or encode.</div>
+        <div style="font-weight:600">👀 Live view</div>
+        <div class="sub">Opens on its own page and only works when the camera is idle.</div>
       </div>
-    </div>
-    <div style="position:relative; background:#000; border-radius:8px; overflow:hidden; max-height:360px;">
-      <div id="live-msg" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#e5e7eb; font-size:14px; background:rgba(0,0,0,.35);">
-        Connecting to camera…
-      </div>
-      <img id="live-img" src="" style="width:100%; height:auto; display:block;" alt="live view">
+      <a class="btn" href="{{ url_for('live_page') }}">Open live view</a>
     </div>
   </div>
 {% endif %}
