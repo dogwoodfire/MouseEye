@@ -403,19 +403,16 @@ def index():
 @app.route("/start", methods=["POST"])
 def start():
     global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts
-    # Set up the session
-    sess_dir = _session_path(name)
-    os.makedirs(sess_dir, exist_ok=True)
-    _current_session = name
-    _stop_live_proc()  # <-- add this line to free the camera if live view is running
-    _stop_event.clear()
+
     # Block starting while an encode is active
     if _any_encoding_active():
         return redirect(url_for("index"))
 
+    # Block if a capture is already running
     if _capture_thread and _capture_thread.is_alive():
         return redirect(url_for("index"))
 
+    # Read form inputs
     name = _safe_name(request.form.get("name") or _timestamped_session())
     interval = request.form.get("interval", str(CAPTURE_INTERVAL_SEC))
     try:
@@ -424,49 +421,43 @@ def start():
         interval = CAPTURE_INTERVAL_SEC
 
     # refuse to start if low on disk
-    if not _enough_space(500):  # tweak threshold as you like
+    if not _enough_space(500):
         abort(507)  # Insufficient Storage
 
-    # optional duration for automatic stop: accept hours and minutes
+    # optional duration for automatic stop
     hr_str = request.form.get("duration_hours", "0") or "0"
     mn_str = request.form.get("duration_minutes", "0") or "0"
-    try:
-        hr_val = int(hr_str.strip())
-    except Exception:
-        hr_val = 0
-    try:
-        mn_val = int(mn_str.strip())
-    except Exception:
-        mn_val = 0
+    try: hr_val = int(hr_str.strip())
+    except Exception: hr_val = 0
+    try: mn_val = int(mn_str.strip())
+    except Exception: mn_val = 0
     duration_min = hr_val * 60 + mn_val
     if duration_min <= 0:
         duration_min = None
 
-    # Set up the session
+    # Prepare session dir
     sess_dir = _session_path(name)
     os.makedirs(sess_dir, exist_ok=True)
+
+    # Make sure live view isn’t holding the camera
+    _stop_live_proc()
+
+    # Start capture thread
     _current_session = name
     _stop_event.clear()
-
     t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
     _capture_thread = t
     t.start()
 
-    # --- NEW: schedule automatic stop if duration provided ---
-    # Cancel any prior auto‑stop timer
+    # Auto-stop timer (if duration provided)
     if _capture_stop_timer:
-        try:
-            _capture_stop_timer.cancel()
-        except Exception:
-            pass
+        try: _capture_stop_timer.cancel()
+        except Exception: pass
         _capture_stop_timer = None
         _capture_end_ts = None
 
     if duration_min:
-        # Compute when this capture should end (seconds from now)
-        end_ts = time.time() + duration_min * 60
-        _capture_end_ts = end_ts
-        # Schedule a call to stop_timelapse() at that point
+        _capture_end_ts = time.time() + duration_min * 60
         _capture_stop_timer = threading.Timer(duration_min * 60, stop_timelapse)
         _capture_stop_timer.daemon = True
         _capture_stop_timer.start()
@@ -1087,40 +1078,54 @@ async function testCapture(){
     const LIVE_STATUS_URL = "{{ url_for('live_status') }}";
 
     async function updateLiveUIOnce() {
-      const msgEl = document.getElementById('live-msg');
-      const imgEl = document.getElementById('live-img');
-      if (!msgEl || !imgEl) return;
+  const LIVE_URL = "{{ url_for('live_mjpg') }}";
+  const LIVE_STATUS_URL = "{{ url_for('live_status') }}";
 
-      try {
-        const r = await fetch(LIVE_STATUS_URL, { cache: 'no-store' });
-        if (!r.ok) throw new Error('status not ok');
-        const j = await r.json();
-        if (j.idle) {
-          // Show connecting (briefly) then hide overlay
+  async function updateLiveUIOnce() {
+    const msgEl = document.getElementById('live-msg');
+    const imgEl = document.getElementById('live-img');
+    if (!msgEl || !imgEl) return;
+
+    try {
+      const r = await fetch(LIVE_STATUS_URL, { cache: 'no-store' });
+      if (!r.ok) throw new Error('status not ok');
+      const j = await r.json();
+
+      if (j.idle) {
+        // Only wire handlers the first time
+        if (!imgEl._handlersAttached) {
+          imgEl._handlersAttached = true;
+          imgEl.addEventListener('load', () => {
+            // First frame arrived -> hide overlay
+            msgEl.style.display = 'none';
+          });
+          imgEl.addEventListener('error', () => {
+            msgEl.style.display = 'flex';
+            msgEl.textContent = 'Live stream unavailable (camera idle but stream failed).';
+          });
+        }
+        // (Re)set the src if empty or previously cleared; cache-bust to avoid stale connections
+        if (!imgEl.src) {
+          msgEl.style.display = 'flex';
           msgEl.textContent = 'Connecting to camera…';
-          if (!imgEl.src) imgEl.src = LIVE_URL;
-          setTimeout(() => { msgEl.style.display = 'none'; }, 800);
-        } else {
-          // Busy: show message and remove stream src so the img stops trying
-          msgEl.style.display = 'flex';
-          msgEl.textContent = 'Camera busy (capturing/encoding)…';
-          if (imgEl.src) imgEl.src = '';
+          imgEl.src = LIVE_URL + '?t=' + Date.now();
         }
-      } catch (e) {
-        // Unknown: keep a gentle message
-        const msgEl = document.getElementById('live-msg');
-        if (msgEl) {
-          msgEl.style.display = 'flex';
-          msgEl.textContent = 'Checking camera…';
-        }
+      } else {
+        // Busy: keep overlay visible and clear the src to stop fetching
+        msgEl.style.display = 'flex';
+        msgEl.textContent = 'Camera busy (capturing/encoding)…';
+        if (imgEl.src) imgEl.src = '';
       }
+    } catch (e) {
+      msgEl.style.display = 'flex';
+      msgEl.textContent = 'Checking camera…';
     }
+  }
 
-    // Call once at load, then every few seconds
-    document.addEventListener('DOMContentLoaded', () => {
-      updateLiveUIOnce();
-      setInterval(updateLiveUIOnce, 3000);
-    });
+  document.addEventListener('DOMContentLoaded', () => {
+    updateLiveUIOnce();
+    setInterval(updateLiveUIOnce, 3000);
+  });
   // This listener should be outside of showProgress(), so it runs
   // immediately when the page loads and resumes polling if needed.
 document.addEventListener('DOMContentLoaded', async () => {
