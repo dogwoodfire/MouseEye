@@ -560,7 +560,7 @@ TPL_INDEX = r"""
 </style>
 
 <header>
-  <h1>📸 Pi Timelapse - Mouse Eye</h1>
+  <h1>📸 Pi Timelapse - Mouse Eye 🐭</h1>
 </header>
 
 <main>
