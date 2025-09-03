@@ -732,7 +732,7 @@ def live_page():
     </style>
     <header>
       <a class="btn" href="{{ url_for('index') }}">← Back</a>
-      <h1 style="margin:0;font-size:16px">Live View (idle only)</h1>
+      <h1 style="margin:0;font-size:16px">Viewfinder 📷</h1>
     </header>
     <main>
       <div class="wrap">
@@ -885,11 +885,20 @@ TPL_INDEX = r"""
       <input name="duration_hours" type="number" min="0" step="1" placeholder="hrs" style="width:60px">
       <input name="duration_minutes" type="number" min="0" step="1" placeholder="mins" style="width:60px">
     </div>
-    <div class="row">
-      <label>📝 Session name:</label>
-      <input name="name" type="text" placeholder="(auto)" style="min-width:160px">
-      <button class="btn" type="button" onclick="testCapture()">📷 Check the viewfinder</button>
-    </div>
+      {% if idle_now %}
+        <div class="row">
+      <div class="card">
+        <div class="row" style="align-items:center; justify-content:space-between;">
+          <div>
+            <div style="font-weight:600">👀 Open viewfinder</div>
+            <div class="sub">Opens on its own page and only works when the camera is idle.</div>
+          </div>
+          <a class="btn" href="{{ url_for('live_page') }}">Open live view</a>
+        </div>
+      </div>
+      </div>
+    {% endif %}
+    
     <div class="row">
       <button class="btn-strong" type="submit"
               {% if current_session %}disabled title="Stop current capture first"{% endif %}>
@@ -930,17 +939,7 @@ TPL_INDEX = r"""
     </div>
   </div>
   {% endif %}
-  {% if idle_now %}
-  <div class="card">
-    <div class="row" style="align-items:center; justify-content:space-between;">
-      <div>
-        <div style="font-weight:600">👀 Live view</div>
-        <div class="sub">Opens on its own page and only works when the camera is idle.</div>
-      </div>
-      <a class="btn" href="{{ url_for('live_page') }}">Open live view</a>
-    </div>
-  </div>
-{% endif %}
+
   {% for s in sessions %}
   <div class="card session {% if current_session == s.name %}active{% endif %}">
     <div class="thumb">
