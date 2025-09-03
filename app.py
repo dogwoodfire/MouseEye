@@ -627,92 +627,118 @@ def live_mjpg():
     if not _idle_now():
         abort(503, "Busy")
 
-    _stop_live_proc()  # nuke any stale process
-
-    global LIVE_PROC
-    with LIVE_LOCK:
-        vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
-        if not vid_bin:
-            abort(500, "No camera video binary found.")
-        cmd = [
-            vid_bin,
-            "--codec", "mjpeg",
-            "--framerate", "8",
-            "--width", str(CAPTURE_WIDTH), "--height", str(CAPTURE_HEIGHT),
-            "-t", "0",
-            "-o", "-",
-            "--inline",
-        ]
+    def pick_cmd(vid_bin):
+        base = [vid_bin, "--codec", "mjpeg", "--framerate", "8",
+                "--width", "640", "--height", "480",
+                "-t", "0", "-o", "-", "--inline"]
         if os.path.basename(vid_bin) == "libcamera-vid":
-            cmd.insert(1, "-n")
+            return base[:1] + ["-n"] + base[1:]
         else:
-            cmd.append("--nopreview")
+            return base + ["--nopreview"]
 
-        # capture stderr to a ring buffer so we can show a helpful error if nothing comes out
-        LIVE_PROC = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0
-        )
+    # Try primary bin then fallback
+    bins = [p for p in (shutil.which("rpicam-vid"), shutil.which("libcamera-vid")) if p]
+    if not bins:
+        abort(500, "No camera video binary found.")
 
     boundary = b"--frame"
 
-    def cleanup():
-        global LIVE_PROC
-        with LIVE_LOCK:
-            proc = LIVE_PROC
-            LIVE_PROC = None
-        if not proc: return
-        try:
-            proc.terminate()
-            try: proc.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                proc.kill(); proc.wait(timeout=1.0)
-        except Exception: pass
-        try:
-            if proc.stdout: proc.stdout.close()
-            if proc.stderr: proc.stderr.close()
-        except Exception: pass
+    def spawn(vid_bin):
+        cmd = pick_cmd(vid_bin)
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
 
+    # We keep a local proc within the generator (not the global LIVE_PROC) to avoid any stale state
     def gen():
         buf = b""
-        first_deadline = time.time() + 2.0  # give it up to 2s to produce first frame
-        try:
-            while True:
-                if not _idle_now(): break
-                chunk = LIVE_PROC.stdout.read(4096)
-                if not chunk:
-                    # if we never got a frame, surface stderr
-                    if time.time() > first_deadline:
-                        err = b""
-                        try:
-                            err = LIVE_PROC.stderr.read(4096) or b""
-                        except Exception:
-                            pass
-                        break
-                    time.sleep(0.02)
-                    continue
-                buf += chunk
+        tried = []
+        for attempt in range(len(bins)):
+            vid_bin = bins[attempt]
+            tried.append(os.path.basename(vid_bin))
+            proc = spawn(vid_bin)
+            first_deadline = time.time() + 2.0  # must see first frame quickly
+
+            try:
                 while True:
-                    soi = buf.find(b"\xff\xd8")
-                    if soi == -1: break
-                    eoi = buf.find(b"\xff\xd9", soi+2)
-                    if eoi == -1: break
-                    frame = buf[soi:eoi+2]
-                    buf = buf[eoi+2:]
-                    yield (boundary +
-                           b"\r\nContent-Type: image/jpeg\r\nContent-Length: " +
-                           str(len(frame)).encode() + b"\r\n\r\n" +
-                           frame + b"\r\n")
-        finally:
-            cleanup()
+                    if not _idle_now():
+                        return
+                    chunk = proc.stdout.read(4096)
+                    if not chunk:
+                        # No data yet — if we exceeded first_deadline, give up on this binary and try next
+                        if time.time() > first_deadline:
+                            break
+                        time.sleep(0.02)
+                        continue
+
+                    buf += chunk
+                    while True:
+                        soi = buf.find(b"\xff\xd8")
+                        if soi == -1: break
+                        eoi = buf.find(b"\xff\xd9", soi + 2)
+                        if eoi == -1: break
+                        frame = buf[soi:eoi+2]
+                        buf = buf[eoi+2:]
+                        yield (boundary +
+                               b"\r\nContent-Type: image/jpeg\r\nContent-Length: " +
+                               str(len(frame)).encode() +
+                               b"\r\n\r\n" + frame + b"\r\n")
+                        # once we’ve produced a frame, extend deadline so we keep going
+                        first_deadline = time.time() + 5.0
+
+                    # If the process died, stop and maybe retry fallback
+                    if proc.poll() is not None:
+                        break
+            finally:
+                try:
+                    proc.terminate()
+                    try: proc.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill(); proc.wait(timeout=0.5)
+                except Exception:
+                    pass
+                try:
+                    if proc.stdout: proc.stdout.close()
+                    if proc.stderr: proc.stderr.close()
+                except Exception:
+                    pass
+
+            # If we got here without yielding any frame, loop to fallback (if any)…
+            buf = b""
+
+        # No frames from any binary → just stop the stream cleanly
+        return
 
     headers = {
         "Content-Type": "multipart/x-mixed-replace; boundary=frame",
         "Cache-Control": "no-store"
     }
     return app.response_class(gen(), headers=headers)
+
+@app.get("/live_diag")
+def live_diag():
+    # Only attempt if idle
+    ok_idle = _idle_now()
+    if not ok_idle:
+        return jsonify({"idle": False, "probe": None})
+
+    vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
+    if not vid_bin:
+        return jsonify({"idle": True, "probe": {"ok": False, "bin": None, "err": "no rpicam-vid/libcamera-vid"}})
+
+    # Try both headless flags depending on binary
+    base = [vid_bin, "--codec", "mjpeg", "--framerate", "8", "--width", "640", "--height", "480", "-t", "2000", "-o", "-", "--inline"]
+    if os.path.basename(vid_bin) == "libcamera-vid":
+        cmd = base[:1] + ["-n"] + base[1:]
+    else:
+        cmd = base + ["--nopreview"]
+
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=5)
+        ok = (proc.returncode == 0)
+        return jsonify({"idle": True, "probe": {"ok": ok, "bin": vid_bin, "err": (proc.stderr or b"").decode(errors="replace")}})
+    except subprocess.TimeoutExpired:
+        return jsonify({"idle": True, "probe": {"ok": False, "bin": vid_bin, "err": "timeout"}})
+    except Exception as e:
+        return jsonify({"idle": True, "probe": {"ok": False, "bin": vid_bin, "err": str(e)}})
 
 @app.get("/live")
 def live_page():
@@ -743,6 +769,7 @@ def live_page():
     <script>
       const LIVE_URL = "{{ url_for('live_mjpg') }}";
       const STATUS_URL = "{{ url_for('live_status') }}";
+      const DIAG_URL = "{{ url_for('live_diag') }}";
       const msgEl = document.getElementById('live-msg');
       const imgEl = document.getElementById('live-img');
 
@@ -754,12 +781,25 @@ def live_page():
             if(!imgEl._bound){
               imgEl._bound = true;
               imgEl.addEventListener('load', ()=>{ msgEl.style.display='none'; });
-              imgEl.addEventListener('error', ()=>{
-                msgEl.style.display='flex';
-                msgEl.textContent='Failed to open camera stream';
-              });
+              imgEl.addEventListener('error', ()=>{ msgEl.style.display='flex'; msgEl.textContent='Failed to open camera stream'; });
             }
-            if(!imgEl.src){ msgEl.style.display='flex'; msgEl.textContent='Connecting to camera…'; imgEl.src = LIVE_URL; }
+            if(!imgEl.src){
+              msgEl.style.display='flex';
+              msgEl.textContent='Connecting to camera…';
+              imgEl.src = LIVE_URL;
+
+              // After ~2.5s, if still no image, show reason
+              setTimeout(async ()=>{
+                if (msgEl.style.display !== 'none') {
+                  try {
+                    const d = await fetch(DIAG_URL, {cache:'no-store'}).then(x=>x.json());
+                    if (d && d.probe && d.probe.ok === false) {
+                      msgEl.textContent = `Camera didn’t start (${d.probe.bin || 'no-bin'}): ${d.probe.err || 'unknown'}`;
+                    }
+                  } catch(_) {}
+                }
+              }, 2500);
+            }
           }else{
             msgEl.style.display='flex';
             msgEl.textContent='Camera busy (capturing/encoding)…';
