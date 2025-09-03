@@ -110,7 +110,7 @@ def _start_encode_worker_once():
                 _jobs[sess] = {"status": "error", "progress": 0}
             finally:
                 _encode_q.task_done()
-
+threading.Thread(target=_encode_worker, daemon=True).start()
 # kick the worker
 _start_encode_worker_once()
 
@@ -1032,6 +1032,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Poll every 2 seconds
   setInterval(pollActive, 2000);
+ try {
+    const r = await fetch("{{ url_for('jobs') }}");
+    if (r.ok) {
+      const jobs = await r.json();
+      for (const [sess, job] of Object.entries(jobs)) {
+        if (job && (job.status === 'queued' || job.status === 'encoding')) {
+          setTimeout(() => showProgress(sess), 10);
+        }
+      }
+    }
+  } catch (e) {}
 });
 </script>
 """
