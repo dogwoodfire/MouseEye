@@ -885,11 +885,9 @@ TPL_INDEX = r"""
       <input name="duration_hours" type="number" min="0" step="1" placeholder="hrs" style="width:60px">
       <input name="duration_minutes" type="number" min="0" step="1" placeholder="mins" style="width:60px">
     </div>
-      {% if idle_now %}
         <div class="row">
-          <a class="{% if current_session %}disabled{% endif %}" href="{{ url_for('live_page') }}"{% if current_session %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
+          <a class="{% if idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}"{% if idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
       </div>
-    {% endif %}
     
     <div class="row">
       <button class="btn-strong" type="submit"
