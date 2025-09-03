@@ -58,7 +58,7 @@ def _start_encode_worker_once():
 
     def _encode_worker():
         while True:
-            task = _encode_q.get()  # (sess, fps)
+            task = _encode_q.get()
             if not task:
                 _encode_q.task_done()
                 continue
@@ -75,9 +75,12 @@ def _start_encode_worker_once():
 
                 _jobs[sess] = {"status": "encoding", "progress": 0}
 
-                # Run ffmpeg with very low CPU/IO priority so UI stays responsive
-                cmd = [
-                    "ionice","-c3", "nice","-n","19",
+                # be tolerant if ionice/nice not installed
+                prio = []
+                if shutil.which("ionice"): prio += ["ionice", "-c3"]
+                if shutil.which("nice"):   prio += ["nice", "-n", "19"]
+
+                cmd = prio + [
                     FFMPEG, "-y",
                     "-framerate", str(fps),
                     "-i", os.path.join(sess_dir, "%06d.jpg"),
@@ -86,7 +89,6 @@ def _start_encode_worker_once():
                     out
                 ]
 
-                # Progress parser (best-effort)
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, text=True)
                 while True:
@@ -101,6 +103,7 @@ def _start_encode_worker_once():
                             _jobs[sess]["progress"] = max(0, min(99, prog))
                         except Exception:
                             pass
+
                 rc = proc.wait()
                 if rc == 0 and os.path.exists(out):
                     _jobs[sess] = {"status": "done", "progress": 100}
@@ -110,8 +113,8 @@ def _start_encode_worker_once():
                 _jobs[sess] = {"status": "error", "progress": 0}
             finally:
                 _encode_q.task_done()
-threading.Thread(target=_encode_worker, daemon=True).start()
-# kick the worker
+    threading.Thread(target=_encode_worker, daemon=True).start()
+
 _start_encode_worker_once()
 
 # Globals for timed captures
