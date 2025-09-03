@@ -272,11 +272,19 @@ def _arm_timers_from_state():
 def _capture_loop(sess_dir, interval):
     global _stop_event, _last_frame_ts
     i = 0
-    timeout_s = max(2, min(3, int(interval)))  # don't let a single capture block forever
+    timeout_s = 3  # hard cap shot time
     thumbs_dir = os.path.join(sess_dir, "thumbs")
     os.makedirs(thumbs_dir, exist_ok=True)
 
+    t0 = time.time()
+    next_due = t0  # shoot immediately
+
     while not _stop_event.is_set():
+        now = time.time()
+        if now < next_due - 0.02:  # light sleep until due
+            time.sleep(min(0.05, next_due - now))
+            continue
+
         i += 1
         jpg = os.path.join(sess_dir, f"{i:06d}.jpg")
         cmd = [
@@ -284,34 +292,32 @@ def _capture_loop(sess_dir, interval):
             "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
             "--quality", CAPTURE_QUALITY, "--immediate", "--nopreview"
         ]
-        try:
-            # ensure camera call can't hang the whole thread
-            subprocess.run(cmd, check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=timeout_s)
-            _last_frame_ts = time.time()
 
-            # make/update thumbnail (non-fatal)
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout_s
+            )
+            _last_frame_ts = time.time()
             try:
                 _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
             except Exception:
                 pass
-
         except subprocess.TimeoutExpired:
-            # camera stalled — skip this frame and try again
-            time.sleep(0.5)
+            # camera stalled — skip this frame
+            pass
         except Exception:
-            # transient failure — short backoff
-            time.sleep(min(2, interval))
-
-        # between frames wait, but allow early stop
-        for _ in range(int(interval * 10)):
-            if _stop_event.is_set():
-                break
-            # soft watchdog: if no good frame for a long time, break early to attempt another shot
-            if _last_frame_ts and (time.time() - _last_frame_ts) > (3 * interval):
-                break
-            time.sleep(0.1)
+            # transient failure — ignore and keep schedule
+            pass
+        finally:
+            # schedule next shot on strict interval, no drift
+            next_due += max(1, int(interval))
+            # if we’re very late (missed cycles), jump ahead
+            while next_due < time.time() - 0.1:
+                next_due += max(1, int(interval))
 
 # ---------- Stop helper (idempotent) ----------
 # def stop_timelapse():
@@ -638,6 +644,11 @@ def live_mjpg():
                 "-o", "-",
                 "--inline",
             ]
+            # Disable on-screen preview for both binaries
+            if os.path.basename(vid_bin) == "libcamera-vid":
+                cmd.insert(1, "-n")
+            else:
+                cmd.append("--nopreview")
             if os.path.basename(vid_bin) == "libcamera-vid":
                 cmd.insert(1, "-n")
             LIVE_PROC = subprocess.Popen(
@@ -1075,10 +1086,6 @@ async function testCapture(){
     }, 600);
   }
   const LIVE_URL = "{{ url_for('live_mjpg') }}";
-    const LIVE_STATUS_URL = "{{ url_for('live_status') }}";
-
-    async function updateLiveUIOnce() {
-  const LIVE_URL = "{{ url_for('live_mjpg') }}";
 const LIVE_STATUS_URL = "{{ url_for('live_status') }}";
 
 async function updateLiveUIOnce() {
@@ -1091,19 +1098,15 @@ async function updateLiveUIOnce() {
     const j = r.ok ? await r.json() : { idle: false };
 
     if (j.idle) {
-      // (Re)bind handlers once
+      // Bind once
       if (!imgEl._handlersBound) {
         imgEl._handlersBound = true;
-        imgEl.addEventListener('load', () => {
-          // We only get a 'load' for the first multipart header; good enough to hide the overlay
-          msgEl.style.display = 'none';
-        });
+        imgEl.addEventListener('load', () => { msgEl.style.display = 'none'; });
         imgEl.addEventListener('error', () => {
           msgEl.style.display = 'flex';
           msgEl.textContent = 'Failed to open camera stream';
         });
       }
-
       if (!imgEl.src) {
         msgEl.style.display = 'flex';
         msgEl.textContent = 'Connecting to camera…';
@@ -1124,11 +1127,6 @@ document.addEventListener('DOMContentLoaded', () => {
   updateLiveUIOnce();
   setInterval(updateLiveUIOnce, 3000);
 });
-
-  document.addEventListener('DOMContentLoaded', () => {
-    updateLiveUIOnce();
-    setInterval(updateLiveUIOnce, 3000);
-  });
   // This listener should be outside of showProgress(), so it runs
   // immediately when the page loads and resumes polling if needed.
 document.addEventListener('DOMContentLoaded', async () => {
