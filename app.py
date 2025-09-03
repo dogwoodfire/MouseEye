@@ -632,6 +632,10 @@ TPL_INDEX = r"""
     background:#f59e0b; /* amber-ish to contrast with green encode bar */
   }
   .footer .label { color: var(--muted); font-size: 13px; }
+  .diskbar .fill { height:100%; width:0%; transition:width .25s ease; }
+  .diskbar .fill.ok   { background:#10b981; } /* green */
+  .diskbar .fill.warn { background:#f59e0b; } /* amber */
+  .diskbar .fill.crit { background:#ef4444; } /* red */
 
   @media (max-width: 460px) {
     .session { grid-template-columns: 104px 1fr; }
@@ -752,7 +756,9 @@ TPL_INDEX = r"""
           <button class="btn" type="submit" {% if current_session == s.name %}disabled title="Stop capture first"{% endif %}>✏️</button>
         </form>
 
-        <form action="{{ url_for('delete', sess=s.name) }}" method="post" onsubmit="return confirm('Delete {{ s.name }}?')" >
+        <form action="{{ url_for('delete', sess=s.name) }}"
+              method="post"
+              onsubmit="return submitDelete(this, '{{ s.name }}')">
           <button class="btn" type="submit" {% if current_session == s.name %}disabled title="Stop capture first"{% endif %}>🗑️ Delete</button>
         </form>
       </div>
@@ -869,35 +875,59 @@ async function testCapture(){
   // This listener should be outside of showProgress(), so it runs
   // immediately when the page loads and resumes polling if needed.
 document.addEventListener('DOMContentLoaded', async () => {
+    function setDiskBar(pctUsed, totals) {
+    const txt  = document.getElementById('disk-text');
+    const fill = document.getElementById('disk-fill');
+    if (!fill || !txt) return;
+
+    // width
+    fill.style.width = pctUsed + '%';
+
+    // color by threshold
+    fill.classList.remove('ok','warn','crit');
+    if (pctUsed >= 95)      fill.classList.add('crit');
+    else if (pctUsed >= 85) fill.classList.add('warn');
+    else                    fill.classList.add('ok');
+
+    if (totals) {
+      // when we have full stats
+      const { free_gb, total_gb } = totals;
+      txt.textContent = `Storage: ${free_gb} GB free of ${total_gb} GB (${pctUsed}% used)`;
+    } else {
+      // text-only fallback
+      txt.textContent = `Storage: ${pctUsed}% used`;
+    }
+  }
+
   async function pollDisk() {
     try {
       const r = await fetch("{{ url_for('disk') }}");
       if (!r.ok) return;
       const d = await r.json();
-      const txt = document.getElementById('disk-text');
-      const fill = document.getElementById('disk-fill');
-      if (txt) {
-        txt.textContent = `Storage: ${d.free_gb} GB free of ${d.total_gb} GB (${d.pct_used}% used)`;
-      }
-      if (fill) {
-        fill.style.width = d.pct_used + '%';
-      }
+      setDiskBar(d.pct_used, d);
     } catch (e) { /* ignore */ }
   }
 
-  // kick it off immediately and every 15s
+  // run now + every 15s
   pollDisk();
   setInterval(pollDisk, 15000);
-  // Existing code to resume encoding progress bars …
-  try {
-    const resp = await fetch("{{ url_for('jobs') }}");
-    const jobs = await resp.json();
-    for (const [key, job] of Object.entries(jobs)) {
-      if (job && job.status === 'encoding') {
-        setTimeout(() => showProgress(key), 10);
-      }
-    }
-  } catch (e) { console.log(e); }
+
+  // --- Refresh meter immediately when a session is deleted ---
+  function submitDelete(formEl, sessName) {
+    if (!confirm(`Delete ${sessName}?`)) return false;
+    // Do the POST via fetch so we can update the meter without waiting
+    fetch(formEl.action, { method: 'POST' })
+      .then(() => {
+        // Remove the card from the DOM
+        const card = formEl.closest('.card.session');
+        if (card) card.remove();
+        // Update the disk meter immediately
+        return pollDisk();
+      })
+      .catch(() => { /* ignore errors; page will eventually refresh */ });
+    // prevent the default form navigation
+    return false;
+  }
 
   // Poll the active session for frames and remaining time
    const currentSession = {{ current_session | tojson }};
