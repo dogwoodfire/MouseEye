@@ -258,7 +258,7 @@ def _arm_timers_from_state():
 def _capture_loop(sess_dir, interval):
     global _stop_event, _last_frame_ts
     i = 0
-    timeout_s = max(2, min(10, interval + 2))  # don't let a single capture block forever
+    timeout_s = max(2, min(3, int(interval)))  # don't let a single capture block forever
     thumbs_dir = os.path.join(sess_dir, "thumbs")
     os.makedirs(thumbs_dir, exist_ok=True)
 
@@ -300,25 +300,25 @@ def _capture_loop(sess_dir, interval):
             time.sleep(0.1)
 
 # ---------- Stop helper (idempotent) ----------
-def stop_timelapse():
-    global _stop_event, _capture_thread, _current_session
-    global _capture_stop_timer, _capture_end_ts
-    try:
-        _stop_event.set()
-    except Exception: pass
-    if _capture_thread and getattr(_capture_thread, "is_alive", lambda: False)():
-        try: _capture_thread.join(timeout=5)
-        except Exception: pass
-    _capture_thread = None
-    _stop_event = threading.Event()
-    _current_session = None
-    if _capture_stop_timer:
-        try:
-            _capture_stop_timer.cancel()
-        except Exception:
-            pass
-    _capture_stop_timer = None
-    _capture_end_ts = None
+# def stop_timelapse():
+#     global _stop_event, _capture_thread, _current_session
+#     global _capture_stop_timer, _capture_end_ts
+#     try:
+#         _stop_event.set()
+#     except Exception: pass
+#     if _capture_thread and getattr(_capture_thread, "is_alive", lambda: False)():
+#         try: _capture_thread.join(timeout=5)
+#         except Exception: pass
+#     _capture_thread = None
+#     _stop_event = threading.Event()
+#     _current_session = None
+#     if _capture_stop_timer:
+#         try:
+#             _capture_stop_timer.cancel()
+#         except Exception:
+#             pass
+#     _capture_stop_timer = None
+#     _capture_end_ts = None
 
 # ---------- Routes ----------
 @app.route("/", methods=["GET"])
@@ -444,10 +444,39 @@ def start():
 
     return redirect(url_for("index"))
 
-@app.route("/stop", methods=["GET","POST"], endpoint="stop_route")
+def _finalize_stop_background():
+    """Wait for the capture thread to exit (but do it off the request thread)."""
+    global _capture_thread, _stop_event, _current_session, _capture_stop_timer, _capture_end_ts
+    try:
+        t = _capture_thread
+        if t and getattr(t, "is_alive", lambda: False)():
+            t.join(timeout=10)  # give it time to finish current frame
+    except Exception:
+        pass
+    finally:
+        _capture_thread = None
+        _stop_event = threading.Event()
+        _current_session = None
+        if _capture_stop_timer:
+            try: _capture_stop_timer.cancel()
+            except Exception: pass
+            _capture_stop_timer = None
+        _capture_end_ts = None
+
+def stop_timelapse():
+    """Signal stop; don’t block here."""
+    try:
+        _stop_event.set()
+    except Exception:
+        pass
+    # kick a background cleaner
+    threading.Thread(target=_finalize_stop_background, daemon=True).start()
+
+@app.route("/stop", methods=["GET", "POST"], endpoint="stop_route")
 def stop_route():
     stop_timelapse()
-    return redirect(url_for("index"))
+    # Return immediately; UI can reload
+    return ("", 204)
 
 @app.post("/rename/<sess>")
 def rename(sess):
@@ -509,8 +538,9 @@ def encode(sess):
     sess_dir = _session_path(sess)
     if not os.path.isdir(sess_dir): abort(404)
     if not _enough_space(300):
-      _jobs[sess] = {"status":"error","progress":0, "reason":"low_disk"}
-    return redirect(url_for("index"))
+        _jobs[sess] = {"status":"error","progress":0,"reason":"low_disk"}
+        return redirect(url_for("index"))
+
     # queue the job and return immediately; UI will poll /jobs
     _jobs[sess] = {"status":"queued","progress":0}
     _encode_q.put((sess, fps))
@@ -629,7 +659,7 @@ TPL_INDEX = r"""
   }
   .diskbar .fill {
     height:100%; width:0%;
-    background:#f59e0b; /* amber-ish to contrast with green encode bar */
+    background:#10b981; /* amber-ish to contrast with green encode bar */
   }
   .footer .label { color: var(--muted); font-size: 13px; }
   .diskbar .fill { height:100%; width:0%; transition:width .25s ease; }
@@ -783,9 +813,16 @@ TPL_INDEX = r"""
 <script>
   async function postStop(){
     try{
-      await fetch("{{ url_for('stop_route') }}", {method:"POST"});
-      location.reload();
-    }catch(e){ console.log(e); }
+      const btn = event?.currentTarget || document.querySelector('a.btn');
+      if (btn) { btn.classList.add('disabled'); btn.textContent = '⏳ Stopping…'; }
+      // Fire-and-forget with a short timeout
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 2000);
+      fetch("{{ url_for('stop_route') }}", {method:"POST", signal: ctrl.signal}).catch(()=>{});
+    } finally {
+      // Don’t wait for the response; the server already set the stop flag
+      setTimeout(() => location.reload(), 300);
+    }
   }
 async function testCapture(){
     try {
