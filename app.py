@@ -160,6 +160,9 @@ def _safe_name(s): return "".join(c for c in s if c.isalnum() or c in ("-","_"))
 def _timestamped_session():
     return "session-" + datetime.now().strftime("%Y%m%d-%H%M%S")
 
+def _any_encoding_active():
+    return any(v.get("status") in ("queued", "encoding") for v in _jobs.values())
+
 def _list_sessions():
     out = []
     for d in sorted(os.listdir(SESSIONS_DIR)):
@@ -386,7 +389,10 @@ def index():
 def start():
     global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts
 
-    # Don’t restart if a capture is already running
+    # Block starting while an encode is active
+    if _any_encoding_active():
+        return redirect(url_for("index"))
+
     if _capture_thread and _capture_thread.is_alive():
         return redirect(url_for("index"))
 
@@ -493,7 +499,9 @@ def rename(sess):
 
 @app.post("/delete/<sess>")
 def delete(sess):
-    # Disable delete for active session
+    # Block deleting the session being encoded
+    if _jobs.get(sess, {}).get("status") in ("queued","encoding"):
+        return redirect(url_for("index"))
     if _current_session == sess:
         return redirect(url_for("index"))
     p = _session_path(sess)
@@ -524,6 +532,9 @@ def preview(sess):
 
 @app.post("/encode/<sess>")
 def encode(sess):
+    if _any_encoding_active():                    # don't queue more jobs
+        _jobs[sess] = {"status":"error","progress":0,"reason":"busy"}
+        return redirect(url_for("index"))
     fps = request.form.get("fps", str(DEFAULT_FPS))
     try: fps = int(fps)
     except: fps = DEFAULT_FPS
@@ -642,6 +653,11 @@ TPL_INDEX = r"""
   .progress { position:relative; height:10px; background:#e5e7eb; border-radius:999px; overflow:hidden; display:none; }
   .progress.show { display:block; }
   .bar { position:absolute; left:0; top:0; bottom:0; width:0%; background:#10b981; }
+  
+  .is-disabled {
+    pointer-events: none;
+    opacity: .5;
+  }
 
   .footer {
   position: sticky; bottom: 0; background:#fff;
@@ -1032,7 +1048,57 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.log(err);
     }
   }
+    function setControlsDisabled(disabled) {
+    // Keep STOP usable; disable everything else that can mutate state.
+    const selectors = [
+      'form[action="{{ url_for("start") }}"] button[type="submit"]', // Start
+      'button[onclick^="testCapture"]',                               // Viewfinder test
+      'form[action*="/encode/"] button[type="submit"]',               // Encode buttons
+      'form[action*="/delete/"] button[type="submit"]',               // Delete buttons
+      'form[action*="/rename/"] input[name="new_name"]',              // Rename input
+      'form[action*="/rename/"] button[type="submit"]'                // Rename button
+    ];
 
+    document.querySelectorAll(selectors.join(',')).forEach(el => {
+      if (disabled) el.classList.add('is-disabled');
+      else el.classList.remove('is-disabled');
+
+      // Inputs/buttons should also be disabled for accessibility
+      if ('disabled' in el) el.disabled = !!disabled;
+    });
+  }
+
+  function applyBusyFromJobs(jobs) {
+    const busy = Object.values(jobs || {}).some(
+      j => j && (j.status === 'queued' || j.status === 'encoding')
+    );
+    setControlsDisabled(busy);
+  }
+
+  // Poll /jobs regularly to keep UI state in sync
+  async function pollJobsAndUpdateUI() {
+    try {
+      const r = await fetch("{{ url_for('jobs') }}", { cache: 'no-store' });
+      if (!r.ok) return;
+      const jobs = await r.json();
+      applyBusyFromJobs(jobs);
+
+      // If any jobs are running and the progress bar isn't showing yet,
+      // kick showProgress for that session (nice-to-have)
+      for (const [sess, job] of Object.entries(jobs)) {
+        if (job && (job.status === 'queued' || job.status === 'encoding')) {
+          const wrap = document.getElementById('prog-' + sess);
+          if (wrap && !wrap.classList.contains('show')) {
+            setTimeout(() => showProgress(sess), 10);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Initial read + interval
+  pollJobsAndUpdateUI();
+  setInterval(pollJobsAndUpdateUI, 1000);
   // Poll every 2 seconds
   setInterval(pollActive, 2000);
  try {
