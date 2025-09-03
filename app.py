@@ -620,14 +620,14 @@ def live_status():
 
 @app.get("/live.mjpg")
 def live_mjpg():
-    # Only stream when idle, otherwise tell the browser "busy"
     if not _idle_now():
         abort(503, "Busy")
 
     global LIVE_PROC
     with LIVE_LOCK:
-        # choose binary
-        vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid") or "/usr/bin/rpicam-vid"
+        vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
+        if not vid_bin:
+            abort(500, "No camera video binary found (rpicam-vid/libcamera-vid).")
         if LIVE_PROC is None or LIVE_PROC.poll() is not None:
             cmd = [
                 vid_bin,
@@ -635,10 +635,9 @@ def live_mjpg():
                 "--width", str(CAPTURE_WIDTH), "--height", str(CAPTURE_HEIGHT),
                 "-t", "0",
                 "-o", "-",
-                "--inline"
+                "--inline",
             ]
-            # Some libcamera builds want -n to disable on-screen preview:
-            if "libcamera-vid" in vid_bin:
+            if os.path.basename(vid_bin) == "libcamera-vid":
                 cmd.insert(1, "-n")
             LIVE_PROC = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
