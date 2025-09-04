@@ -44,15 +44,15 @@ pi-logs:
 .PHONY: deploy logs status deploy-force
 
 deploy: commit push pi-pull pi-restart
-	$(call yellow,"✅ Deploy complete.")
+	$(call yellow,✅ Deploy complete.)
 
 # Force: overwrite any local Pi changes with what's on origin/$(BRANCH)
 deploy-force: commit push pi-pull-hard pi-restart
-	$(call yellow,"✅ Force deploy complete (Pi reset to origin/$(BRANCH)).")
+	$(call yellow,✅ Force deploy complete (Pi reset to origin/$(BRANCH)).)
 
 .PHONY: pi-pull-hard
 pi-pull-hard:
-	$(call yellow,"[pi] Forcing repo to origin/$(BRANCH) on $(PI_DIR)…")
+	$(call yellow,[pi] Forcing repo to origin/$(BRANCH) on $(PI_DIR)…)
 	ssh $(PI_HOST) 'set -e; cd $(PI_DIR) && \
 		git fetch --all && \
 		echo "[pi] backing up uncommitted changes (if any)..." && \
