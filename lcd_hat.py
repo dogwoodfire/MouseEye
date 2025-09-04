@@ -6,13 +6,11 @@ from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 
 # ----------------- HAT wiring (BCM) -----------------
-# From your pinout:
-#   KEY1 -> BCM21, KEY2 -> BCM20, KEY3 -> BCM16
-#   JS_UP -> BCM6, JS_DOWN -> BCM19, JS_LEFT -> BCM5, JS_RIGHT -> BCM26, JS_PRESS -> BCM13
 PIN_DC   = int(os.environ.get("LCD_PIN_DC",   "25"))
 PIN_RST  = int(os.environ.get("LCD_PIN_RST",  "27"))
 PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))
 
+# Keys (Waveshare 1.44" LCD HAT)
 KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up
 KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # Accept
 KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down
@@ -29,12 +27,12 @@ WIDTH, HEIGHT = 128, 128
 
 # ----------------- Backend endpoints -----------------
 LOCAL = "http://127.0.0.1:5050"
-STATUS_URL      = f"{LOCAL}/lcd_status"     # assumed to exist in your app
+STATUS_URL      = f"{LOCAL}/lcd_status"     # make sure this route exists in app.py
 START_URL       = f"{LOCAL}/start"
 STOP_URL        = f"{LOCAL}/stop"
 TEST_URL        = f"{LOCAL}/test_capture"
 SCHED_ARM_URL   = f"{LOCAL}/schedule/arm"
-SCHED_FILE      = "/home/pi/timelapse/schedule.json"   # local persistence used by your app
+SCHED_FILE      = "/home/pi/timelapse/schedule.json"
 
 # ----------------- Lazy imports -----------------
 try:
@@ -48,6 +46,7 @@ except Exception:
 # ----------------- LCD init -----------------
 try:
     serial = spi(port=SPI_PORT, device=SPI_DEVICE, gpio_DC=PIN_DC, gpio_RST=PIN_RST, bus_speed_hz=16000000)
+    # adjust offsets/rotation if you still see edge noise
     device = st7735(serial, width=WIDTH, height=HEIGHT, rotation=0, h_offset=2, v_offset=1, bgr=True)
 except Exception:
     sys.exit(0)
@@ -150,15 +149,11 @@ def _read_schedules():
     try:
         with open(SCHED_FILE, "r") as f:
             data = json.load(f)
-        # normalize (sid, dict)
         if isinstance(data, dict):
             return sorted(data.items(), key=lambda kv: kv[1].get("start_ts", 0))
     except Exception:
         pass
     return []
-
-def _status(self):
-        return _http_json(STATUS_URL) or {}
 
 # ----------------- Controller -----------------
 class UI:
@@ -167,9 +162,9 @@ class UI:
     def __init__(self):
         self.state = self.HOME
         self.menu_idx = 0
-        # remove hard-coded items here; we’ll build them dynamically in _render_home
+        # default list; actual rendered list is dynamic (_home_items)
         self.menu_items = ["Quick Start", "New Timelapse", "Schedules"]
-        self._home_items = self.menu_items[:]   # current, rendered list
+        self._home_items = self.menu_items[:]
 
         # wizard values
         self.wz_interval = 10
@@ -180,6 +175,10 @@ class UI:
 
         self._bind_inputs()
         self.render()
+
+    # --- status helper (NOW INSIDE THE CLASS) ---
+    def _status(self):
+        return _http_json(STATUS_URL) or {}
 
     # input binding → call small handlers
     def _bind_inputs(self):
@@ -196,7 +195,12 @@ class UI:
     # ---------- state helpers ----------
     def nav(self, delta):
         if self.state == self.HOME:
-            self.menu_idx = (self.menu_idx + delta) % len(self.menu_items)
+            # USE THE LIST THAT'S ACTUALLY RENDERED
+            items = getattr(self, "_home_items", self.menu_items)
+            if items:
+                self.menu_idx = (self.menu_idx + delta) % len(items)
+            else:
+                self.menu_idx = 0
             self.render()
         elif self.state == self.SCHED_LIST:
             # move cursor within sched list
@@ -222,10 +226,10 @@ class UI:
 
     def ok(self):
         if self.state == self.HOME:
-            # use the list actually rendered, not the static default
             items = getattr(self, "_home_items", self.menu_items)
-            sel = items[self.menu_idx]
-
+            sel = items[self.menu_idx] if items else None
+            if not sel:
+                return
             if sel.startswith("⏹ Stop Capture"):
                 self.stop_capture()
             elif sel == "Quick Start":
@@ -236,20 +240,14 @@ class UI:
                 self.open_schedules()
             return
         elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
-            # advance through wizard
             self.state += 1
-            if self.state == self.WZ_CONFIRM:
-                self.render()
-            else:
-                self.render()
+            self.render()
         elif self.state == self.WZ_CONFIRM:
             self.start_now_via_schedule()
         elif self.state == self.SCHED_LIST:
-            # first item is "New Schedule"
             if self.menu_idx == 0:
                 self.start_wizard()
             else:
-                # no edit/cancel from HAT (kept simple)
                 self.render()
 
     # ---------- actions ----------
@@ -268,23 +266,21 @@ class UI:
         self.step        = 1
         self.state = self.WZ_INT
         self.render()
+
     def stop_capture(self):
         _draw_center("Stopping…")
         ok = _http_post_form(STOP_URL, {})
         _draw_center("Stopped" if ok else "Failed")
         time.sleep(0.6)
-        # after stopping, return to home and re-render
         self.state = self.HOME
         self.menu_idx = 0
-        self.render(
+        self.render()
+
     def start_now_via_schedule(self):
-        # Use /schedule/arm so auto_encode can run when the duration ends.
-        # We set start_local to "now" rounded to minute.
         start_local = datetime.now().strftime("%Y-%m-%dT%H:%M")
         dur_hr, dur_min = self.wz_hours, self.wz_mins
         if dur_hr == 0 and dur_min == 0:
-            # if user left 0 duration, treat as 1 minute minimal window
-            dur_min = 1
+            dur_min = 1  # minimum window to trigger
 
         _draw_center("Arming…")
         ok = _http_post_form(SCHED_ARM_URL, {
@@ -293,8 +289,8 @@ class UI:
             "duration_min": str(dur_min),
             "interval":     str(self.wz_interval),
             "fps":          "24",
-            "auto_encode":  "on" if self.wz_encode else "",   # checkbox-like
-            "sess_name":    "",                                # optional
+            "auto_encode":  "on" if self.wz_encode else "",
+            "sess_name":    "",
         })
         _draw_center("Scheduled" if ok else "Failed", "Starts now")
         time.sleep(0.8)
@@ -321,14 +317,9 @@ class UI:
             elif self.state == self.WZ_ENC:
                 self._render_wz("Auto-encode", "Yes" if self.wz_encode else "No")
             elif self.state == self.WZ_CONFIRM:
-                total = self.wz_hours*60 + self.wz_mins
                 summ = f"{self.wz_interval}s • {self.wz_hours}h{self.wz_mins:02d}m • {'AE' if self.wz_encode else 'no AE'}"
-                _draw_lines(
-                    ["Press ✓ to start now via Schedule"],
-                    title="Confirm",
-                    footer=summ,
-                    hints=True
-                )
+                _draw_lines(["Press ✓ to start now via Schedule"],
+                            title="Confirm", footer=summ, hints=True)
             elif self.state == self.SCHED_LIST:
                 sch = _read_schedules()
                 lines = ["➕ New Schedule"]
@@ -338,13 +329,12 @@ class UI:
                     tag = "now" if (st_ts <= now < en_ts) else "next"
                     name = (st.get("sess") or sid)[:10]
                     lines.append(f"{tag} {name} {st.get('interval',10)}s")
-                hi = min(self.menu_idx, len(lines)-1)
+                hi = min(self.menu_idx, len(lines)-1) if lines else 0
                 _draw_lines(lines[:6], title="Schedules", footer="↑/↓, ✓ select", highlight=hi, hints=True)
             else:
                 _clear()
         except Exception:
-            # never crash the loop
-            pass
+            pass  # never crash the loop
 
     def _render_home(self):
         st = self._status()
@@ -355,7 +345,7 @@ class UI:
         # Build the visible menu dynamically
         items = []
         if st.get("active"):
-            items.append("⏹ Stop Capture")  # new conditional item
+            items.append("⏹ Stop Capture")
         items += ["Quick Start", "New Timelapse", "Schedules"]
 
         # keep a copy so ok() acts on exactly what’s shown
@@ -368,10 +358,17 @@ class UI:
         _draw_lines(items, title=f"{status}", highlight=self.menu_idx,
                     footer="↑/↓ to move, ✓ to select", hints=True)
 
+    def _render_wz(self, title, value):
+        _draw_lines(
+            ["Use ↑/↓ to change", "← step=1, → step=10", "✓ to continue"],
+            title=f"{title}: {value}",
+            footer="Wizard",
+            hints=True
+        )
+
 # ----------------- main loop -----------------
 def main():
     ui = UI()
-    # redraw status bar periodically while on HOME
     while True:
         if ui.state == UI.HOME:
             ui.render()
