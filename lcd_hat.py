@@ -4,6 +4,7 @@ from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
+
 # --- OPTIONAL: change pins through env if your board differs ---
 SPI_PORT   = int(os.environ.get("LCD_SPI_PORT", "0"))
 SPI_DEVICE = int(os.environ.get("LCD_SPI_DEV",  "0"))
@@ -38,7 +39,7 @@ except Exception:
 # Try to open the device. If this fails, we quit silently (no HAT / SPI disabled).
 try:
     serial = spi(port=SPI_PORT, device=SPI_DEVICE, gpio_DC=PIN_DC, gpio_RST=PIN_RST, bus_speed_hz=16000000)
-    device = st7735(serial, width=WIDTH, height=HEIGHT, rotation=0)  # set rotation if needed
+    device = st7735(serial, width=WIDTH, height=HEIGHT, rotation=0, h_offset=2, v_offset=1)  # set rotation if needed
 except Exception:
     sys.exit(0)
 
