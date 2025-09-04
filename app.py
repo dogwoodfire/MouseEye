@@ -126,6 +126,28 @@ def _start_encode_worker_once():
 
 _start_encode_worker_once()
 
+# ---- priming the live camera ----
+_camera_warmed = False
+WARMUP_MS = 300  # short, just to init pipeline
+
+def _warmup_camera():
+    global _camera_warmed
+    if _camera_warmed:
+        return
+    vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
+    if not vid_bin:
+        return
+    try:
+        # quick run that discards output; just enough to init pipeline
+        cmd = [vid_bin, "--codec", "mjpeg", "-t", str(WARMUP_MS), "-o", "-"]
+        if os.path.basename(vid_bin) == "libcamera-vid":
+            cmd.insert(1, "-n")
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        _camera_warmed = True
+    except Exception:
+        # harmless if it fails; we’ll fall back to retry below
+        pass
+
 # Globals for timed captures
 _capture_stop_timer = None
 _capture_end_ts     = None
@@ -649,7 +671,7 @@ def live_mjpg():
         vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
         if not vid_bin:
             abort(500, "No camera video binary found (rpicam-vid/libcamera-vid).")
-
+        _warmup_camera()
         if LIVE_PROC is None or LIVE_PROC.poll() is not None:
             cmd = [
                 vid_bin,
@@ -721,16 +743,20 @@ def live_mjpg():
 
     def gen():
         buf = b""
+        first_frame_seen = False
+        retried = False
+        start_ts = time.time()
         try:
             while True:
                 if not _idle_now():
                     break
-                # read camera bytes
+
                 chunk = LIVE_PROC.stdout.read(4096)
                 if not chunk:
                     break
                 buf += chunk
-                # find complete JPEGs (SOI..EOI)
+
+                # detect JPEG frames
                 while True:
                     soi = buf.find(b"\xff\xd8")
                     if soi == -1:
@@ -740,14 +766,33 @@ def live_mjpg():
                         break
                     frame = buf[soi:eoi+2]
                     buf = buf[eoi+2:]
-                    yield (
-                        boundary
-                        + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
-                        + str(len(frame)).encode()
-                        + b"\r\n\r\n"
-                        + frame
-                        + b"\r\n"
-                    )
+                    first_frame_seen = True
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                          + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n")
+
+                # watchdog: no first frame within 2s? restart once
+                if not first_frame_seen and not retried and (time.time() - start_ts) > 2.0:
+                    retried = True
+                    # restart process quickly
+                    _stop_live_proc()
+                    with LIVE_LOCK:
+                        # re-spawn the same command as above
+                        vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
+                        if not vid_bin:
+                            break
+                        cmd = [
+                            vid_bin, "--codec", "mjpeg",
+                            "--width", str(CAPTURE_WIDTH), "--height", str(CAPTURE_HEIGHT),
+                            "-t", "0", "-o", "-", "--inline",
+                        ]
+                        if os.path.basename(vid_bin) == "libcamera-vid":
+                            cmd.insert(1, "-n")
+                        LIVE_PROC = subprocess.Popen(
+                            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
+                        )
+                    # reset buffer and timer
+                    buf = b""
+                    start_ts = time.time()
         finally:
             if LIVE_PROC is None or not _idle_now() or LIVE_PROC.poll() is not None:
                 cleanup_proc()
@@ -822,82 +867,100 @@ def live_page():
         <img id="live-img" alt="live view">
       </div>
     </main>
-    <script>
-      const LIVE_URL = "{{ url_for('live_mjpg') }}";
+        <script>
+      const LIVE_URL   = "{{ url_for('live_mjpg') }}";
       const STATUS_URL = "{{ url_for('live_status') }}";
-      const DIAG_URL = "{{ url_for('live_diag') }}";
+      const DIAG_URL   = "{{ url_for('live_diag') }}";
+
       const msgEl = document.getElementById('live-msg');
       const imgEl = document.getElementById('live-img');
 
-      async function tick(){
-        try{
-          const r = await fetch(STATUS_URL, {cache:'no-store'});
-          const j = r.ok ? await r.json() : {idle:false};
-          if(j.idle){
-            if(!imgEl._bound){
-              imgEl._bound = true;
-              imgEl.addEventListener('load', ()=>{ msgEl.style.display='none'; });
-              imgEl.addEventListener('error', ()=>{ msgEl.style.display='flex'; msgEl.textContent='Failed to open camera stream'; });
-            }
-            if(!imgEl.src){
-              msgEl.style.display='flex';
-              msgEl.textContent='Connecting to camera…';
-              imgEl.src = LIVE_URL;
-                if (!imgEl._firstFrameWatcher) {
-                imgEl._firstFrameWatcher = true;
-                let tries = 0;
-                const tick = () => {
-                  if (imgEl.naturalWidth > 0) {
-                    msgEl.style.display = 'none';
-                    return;
-                  }
-                  if (++tries < 20) setTimeout(tick, 100);
-                };
-                setTimeout(tick, 100);
-              }
-                          if (!imgEl.src) {
-                msgEl.style.display = 'flex';
-                msgEl.textContent = 'Connecting to camera…';
-                imgEl.src = LIVE_URL;
+      // First-frame watcher with a single automatic retry
+      function armFirstFrameWatch() {
+        if (imgEl._ffwArmed) return;
+        imgEl._ffwArmed = true;
 
-                // Wait for first frame; if none after ~3s, show a short reason
-                if (!imgEl._firstFrameWatcher) {
-                  imgEl._firstFrameWatcher = true;
-                  let tries = 0;
-                  const waitForFirst = () => {
-                    if (imgEl.naturalWidth > 0) {
-                      msgEl.style.display = 'none';
-                      return;
-                    }
-                    if (++tries < 30) return setTimeout(waitForFirst, 100); // up to ~3s
-                    // Still no frame — show a clean message (no raw stderr)
-                    (async () => {
-                      try {
-                        const d = await fetch(DIAG_URL, { cache: 'no-store' }).then(x => x.json());
-                        if (d && d.probe && d.probe.ok === false) {
-                          msgEl.textContent = `Camera didn’t start. ${d.probe.reason || ''}`;
-                        } else {
-                          msgEl.textContent = 'Camera didn’t start.';
-                        }
-                      } catch {
-                        msgEl.textContent = 'Camera didn’t start.';
-                      }
-                    })();
-                  };
-                  setTimeout(waitForFirst, 100);
-                }
-              }
-            }
-          }else{
-            msgEl.style.display='flex';
-            msgEl.textContent='Camera busy (capturing/encoding)…';
-            if(imgEl.src){ imgEl.src = ''; }
+        let triedRetry = false;
+        let tries = 0;
+
+        const wait = () => {
+          // Got a frame?
+          if (imgEl.naturalWidth > 0) {
+            msgEl.style.display = 'none';
+            return;
           }
-        }catch(_){
-          msgEl.style.display='flex';
-          msgEl.textContent='Checking camera…';
+          // Keep waiting up to ~3s
+          if (++tries < 30) {
+            return setTimeout(wait, 100);
+          }
+          // No frame: retry once by reconnecting the MJPEG stream
+          if (!triedRetry) {
+            triedRetry = true;
+            tries = 0;
+            imgEl.src = '';
+            setTimeout(() => {
+              imgEl.src = LIVE_URL;
+              setTimeout(wait, 100);
+            }, 300);
+            return;
+          }
+
+          // Still no frame after retry — show a clean reason if we can
+          (async () => {
+            try {
+              const d = await fetch(DIAG_URL, { cache: 'no-store' }).then(r => r.json());
+              if (d && d.probe && d.probe.ok === false) {
+                msgEl.textContent = `Camera didn’t start. ${d.probe.reason || ''}`;
+              } else {
+                msgEl.textContent = 'Camera didn’t start.';
+              }
+            } catch {
+              msgEl.textContent = 'Camera didn’t start.';
+            }
+            msgEl.style.display = 'flex';
+          })();
+        };
+
+        setTimeout(wait, 100);
+      }
+
+      async function tick() {
+        try {
+          const r = await fetch(STATUS_URL, { cache: 'no-store' });
+          const j = r.ok ? await r.json() : { idle: false };
+
+          if (j.idle) {
+            // Bind handlers once
+            if (!imgEl._bound) {
+              imgEl._bound = true;
+              imgEl.addEventListener('load', () => { msgEl.style.display = 'none'; });
+              imgEl.addEventListener('error', () => {
+                msgEl.style.display = 'flex';
+                msgEl.textContent = 'Failed to open camera stream';
+              });
+            }
+
+            // Start stream if not already set
+            if (!imgEl.src) {
+              msgEl.style.display = 'flex';
+              msgEl.textContent = 'Connecting to camera…';
+              imgEl._ffwArmed = false;       // reset watcher state
+              imgEl.src = LIVE_URL;
+              armFirstFrameWatch();
+            }
+          } else {
+            // Busy (capturing/encoding)
+            msgEl.style.display = 'flex';
+            msgEl.textContent = 'Camera busy (capturing/encoding)…';
+            if (imgEl.src) imgEl.src = '';   // stop requesting stream
+            imgEl._ffwArmed = false;         // reset watcher for next time
+          }
+        } catch {
+          msgEl.style.display = 'flex';
+          msgEl.textContent = 'Checking camera…';
         }
       }
+
       tick();
       setInterval(tick, 3000);
     </script>
