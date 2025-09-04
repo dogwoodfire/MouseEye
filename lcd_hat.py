@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os, sys, time, json, threading
+import os, sys, time, json
 from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
@@ -10,7 +10,7 @@ PIN_DC   = int(os.environ.get("LCD_PIN_DC",   "25"))
 PIN_RST  = int(os.environ.get("LCD_PIN_RST",  "27"))
 PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))
 
-# Keys (Waveshare 1.44" LCD HAT)
+# Waveshare 1.44" LCD HAT buttons / joystick
 KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up
 KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # Accept
 KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down
@@ -27,12 +27,12 @@ WIDTH, HEIGHT = 128, 128
 
 # ----------------- Backend endpoints -----------------
 LOCAL = "http://127.0.0.1:5050"
-STATUS_URL      = f"{LOCAL}/lcd_status"     # make sure this route exists in app.py
-START_URL       = f"{LOCAL}/start"
-STOP_URL        = f"{LOCAL}/stop"
-TEST_URL        = f"{LOCAL}/test_capture"
-SCHED_ARM_URL   = f"{LOCAL}/schedule/arm"
-SCHED_FILE      = "/home/pi/timelapse/schedule.json"
+STATUS_URL    = f"{LOCAL}/lcd_status"     # make sure this exists in app.py
+START_URL     = f"{LOCAL}/start"
+STOP_URL      = f"{LOCAL}/stop"
+TEST_URL      = f"{LOCAL}/test_capture"
+SCHED_ARM_URL = f"{LOCAL}/schedule/arm"
+SCHED_FILE    = "/home/pi/timelapse/schedule.json"
 
 # ----------------- Lazy imports -----------------
 try:
@@ -83,7 +83,7 @@ def _font(sz):
 F_TITLE  = _font(14)
 F_TEXT   = _font(12)
 F_SMALL  = _font(10)
-F_VALUE = _font(18)   # for the big centered value on wizard pages
+F_VALUE  = _font(18)   # for big centered value on wizard pages
 
 WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120); YELL=(255,210,80); BLUE=(90,160,220)
@@ -157,6 +157,20 @@ def _draw_wizard_page(title, value, tips=None, footer=None, step=None):
 
     device.display(img)
 
+def _draw_confirm(interval_s, h, m, auto_encode):
+    lines = [
+        f"Interval: {interval_s}s",
+        f"Duration: {h}h{m:02d}m",
+        f"Auto-encode: {'Yes' if auto_encode else 'No'}",
+    ]
+    _draw_lines(
+        lines,
+        title="Confirm",
+        footer="Press ✓ to start",
+        highlight=-1,
+        hints=False
+    )
+
 # ----------------- HTTP helpers -----------------
 def _http_json(url, timeout=1.2):
     try:
@@ -194,7 +208,6 @@ class UI:
     def __init__(self):
         self.state = self.HOME
         self.menu_idx = 0
-        # default list; actual rendered list is dynamic (_home_items)
         self.menu_items = ["Quick Start", "New Timelapse", "Schedules"]
         self._home_items = self.menu_items[:]
 
@@ -208,20 +221,32 @@ class UI:
         self._bind_inputs()
         self.render()
 
-    # --- status helper (NOW INSIDE THE CLASS) ---
+    # --- status helper ---
     def _status(self):
         return _http_json(STATUS_URL) or {}
 
-    # input binding → call small handlers
+    # ---------- input binding ----------
     def _bind_inputs(self):
-    # MENUS / WIZARD via side keys
-        if btn_up:   btn_up.when_pressed   = lambda: self.nav(+1)   # was -1
-        if btn_down: btn_down.when_pressed = lambda: self.nav(-1)   # was +1
+        # Route Up/Down depending on state: menus (nav) vs wizard (adjust)
+        def press_up():
+            if self.state in (self.HOME, self.SCHED_LIST):
+                self.nav(-1)          # Up = previous item
+            else:
+                self.adjust(+1)       # Up = increase value
+        def press_down():
+            if self.state in (self.HOME, self.SCHED_LIST):
+                self.nav(+1)          # Down = next item
+            else:
+                self.adjust(-1)       # Down = decrease value
+
+        # Side keys
+        if btn_up:   btn_up.when_pressed   = press_up
+        if btn_down: btn_down.when_pressed = press_down
         if btn_ok:   btn_ok.when_pressed   = self.ok
 
-        # Joystick direct value changes (already correct)
-        if js_up:    js_up.when_pressed    = lambda: self.adjust(+1)
-        if js_down:  js_down.when_pressed  = lambda: self.adjust(-1)
+        # Joystick (same behavior)
+        if js_up:    js_up.when_pressed    = press_up
+        if js_down:  js_down.when_pressed  = press_down
         if js_left:  js_left.when_pressed  = self.step_small
         if js_right: js_right.when_pressed = self.step_big
         if js_push:  js_push.when_pressed  = self.ok
@@ -229,7 +254,6 @@ class UI:
     # ---------- state helpers ----------
     def nav(self, delta):
         if self.state == self.HOME:
-            # USE THE LIST THAT'S ACTUALLY RENDERED
             items = getattr(self, "_home_items", self.menu_items)
             if items:
                 self.menu_idx = (self.menu_idx + delta) % len(items)
@@ -237,12 +261,15 @@ class UI:
                 self.menu_idx = 0
             self.render()
         elif self.state == self.SCHED_LIST:
-            # move cursor within sched list
-            self.menu_idx = max(0, self.menu_idx + delta)
+            # Build the same list we render to know its length
+            lines = ["➕ New Schedule"]
+            for _sid, _st in _read_schedules():
+                lines.append("x")  # just count
+            if lines:
+                self.menu_idx = (self.menu_idx + delta) % len(lines)
+            else:
+                self.menu_idx = 0
             self.render()
-        else:
-            # in wizard, up/down change value (handled via joystick too)
-            self.adjust(delta)
 
     def adjust(self, delta):
         if self.state == self.WZ_INT:
@@ -273,16 +300,22 @@ class UI:
             elif sel == "Schedules":
                 self.open_schedules()
             return
-        elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
+
+        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
             self.state += 1
             self.render()
-        elif self.state == self.WZ_CONFIRM:
+            return
+
+        if self.state == self.WZ_CONFIRM:
             self.start_now_via_schedule()
-        elif self.state == self.SCHED_LIST:
+            return
+
+        if self.state == self.SCHED_LIST:
             if self.menu_idx == 0:
                 self.start_wizard()
             else:
                 self.render()
+            return
 
     # ---------- actions ----------
     def quick_start(self):
@@ -338,33 +371,25 @@ class UI:
         self.render()
 
     # ---------- render ----------
-
-    def _draw_confirm(interval_s, h, m, auto_encode):
-        lines = [
-            f"Interval: {interval_s}s",
-            f"Duration: {h}h{m:02d}m",
-            f"Auto-encode: {'Yes' if auto_encode else 'No'}",
-        ]
-        _draw_lines(
-            lines,
-            title="Confirm",
-            footer="Press ✓ to start",
-            highlight=-1,
-            hints=False  # no right-side glyphs here
-        )
-        
     def render(self):
         try:
             if self.state == self.HOME:
                 self._render_home()
             elif self.state == self.WZ_INT:
-                self._render_wz("Interval (s)", f"{self.wz_interval}  (step {self.step})")
+                _draw_wizard_page("Interval (s)", f"{self.wz_interval}",
+                                  tips=["↑/↓ change, ✓ next", "← step=1, → step=10"],
+                                  step=self.step)
             elif self.state == self.WZ_HR:
-                self._render_wz("Duration hours", f"{self.wz_hours}  (step {self.step})")
+                _draw_wizard_page("Duration hours", f"{self.wz_hours}",
+                                  tips=["↑/↓ change, ✓ next", "← step=1, → step=10"],
+                                  step=self.step)
             elif self.state == self.WZ_MIN:
-                self._render_wz("Duration mins", f"{self.wz_mins}  (0–59)")
+                _draw_wizard_page("Duration mins", f"{self.wz_mins:02d}",
+                                  tips=["↑/↓ change, ✓ next", "← step=1, → step=10"],
+                                  step=self.step)
             elif self.state == self.WZ_ENC:
-                self._render_wz("Auto-encode", "Yes" if self.wz_encode else "No")
+                _draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
+                                  tips=["↑/↓ toggle, ✓ next"], step=None)
             elif self.state == self.WZ_CONFIRM:
                 _draw_confirm(self.wz_interval, self.wz_hours, self.wz_mins, self.wz_encode)
             elif self.state == self.SCHED_LIST:
@@ -376,12 +401,17 @@ class UI:
                     tag = "now" if (st_ts <= now < en_ts) else "next"
                     name = (st.get("sess") or sid)[:10]
                     lines.append(f"{tag} {name} {st.get('interval',10)}s")
-                hi = min(self.menu_idx, len(lines)-1) if lines else 0
-                _draw_lines(lines[:6], title="Schedules", footer="↑/↓, ✓ select", highlight=hi, hints=True)
+                # wrap highlight safely
+                if lines:
+                    self.menu_idx %= len(lines)
+                hi = self.menu_idx if lines else 0
+                _draw_lines(lines[:6], title="Schedules", footer="↑/↓, ✓ select",
+                            highlight=hi, hints=True)
             else:
                 _clear()
         except Exception:
-            pass  # never crash the loop
+            # never crash the loop
+            pass
 
     def _render_home(self):
         st = self._status()
@@ -395,32 +425,12 @@ class UI:
             items.append("⏹ Stop Capture")
         items += ["Quick Start", "New Timelapse", "Schedules"]
 
-        # keep a copy so ok() acts on exactly what’s shown
         self._home_items = items
-
-        # clamp selection in case the item count changed since last render
         if self.menu_idx >= len(items):
             self.menu_idx = max(0, len(items) - 1)
 
         _draw_lines(items, title=f"{status}", highlight=self.menu_idx,
                     footer="↑/↓ to move, ✓ to select", hints=True)
-
-    def _render_wz(self, title, value):
-        # default tips; tweak per step below
-        tips = ["↑/↓ change, ✓ next", "← step=1, → step=10"]
-        step = self.step
-
-        if self.state == self.WZ_INT:
-            _draw_wizard_page("Interval (s)", f"{self.wz_interval}", tips=tips, step=step)
-        elif self.state == self.WZ_HR:
-            _draw_wizard_page("Duration hours", f"{self.wz_hours}", tips=tips, step=step)
-        elif self.state == self.WZ_MIN:
-            # minutes limited 0–59 — keep the value 2-digit for clarity
-            _draw_wizard_page("Duration mins", f"{self.wz_mins:02d}", tips=tips, step=step)
-        elif self.state == self.WZ_ENC:
-            # toggle, so no step indicator and simpler tips
-            _draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
-                            tips=["↑/↓ toggle, ✓ next"], step=None)
 
 # ----------------- main loop -----------------
 def main():
