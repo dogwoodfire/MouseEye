@@ -177,6 +177,7 @@ class UI:
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
     SCH_OFF_H, SCH_OFF_M, SCH_INT, SCH_DUR_H, SCH_DUR_M, SCH_ENC, SCH_CONFIRM, \
     SCHED_LIST = range(14)
+    ENCODING = 99
 
     def __init__(self):
         self.state = self.HOME
@@ -201,37 +202,54 @@ class UI:
         self._armed_at = time.time() + 0.50  # ignore spurious edges for first 500 ms
         self._bind_inputs()
         self.render()
+        self._spin = 0  # spinner frame for encoding overlay
 
     # --- status helper ---
     def _status(self):
         return _http_json(STATUS_URL) or {}
+    
+    def _poll_status_for_encoding(self):
+        st = self._status()
+        enc = bool(st.get("encoding"))
+        if enc and self.state != self.ENCODING:
+            self.state = self.ENCODING
+            self._spin = 0
+        elif not enc and self.state == self.ENCODING:
+            self.state = self.HOME
+            self.menu_idx = 0
+            self.render()
+        return enc
 
     # ---------- input binding ----------
     def _bind_inputs(self):
+        def locked(fn):
+            def inner():
+                if self.state == self.ENCODING:
+                    return  # block input while encoding
+                fn()
+            return inner
+
         def press_up():
-            if time.time() < self._armed_at: return
             if self.state in (self.HOME, self.SCHED_LIST):
-                self.nav(-1)        # Up = previous
+                self.nav(-1)
             else:
-                self.adjust(+1)     # Up = increase
+                self.adjust(+1)
+
         def press_down():
-            if time.time() < self._armed_at: return
             if self.state in (self.HOME, self.SCHED_LIST):
-                self.nav(+1)        # Down = next
+                self.nav(+1)
             else:
-                self.adjust(-1)     # Down = decrease
+                self.adjust(-1)
 
-        # Side keys
-        if btn_up:   btn_up.when_pressed   = press_up
-        if btn_down: btn_down.when_pressed = press_down
-        if btn_ok:   btn_ok.when_pressed   = self.ok
+        if btn_up:   btn_up.when_pressed   = locked(press_up)
+        if btn_down: btn_down.when_pressed = locked(press_down)
+        if btn_ok:   btn_ok.when_pressed   = locked(self.ok)
 
-        # Joystick same behavior
-        if js_up:    js_up.when_pressed    = press_up
-        if js_down:  js_down.when_pressed  = press_down
-        if js_left:  js_left.when_pressed  = self.step_small
-        if js_right: js_right.when_pressed = self.step_big
-        if js_push:  js_push.when_pressed  = self.ok
+        if js_up:    js_up.when_pressed    = locked(press_up)
+        if js_down:  js_down.when_pressed  = locked(press_down)
+        if js_left:  js_left.when_pressed  = locked(self.step_small)
+        if js_right: js_right.when_pressed = locked(self.step_big)
+        if js_push:  js_push.when_pressed  = locked(self.ok)
 
     # ---------- helpers ----------
     def step_small(self): self.step = 1;  self.render()
@@ -350,6 +368,32 @@ class UI:
             self.menu_idx = 0
             self.render()
 
+    def _render_encoding(self):
+        """Full-screen 'Encoding…' with a tiny spinner."""
+        from math import sin, cos, pi
+        img = Image.new("RGB", (device.width, device.height), (0,0,0))
+        drw = ImageDraw.Draw(img)
+
+        title = "Encoding…"
+        tw = F_TITLE.getlength(title)
+        drw.text(((WIDTH - tw)//2, 18), title, font=F_TITLE, fill=(255,255,255))
+
+        cx, cy, r = WIDTH//2, 76, 20
+        spokes = 12
+        active = self._spin % spokes
+        for k in range(spokes):
+            a = (2*pi/spokes)*k
+            x0 = cx + int((r-8) * cos(a))
+            y0 = cy + int((r-8) * sin(a))
+            x1 = cx + int(r * cos(a))
+            y1 = cy + int(r * sin(a))
+            col = (120,200,255) if k == active else (60,60,60)
+            drw.line((x0,y0,x1,y1), fill=col, width=2)
+
+        drw.text((2, HEIGHT-12), "Please wait…", font=F_SMALL, fill=(140,140,140))
+        device.display(img)
+        self._spin = (self._spin + 1) % 120
+
     def _start_timelapse_wizard(self):
         self.tl_interval = 10
         self.tl_hours    = 0
@@ -419,6 +463,9 @@ class UI:
 
     def render(self):
         try:
+            if self.state == self.ENCODING:
+                self._render_encoding()
+                return
             if self.state == self.HOME:
                 items = self._home_menu_items()
                 if items:
@@ -491,6 +538,11 @@ class UI:
 def main():
     ui = UI()
     while True:
+        if ui._poll_status_for_encoding():
+            ui._render_encoding()
+            time.sleep(0.12)   # smooth spinner refresh
+            continue
+
         if ui.state == UI.HOME:
             ui.render()
         time.sleep(0.4)
