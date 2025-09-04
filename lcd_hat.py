@@ -39,7 +39,7 @@ except Exception:
 # Try to open the device. If this fails, we quit silently (no HAT / SPI disabled).
 try:
     serial = spi(port=SPI_PORT, device=SPI_DEVICE, gpio_DC=PIN_DC, gpio_RST=PIN_RST, bus_speed_hz=8000000)
-    device = st7735(serial, width=WIDTH, height=HEIGHT, rotation=0, h_offset=2, v_offset=3, bgr=False, invert=True)  # set rotation if needed
+    device = st7735(serial, width=WIDTH, height=HEIGHT, rotation=0, h_offset=2, v_offset=1, bgr=False, invert=True)  # set rotation if needed
     # after constructing `device`
     device.clear()
     device.display(Image.new("RGB", (128,128), "black"))
@@ -143,8 +143,8 @@ def draw_screen(state):
     disk = state.get("disk", {})
     used_pct = 100 - int(disk.get("pct_free", 0))
     bar_w = int((WIDTH-4) * max(0,min(100,used_pct)) / 100)
-    drw.rectangle([2, HEIGHT-14, WIDTH-2, HEIGHT-6], outline=(70,70,70), fill=None)
-    drw.rectangle([2, HEIGHT-14, 2+bar_w, HEIGHT-6], fill=(90,160,220))
+    drw.rectangle([2, HEIGHT-10, WIDTH-2, HEIGHT-6], outline=(70,70,70), fill=None)
+    drw.rectangle([2, HEIGHT-10, 2+bar_w, HEIGHT-6], fill=(90,160,220))
     drw.text((2, HEIGHT-24), f"Disk {used_pct}% used", font=FONT_SMALL, fill=GRAY)
 
     device.display(img)
