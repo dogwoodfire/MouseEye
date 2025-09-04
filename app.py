@@ -682,12 +682,12 @@ def live_debug():
         proc = LIVE_PROC
 
     return jsonify({
+        "camera_warmed": _camera_warmed,
         "idle_now": _idle_now(),
-        "vid_bin": vid_bin,
-        "camera_warmed": bool(globals().get("_camera_warmed", False)),
         "live_proc": {
-            "exists": proc is not None,
-            "running": (proc is not None and proc.poll() is None),
+            "exists": LIVE_PROC is not None,
+            "running": (LIVE_PROC and LIVE_PROC.poll() is None) or False,
+            "returncode": (None if not LIVE_PROC else LIVE_PROC.returncode),
         },
         "stderr_tail": list(_live_last_stderr)[-40:],  # last ~40 lines
     })        
@@ -702,48 +702,41 @@ def live_mjpg():
 
     global LIVE_PROC
     with LIVE_LOCK:
-        vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
+        # Prefer libcamera-vid; fall back to rpicam-vid
+        vid_bin = shutil.which("libcamera-vid") or shutil.which("rpicam-vid")
         if not vid_bin:
-            abort(500, "No camera video binary found (rpicam-vid/libcamera-vid).")
-        # If another process has the camera, try to free it once
-        try:
-            p = subprocess.run(
-                [vid_bin, "--codec", "mjpeg", "-t", "1", "-o", "-"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=1.5
-            )
-            if p.returncode != 0 and ("in use" in (p.stderr or "").lower() or "pipeline handler in use" in (p.stderr or "").lower()):
-                _force_release_camera()
-        except Exception:
-            # ignore; we'll try to spawn below anyway
-            pass
-        _warmup_camera()
-        if LIVE_PROC is None or LIVE_PROC.poll() is not None:
-            cmd = [
-                vid_bin,
-                "--codec", "mjpeg",
-                "--width", str(CAPTURE_WIDTH),
-                "--height", str(CAPTURE_HEIGHT),
-                "-t", "0",              # run forever
-                "-o", "-",              # write MJPEG to stdout
-                "--inline",
-            ]
+            abort(500, "No camera video binary found (libcamera-vid/rpicam-vid).")
 
-            # Disable on-screen preview for both variants
+        _warmup_camera()  # keep your warmup call
+
+        def build_cmd(w, h, use_alt=False):
             base = os.path.basename(vid_bin)
             if base.startswith("libcamera-"):
-                cmd.insert(1, "-n")             # libcamera-vid
+                # No preview; MJPEG over stdout
+                return [
+                    vid_bin, "-n",
+                    "--codec", "mjpeg",
+                    "--width", str(w), "--height", str(h),
+                    "--framerate", "30",
+                    "-t", "0",
+                    "-o", "-",
+                ]
             else:
-                cmd.insert(1, "--nopreview")    # rpicam-vid
-            if os.path.basename(vid_bin) == "libcamera-vid":
-                # disable on-screen preview for libcamera-vid
-                cmd.insert(1, "-n")
+                # rpicam-vid variant (also no preview)
+                return [
+                    vid_bin, "--nopreview",
+                    "--codec", "mjpeg",
+                    "--width", str(w), "--height", str(h),
+                    "--framerate", "30",
+                    "-t", "0",
+                    "-o", "-",
+                ]
 
-            # Environment: reduce libcamera chatter to errors only
+        if LIVE_PROC is None or LIVE_PROC.poll() is not None:
+            cmd = build_cmd(CAPTURE_WIDTH, CAPTURE_HEIGHT)
             env = dict(os.environ)
-            env.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")  # or "*:0" on some builds
+            env.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")
             env.setdefault("RPI_LOG_LEVEL", "error")
-
-            # Start process: stdout=stream, stderr=PIPE (we’ll drain it)
             LIVE_PROC = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -752,28 +745,16 @@ def live_mjpg():
                 env=env,
                 start_new_session=True,
             )
-
-            # Drain stderr so logs never block or leak
+            # Drain stderr so it never blocks
             def _drain_stderr(p):
                 try:
                     if p.stderr:
-                        # read in chunks; split into lines and remember them
-                        while True:
-                            chunk = p.stderr.read(4096)
-                            if not chunk:
-                                break
-                            for ln in chunk.decode('utf-8', 'replace').splitlines():
-                                _live_last_stderr.append(ln.strip())
-                except Exception:
-                    pass
+                        for _ in iter(lambda: p.stderr.read(4096), b""):
+                            pass
                 finally:
-                    try:
-                        if p.stderr:
-                            p.stderr.close()
-                    except Exception:
-                        pass
+                    try: p.stderr and p.stderr.close()
+                    except: pass
             threading.Thread(target=_drain_stderr, args=(LIVE_PROC,), daemon=True).start()
-
     boundary = b"--frame"
 
     def cleanup_proc():
@@ -803,57 +784,60 @@ def live_mjpg():
         first_frame_seen = False
         retried = False
         start_ts = time.time()
-        # Flush a harmless first part so clients don't time out before first JPEG
-        yield (b"--frame\r\n"
-              b"Content-Type: text/plain\r\n\r\n"
-              b"starting\r\n")
+
+        # Send a tiny preamble so iOS/Safari doesn’t give up early
+        yield (b"--frame\r\nContent-Type: text/plain\r\n\r\nstarting\r\n")
+
+        def spawn_fallback():
+            nonlocal retried, buf, start_ts
+            retried = True
+            _stop_live_proc()
+            with LIVE_LOCK:
+                # 640x480 fallback
+                fb_cmd = build_cmd(640, 480)
+                env = dict(os.environ)
+                env.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")
+                env.setdefault("RPI_LOG_LEVEL", "error")
+                globals()["LIVE_PROC"] = subprocess.Popen(
+                    fb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, start_new_session=True, env=env
+                )
+            buf = b""
+            start_ts = time.time()
+
         try:
             while True:
                 if not _idle_now():
                     break
 
+                # If the process died early, try the fallback once
+                if LIVE_PROC.poll() is not None and not retried:
+                    spawn_fallback()
+                    continue
+                if LIVE_PROC.poll() is not None:
+                    break  # already retried and it died again
+
                 chunk = LIVE_PROC.stdout.read(4096)
                 if not chunk:
-                    break
-                buf += chunk
+                    # If no data for ~1s and not retried, try fallback
+                    if not retried and time.time() - start_ts > 1.0:
+                        spawn_fallback()
+                        continue
+                    if time.time() - start_ts > 3.0:
+                        break
+                    time.sleep(0.05)
+                    continue
 
-                # detect JPEG frames
+                buf += chunk
                 while True:
                     soi = buf.find(b"\xff\xd8")
-                    if soi == -1:
-                        break
+                    if soi == -1: break
                     eoi = buf.find(b"\xff\xd9", soi + 2)
-                    if eoi == -1:
-                        break
+                    if eoi == -1: break
                     frame = buf[soi:eoi+2]
                     buf = buf[eoi+2:]
                     first_frame_seen = True
                     yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                           + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n")
-
-                # watchdog: no first frame within 2s? restart once
-                if not first_frame_seen and not retried and (time.time() - start_ts) > 5.0:
-                    retried = True
-                    # restart process quickly
-                    _stop_live_proc()
-                    with LIVE_LOCK:
-                        # re-spawn the same command as above
-                        vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
-                        if not vid_bin:
-                            break
-                        cmd = [
-                            vid_bin, "--codec", "mjpeg",
-                            "--width", str(CAPTURE_WIDTH), "--height", str(CAPTURE_HEIGHT),
-                            "-t", "0", "-o", "-", "--inline",
-                        ]
-                        if os.path.basename(vid_bin) == "libcamera-vid":
-                            cmd.insert(1, "-n")
-                        LIVE_PROC = subprocess.Popen(
-                            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
-                        )
-                    # reset buffer and timer
-                    buf = b""
-                    start_ts = time.time()
         finally:
             if LIVE_PROC is None or not _idle_now() or LIVE_PROC.poll() is not None:
                 cleanup_proc()
