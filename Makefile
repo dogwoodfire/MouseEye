@@ -41,9 +41,23 @@ pi-logs:
 	ssh $(PI_HOST) 'journalctl -u $(SERVICE) -f -n 50 --no-pager'
 
 # -------- One-shot targets --------
-.PHONY: deploy logs status
+.PHONY: deploy logs status deploy-force
+
 deploy: commit push pi-pull pi-restart
 	$(call yellow,"✅ Deploy complete.")
+
+# Force: overwrite any local Pi changes with what's on origin/$(BRANCH)
+deploy-force: commit push pi-pull-hard pi-restart
+	$(call yellow,"✅ Force deploy complete (Pi reset to origin/$(BRANCH)).")
+
+.PHONY: pi-pull-hard
+pi-pull-hard:
+	$(call yellow,"[pi] Forcing repo to origin/$(BRANCH) on $(PI_DIR)…")
+	ssh $(PI_HOST) 'set -e; cd $(PI_DIR) && \
+		git fetch --all && \
+		echo "[pi] backing up uncommitted changes (if any)..." && \
+		( git diff > .deploy_backup_$$HOSTNAME_$$(date +%Y%m%d-%H%M%S).patch || true ) && \
+		git reset --hard origin/$(BRANCH)'
 
 logs: pi-logs
 status: pi-status
