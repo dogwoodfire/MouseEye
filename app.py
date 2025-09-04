@@ -243,14 +243,20 @@ def _list_sessions():
     out.sort(key=lambda x: x["name"], reverse=True)
     return out
 
-# ===== Persistence for scheduler =====
+# ===== Multiple Schedules =====
+import uuid
+
+# schedules keyed by id: {"id": {"start_ts":int,"end_ts":int,"interval":int,"fps":int,"sess":str,"auto_encode":bool}}
+_schedules = {}                    # id -> dict (state)
+_sched_timers = {}                 # id -> {"start": Timer|None, "stop": Timer|None}
 SCHED_FILE = os.path.join(BASE, "schedule.json")
+_sched_lock = threading.Lock()
 
 def _save_sched_state():
     try:
         tmp = SCHED_FILE + ".tmp"
         with open(tmp, "w") as f:
-            json.dump(_sched_state, f)
+            json.dump(_schedules, f)
         os.replace(tmp, SCHED_FILE)
     except Exception:
         pass
@@ -261,12 +267,82 @@ def _load_sched_state():
             with open(SCHED_FILE, "r") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                _sched_state.clear()
-                _sched_state.update(data)
+                _schedules.clear()
+                _schedules.update(data)
                 return True
     except Exception:
         pass
     return False
+
+def _cancel_timers_for(sid):
+    t = _sched_timers.get(sid)
+    if not t: return
+    for k in ("start","stop"):
+        try:
+            tm = t.get(k)
+            if tm: tm.cancel()
+        except Exception: pass
+    _sched_timers[sid] = {"start": None, "stop": None}
+
+def _arm_timers_for(sid, st):
+    """Arm start/stop timers for one schedule dict `st`."""
+    _cancel_timers_for(sid)
+
+    now = int(time.time())
+    start_ts   = int(st.get("start_ts", 0))
+    end_ts     = int(st.get("end_ts",   0))
+    interval   = int(st.get("interval", 10))
+    fps        = int(st.get("fps",      24))
+    sess_name  = st.get("sess", "") or ""
+    auto_encode = bool(st.get("auto_encode", False))
+
+    # If already expired, drop it
+    if end_ts <= now:
+        with _sched_lock:
+            _schedules.pop(sid, None)
+            _save_sched_state()
+        return
+
+    def _fire_start():
+        # If camera is busy, retry shortly until window end
+        if not _idle_now():
+            # retry in 30s if still within window
+            if int(time.time()) < end_ts:
+                tm = threading.Timer(30, _fire_start)
+                tm.daemon = True
+                _sched_timers[sid]["start"] = tm
+                tm.start()
+            return
+        _sched_fire_start(interval, fps, sess_name)
+
+    def _fire_stop():
+        _sched_fire_stop(sess_name, fps, auto_encode)
+        # schedule finished; do not auto-delete – keep visible until user removes
+        _cancel_timers_for(sid)
+
+    if start_ts <= now < end_ts:
+        # start now, schedule stop
+        _fire_start()
+        delay_stop = max(0, end_ts - now)
+        tm_stop = threading.Timer(delay_stop, _fire_stop)
+        tm_stop.daemon = True
+        _sched_timers[sid] = {"start": None, "stop": tm_stop}
+        tm_stop.start()
+    else:
+        delay_start = max(0, start_ts - now)
+        delay_stop  = max(0, end_ts   - now)
+        tm_start = threading.Timer(delay_start, _fire_start)
+        tm_stop  = threading.Timer(delay_stop,  _fire_stop)
+        for tm in (tm_start, tm_stop):
+            tm.daemon = True
+        _sched_timers[sid] = {"start": tm_start, "stop": tm_stop}
+        tm_start.start()
+        tm_stop.start()
+
+def _arm_timers_all():
+    for sid, st in list(_schedules.items()):
+        _arm_timers_for(sid, st)
+
 def _arm_timers_from_state():
     """(Re)arm timers according to _sched_state and current time."""
     global _sched_start_t, _sched_stop_t
@@ -1622,31 +1698,39 @@ from flask import render_template_string, request, redirect, url_for
 
 SCHED_TPL = '''<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Schedule Timelapse</title>
+<title>Schedules</title>
 <style>
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px}
-  form{display:grid;gap:10px;max-width:420px}
+  h2{margin:0 0 12px}
+  form{display:grid;gap:10px;max-width:440px;margin-bottom:18px}
   label{font-weight:600}
   input,select,button{padding:10px;font-size:16px}
-  .card{background:#f6f9ff;border:1px solid #d7e4ff;border-radius:8px;padding:12px;margin-top:12px}
-  .full_width_button{color: white; font-size:16px; font-weight:600; line-height:1; text-decoration:none; width:100%;background:#47b870;border:1px solid #d7e4ff;border-radius:20px;padding:12px;margin-top:12px}
+  .cards{display:grid;gap:10px;max-width:760px}
+  .card{background:#f6f9ff;border:1px solid #d7e4ff;border-radius:8px;padding:12px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .muted{color:#6b7280}
+  .danger{background:#ef4444;color:#fff;border:0}
+  .link{padding:8px 12px;background:#eee;border-radius:6px;text-decoration:none;color:#111}
+  .full{width:100%}
 </style>
-<h2>Schedule a timelapse</h2>
+
+<h2>Create a new schedule</h2>
 <form method="post" action="{{ url_for('schedule_arm') }}">
   <label>Start (local time)</label>
   <input type="datetime-local" name="start_local" required>
   <label>Duration (hours & minutes)</label>
-  <input type="number" name="duration_hr"  value=""  min="0" placeholder="hrs">
-  <input type="number" name="duration_min" value="" min="0" placeholder="mins">
+  <div class="row">
+    <input type="number" name="duration_hr"  value=""  min="0" placeholder="hrs" style="width:120px">
+    <input type="number" name="duration_min" value="" min="0" placeholder="mins" style="width:120px">
+  </div>
   <label>Interval (seconds)</label>
   <input type="number" name="interval" value="{{ interval_default }}" min="1">
   <label>FPS</label>
   <select name="fps">
-              {% for f in fps_choices %}
-                <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
-              {% endfor %}
+    {% for f in fps_choices %}
+      <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
+    {% endfor %}
   </select>
-
   <label style="display:flex;gap:8px;align-items:center;margin-top:6px;">
     <input type="checkbox" name="auto_encode" checked>
     Auto-encode when finished
@@ -1656,23 +1740,26 @@ SCHED_TPL = '''<!doctype html>
   <button type="submit">Create Schedule</button>
 </form>
 
-{% if sched %}
-<div class="card">
-  <div><b>Current schedule</b></div>
-  {% if sched.sess %}<div>Session: {{ sched.sess }}</div>{% endif %}
-  <div>Start: {{ sched_start_human }}</div>
-  <div>End: {{ sched_end_human }}</div>
-  <div>Interval: {{ sched.interval }}s &nbsp; FPS: {{ sched.fps }}</div>
-  <div>Auto-encode: {{ 'on' if sched.auto_encode else 'off' }}</div>
-  <form method="post" action="{{ url_for('schedule_cancel') }}" style="margin-top:8px">
-    <button type="submit">Cancel Schedule</button>
-  </form>
+<h2>Existing schedules</h2>
+<div class="cards">
+  {% if not schedules %}
+    <div class="muted">No schedules yet.</div>
+  {% endif %}
+  {% for sid, sc in schedules %}
+  <div class="card">
+    <div><b>ID:</b> {{ sid }}</div>
+    {% if sc.sess %}<div><b>Session:</b> {{ sc.sess }}</div>{% endif %}
+    <div><b>Start:</b> {{ sc.start_h }}</div>
+    <div><b>End:</b>   {{ sc.end_h }}</div>
+    <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
+    <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
+    <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Cancel this schedule?')">
+      <button class="danger" type="submit">Cancel</button>
+      <a class="link" href="{{ url_for('index') }}">Back</a>
+    </form>
+  </div>
+  {% endfor %}
 </div>
-{% endif %}
-  <button class="full_width_button" type="button"
-        onclick="window.location='{{ url_for('index') }}'">
-  📷 Go back
-</button>
 '''
 
 def _sched_fire_start(interval, fps, sess_name=""):
@@ -1710,40 +1797,37 @@ def disk():
 
 @app.get("/schedule")
 def schedule_page():
-    cur = type("S", (), _sched_state) if _sched_state else None
-
-    sched_start_human = sched_end_human = None
-    if cur:
+    # build view model
+    items = []
+    for sid, st in sorted(_schedules.items(), key=lambda kv: kv[1].get("start_ts", 0)):
         try:
-            sched_start_human = datetime.fromtimestamp(cur.start_ts).strftime("%a %Y-%m-%d %H:%M")
-            sched_end_human   = datetime.fromtimestamp(cur.end_ts).strftime("%a %Y-%m-%d %H:%M")
+            start_h = datetime.fromtimestamp(int(st["start_ts"])).strftime("%a %Y-%m-%d %H:%M")
+            end_h   = datetime.fromtimestamp(int(st["end_ts"])).strftime("%a %Y-%m-%d %H:%M")
         except Exception:
-            pass
-
+            start_h = end_h = "?"
+        vm = dict(st)
+        vm["start_h"] = start_h
+        vm["end_h"]   = end_h
+        items.append((sid, type("S", (), vm)))
     return render_template_string(
         SCHED_TPL,
         fps_choices=globals().get("FPS_CHOICES", [10, 24, 30]),
         default_fps=globals().get("DEFAULT_FPS", 24),
         interval_default=globals().get("CAPTURE_INTERVAL_SEC", 10),
-        sched=cur,
-        sched_start_human=sched_start_human,
-        sched_end_human=sched_end_human
+        schedules=items
     )
 
 @app.post("/schedule/arm")
 def schedule_arm():
     start_local = request.form.get("start_local", "").strip()
-
-    # Duration (hrs + mins)
     hr_str  = request.form.get("duration_hr",  "0") or "0"
     min_str = request.form.get("duration_min", "60") or "60"
     try: dur_hr  = int(hr_str.strip())
     except: dur_hr = 0
     try: dur_min = int(min_str.strip())
     except: dur_min = 0
-    duration_min = max(1, dur_hr * 60 + dur_min)  # don’t allow zero
+    duration_min = max(1, dur_hr * 60 + dur_min)
 
-    # Other params
     try: interval = int(request.form.get("interval", "10") or 10)
     except: interval = 10
     try: fps = int(request.form.get("fps", "24") or 24)
@@ -1751,43 +1835,30 @@ def schedule_arm():
     auto_encode = bool(request.form.get("auto_encode"))
     sess_name = (request.form.get("sess_name") or "").strip()
 
-    # Parse local time
     try:
         start_ts = int(datetime.strptime(start_local, "%Y-%m-%dT%H:%M").timestamp())
     except Exception:
         start_ts = int(time.time()) + 60
     end_ts = start_ts + duration_min * 60
 
-    # Save state once
-    with _sched_lock:
-        _sched_state.clear()
-        _sched_state.update(dict(
-            start_ts=start_ts,
-            end_ts=end_ts,
-            interval=interval,
-            fps=fps,
-            sess=sess_name,
-            auto_encode=auto_encode,
-        ))
-        _save_sched_state()
+    sid = uuid.uuid4().hex[:8]  # short id
 
-    # (Re)arm timers centrally
-    _arm_timers_from_state()
+    with _sched_lock:
+        _schedules[sid] = dict(
+            start_ts=start_ts, end_ts=end_ts,
+            interval=interval, fps=fps,
+            sess=sess_name, auto_encode=auto_encode
+        )
+        _save_sched_state()
+        _arm_timers_for(sid, _schedules[sid])
+
     return redirect(url_for("schedule_page"))
 
-@app.post("/schedule/cancel")
-def schedule_cancel():
-    global _sched_start_t, _sched_stop_t
+@app.post("/schedule/cancel/<sid>")
+def schedule_cancel_id(sid):
     with _sched_lock:
-        if _sched_start_t:
-            try: _sched_start_t.cancel()
-            except: pass
-            _sched_start_t = None
-        if _sched_stop_t:
-            try: _sched_stop_t.cancel()
-            except: pass
-            _sched_stop_t = None
-        _sched_state.clear()
+        _cancel_timers_for(sid)
+        _schedules.pop(sid, None)
         _save_sched_state()
     return redirect(url_for("schedule_page"))
 
@@ -1795,7 +1866,7 @@ def schedule_cancel():
 # Load persisted schedule and re-arm timers on process start
 try:
     if _load_sched_state():
-        _arm_timers_from_state()
+        _arm_timers_all()
 except Exception:
     pass
 
