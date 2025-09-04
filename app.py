@@ -1161,7 +1161,7 @@ TPL_INDEX = r"""
           • {{ 'ACTIVE NOW' if next_sched.active_now else 'upcoming' }}
         </div>
       </div>
-      <a class="btn" href="{{ url_for('schedule_page') }}">⚙️ Edit schedule</a>
+      <a class="btn" href="{{ url_for('schedule_page') }}">⚙️ Schedule Manager</a>
     </div>
   </div>
   {% else %}
