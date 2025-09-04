@@ -500,21 +500,9 @@ def index():
         remaining_sec_only = remaining_sec % 60
         remaining_sec_padded = f"{remaining_sec_only:02d}"
 
-    # Next schedule card
-    next_sched = None
+    # Next schedule card (from multiple schedules)
     try:
-        if _sched_state and _sched_state.get("end_ts", 0) > time.time():
-            ns = type("S", (), _sched_state)
-            start_h = datetime.fromtimestamp(ns.start_ts).strftime("%a %Y-%m-%d %H:%M")
-            end_h   = datetime.fromtimestamp(ns.end_ts).strftime("%a %Y-%m-%d %H:%M")
-            next_sched = {
-                "start_human": start_h,
-                "end_human": end_h,
-                "interval": ns.interval,
-                "fps": ns.fps,
-                "sess": _sched_state.get("sess") or None,
-                "auto_encode": bool(getattr(ns, "auto_encode", False)),
-            }
+        next_sched = _get_next_schedule()
     except Exception:
         next_sched = None
 
@@ -1170,6 +1158,7 @@ TPL_INDEX = r"""
           • {{ next_sched.fps }} FPS
           • Schedule name: {{next_sched.sess}}
           • Auto-encode: {{ 'on' if next_sched.auto_encode else 'off' }}
+          • {{ 'ACTIVE NOW' if next_sched.active_now else 'upcoming' }}
         </div>
       </div>
       <a class="btn" href="{{ url_for('schedule_page') }}">⚙️ Edit schedule</a>
@@ -1622,6 +1611,40 @@ _sched_lock = threading.Lock()
 _sched_state = {}       # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
 _sched_start_t = None   # handle to the scheduled start timer
 _sched_stop_t  = None   # handle to the scheduled stop timer
+
+def _get_next_schedule():
+    """Return a dict for the next (or currently active) schedule, or None."""
+    now = int(time.time())
+    # only schedules that haven't ended yet
+    upcoming = [(sid, st) for sid, st in _schedules.items()
+                if int(st.get("end_ts", 0)) > now]
+    if not upcoming:
+        return None
+
+    # Sort so a currently-active one comes first; otherwise the earliest start
+    def _key(item):
+        st = item[1]
+        start = int(st.get("start_ts", 0))
+        # active ones sort as 'now'; future ones by their start time
+        return (max(start, now), start)
+
+    sid, st = sorted(upcoming, key=_key)[0]
+    try:
+        start_h = datetime.fromtimestamp(int(st["start_ts"])).strftime("%a %Y-%m-%d %H:%M")
+        end_h   = datetime.fromtimestamp(int(st["end_ts"])).strftime("%a %Y-%m-%d %H:%M")
+    except Exception:
+        start_h = end_h = "?"
+
+    return {
+        "id": sid,
+        "start_human": start_h,
+        "end_human": end_h,
+        "interval": int(st.get("interval", 10)),
+        "fps": int(st.get("fps", 24)),
+        "sess": (st.get("sess") or None),
+        "auto_encode": bool(st.get("auto_encode", False)),
+        "active_now": int(st.get("start_ts", 0)) <= now < int(st.get("end_ts", 0)),
+    }
 
 def _disk_stats(path=BASE):
     """Return total/used/free and percents for the filesystem containing `path`."""
