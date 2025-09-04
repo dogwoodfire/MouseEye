@@ -893,7 +893,6 @@ def live_page():
           }
           // Keep waiting up to ~3s
           if (++tries < 70) return setTimeout(wait, 100);
-          }
           // No frame: retry once by reconnecting the MJPEG stream
           if (!triedRetry) {
             triedRetry = true;
