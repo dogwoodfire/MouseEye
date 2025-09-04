@@ -128,7 +128,7 @@ _start_encode_worker_once()
 
 # ---- priming the live camera ----
 _camera_warmed = False
-WARMUP_MS = 1000  # short, just to init pipeline
+WARMUP_MS = 1500  # short, just to init pipeline
 
 def _warmup_camera():
     global _camera_warmed
@@ -142,7 +142,7 @@ def _warmup_camera():
         cmd = [vid_bin, "--codec", "mjpeg", "-t", str(WARMUP_MS), "-o", "-"]
         if os.path.basename(vid_bin) == "libcamera-vid":
             cmd.insert(1, "-n")
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
         _camera_warmed = True
     except Exception:
         # harmless if it fails; we’ll fall back to retry below
@@ -197,6 +197,8 @@ def _any_encoding_active():
 # ---- Live viewfinder ----
 LIVE_PROC = None
 LIVE_LOCK = threading.Lock()
+from collections import deque
+_live_last_stderr = deque(maxlen=120)  # keep the last ~120 lines from libcamera/rpicam-vid
 
 def _idle_now():
     return (_capture_thread is None or not _capture_thread.is_alive()) and not _any_encoding_active()
@@ -657,6 +659,23 @@ def live_status():
         return jsonify({"idle": _idle_now()})
     except Exception:
         return jsonify({"idle": False})
+@app.get("/live_debug")
+def live_debug():
+    vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
+    proc = None
+    with LIVE_LOCK:
+        proc = LIVE_PROC
+
+    return jsonify({
+        "idle_now": _idle_now(),
+        "vid_bin": vid_bin,
+        "camera_warmed": bool(globals().get("_camera_warmed", False)),
+        "live_proc": {
+            "exists": proc is not None,
+            "running": (proc is not None and proc.poll() is None),
+        },
+        "stderr_tail": list(_live_last_stderr)[-40:],  # last ~40 lines
+    })        
 
 @app.get("/live.mjpg")
 def live_mjpg():
@@ -705,8 +724,13 @@ def live_mjpg():
             def _drain_stderr(p):
                 try:
                     if p.stderr:
-                        for _ in iter(lambda: p.stderr.read(4096), b""):
-                            pass
+                        # read in chunks; split into lines and remember them
+                        while True:
+                            chunk = p.stderr.read(4096)
+                            if not chunk:
+                                break
+                            for ln in chunk.decode('utf-8', 'replace').splitlines():
+                                _live_last_stderr.append(ln.strip())
                 except Exception:
                     pass
                 finally:
