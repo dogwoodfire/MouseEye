@@ -157,6 +157,9 @@ def _read_schedules():
         pass
     return []
 
+def _status(self):
+        return _http_json(STATUS_URL) or {}
+
 # ----------------- Controller -----------------
 class UI:
     HOME, WZ_INT, WZ_HR, WZ_MIN, WZ_ENC, WZ_CONFIRM, SCHED_LIST = range(7)
@@ -164,7 +167,9 @@ class UI:
     def __init__(self):
         self.state = self.HOME
         self.menu_idx = 0
+        # remove hard-coded items here; we’ll build them dynamically in _render_home
         self.menu_items = ["Quick Start", "New Timelapse", "Schedules"]
+        self._home_items = self.menu_items[:]   # current, rendered list
 
         # wizard values
         self.wz_interval = 10
@@ -217,13 +222,19 @@ class UI:
 
     def ok(self):
         if self.state == self.HOME:
-            sel = self.menu_items[self.menu_idx]
-            if sel == "Quick Start":
+            # use the list actually rendered, not the static default
+            items = getattr(self, "_home_items", self.menu_items)
+            sel = items[self.menu_idx]
+
+            if sel.startswith("⏹ Stop Capture"):
+                self.stop_capture()
+            elif sel == "Quick Start":
                 self.quick_start()
             elif sel == "New Timelapse":
                 self.start_wizard()
             elif sel == "Schedules":
                 self.open_schedules()
+            return
         elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
             # advance through wizard
             self.state += 1
@@ -257,7 +268,15 @@ class UI:
         self.step        = 1
         self.state = self.WZ_INT
         self.render()
-
+    def stop_capture(self):
+        _draw_center("Stopping…")
+        ok = _http_post_form(STOP_URL, {})
+        _draw_center("Stopped" if ok else "Failed")
+        time.sleep(0.6)
+        # after stopping, return to home and re-render
+        self.state = self.HOME
+        self.menu_idx = 0
+        self.render(
     def start_now_via_schedule(self):
         # Use /schedule/arm so auto_encode can run when the duration ends.
         # We set start_local to "now" rounded to minute.
@@ -328,18 +347,26 @@ class UI:
             pass
 
     def _render_home(self):
-        # top line = system status (optional)
-        st = _http_json(STATUS_URL) or {}
+        st = self._status()
         status = "Idle"
-        if st.get("encoding"): status="Encoding"
-        elif st.get("active"): status="Capturing"
+        if st.get("encoding"): status = "Encoding"
+        elif st.get("active"): status = "Capturing"
 
-        lines = self.menu_items[:]
-        _draw_lines(lines, title=f"{status}", highlight=self.menu_idx, footer="↑/↓, ✓ select", hints=True)
+        # Build the visible menu dynamically
+        items = []
+        if st.get("active"):
+            items.append("⏹ Stop Capture")  # new conditional item
+        items += ["Quick Start", "New Timelapse", "Schedules"]
 
-    def _render_wz(self, title, value):
-        lines = [title, f"> {value}", "", "✓ to continue"]
-        _draw_lines(lines, title="New Timelapse", highlight=1, footer="JS: +/-  Left/Right: step", hints=True)
+        # keep a copy so ok() acts on exactly what’s shown
+        self._home_items = items
+
+        # clamp selection in case the item count changed since last render
+        if self.menu_idx >= len(items):
+            self.menu_idx = max(0, len(items) - 1)
+
+        _draw_lines(items, title=f"{status}", highlight=self.menu_idx,
+                    footer="↑/↓ to move, ✓ to select", hints=True)
 
 # ----------------- main loop -----------------
 def main():
