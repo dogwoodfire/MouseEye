@@ -22,14 +22,14 @@ def make(serial, **kw):
 serial = spi(port=0, device=0, gpio_DC=25, gpio_RST=27, bus_speed_hz=8000000)
 
 combos = [
-    dict(rotation=0,   offset_left=0, offset_top=0,  bgr=True,  invert=False),
-    dict(rotation=0,   offset_left=2, offset_top=3,  bgr=True,  invert=False),
-    dict(rotation=0,   offset_left=2, offset_top=3,  bgr=True,  invert=True),
-    dict(rotation=0,   offset_left=2, offset_top=1,  bgr=True,  invert=False),
-    dict(rotation=90,  offset_left=2, offset_top=3,  bgr=True,  invert=False),
-    dict(rotation=180, offset_left=2, offset_top=3,  bgr=True,  invert=False),
-    dict(rotation=270, offset_left=2, offset_top=3,  bgr=True,  invert=False),
-    dict(rotation=0,   offset_left=2, offset_top=3,  bgr=False, invert=False),
+    dict(rotation=0,   h_offset=0, v_offset=0,  bgr=True,  invert=False),
+    dict(rotation=0,   h_offset=2, v_offset=3,  bgr=True,  invert=False),
+    dict(rotation=0,   h_offset=2, v_offset=3,  bgr=True,  invert=True),
+    dict(rotation=0,   h_offset=2, v_offset=1,  bgr=True,  invert=False),
+    dict(rotation=90,  h_offset=2, v_offset=3,  bgr=True,  invert=False),
+    dict(rotation=180, h_offset=2, v_offset=3,  bgr=True,  invert=False),
+    dict(rotation=270, h_offset=2, v_offset=3,  bgr=True,  invert=False),
+    dict(rotation=0,   h_offset=2, v_offset=3,  bgr=False, invert=False),
 ]
 
 i = 0
