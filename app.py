@@ -855,7 +855,38 @@ def live_page():
                 };
                 setTimeout(tick, 100);
               }
-            msgEl.textContent = 'Camera didn’t start.';
+                          if (!imgEl.src) {
+                msgEl.style.display = 'flex';
+                msgEl.textContent = 'Connecting to camera…';
+                imgEl.src = LIVE_URL;
+
+                // Wait for first frame; if none after ~3s, show a short reason
+                if (!imgEl._firstFrameWatcher) {
+                  imgEl._firstFrameWatcher = true;
+                  let tries = 0;
+                  const waitForFirst = () => {
+                    if (imgEl.naturalWidth > 0) {
+                      msgEl.style.display = 'none';
+                      return;
+                    }
+                    if (++tries < 30) return setTimeout(waitForFirst, 100); // up to ~3s
+                    // Still no frame — show a clean message (no raw stderr)
+                    (async () => {
+                      try {
+                        const d = await fetch(DIAG_URL, { cache: 'no-store' }).then(x => x.json());
+                        if (d && d.probe && d.probe.ok === false) {
+                          msgEl.textContent = `Camera didn’t start. ${d.probe.reason || ''}`;
+                        } else {
+                          msgEl.textContent = 'Camera didn’t start.';
+                        }
+                      } catch {
+                        msgEl.textContent = 'Camera didn’t start.';
+                      }
+                    })();
+                  };
+                  setTimeout(waitForFirst, 100);
+                }
+              }
             }
           }else{
             msgEl.style.display='flex';
