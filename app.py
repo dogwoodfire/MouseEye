@@ -128,7 +128,7 @@ _start_encode_worker_once()
 
 # ---- priming the live camera ----
 _camera_warmed = False
-WARMUP_MS = 300  # short, just to init pipeline
+WARMUP_MS = 1000  # short, just to init pipeline
 
 def _warmup_camera():
     global _camera_warmed
@@ -771,7 +771,7 @@ def live_mjpg():
                           + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n")
 
                 # watchdog: no first frame within 2s? restart once
-                if not first_frame_seen and not retried and (time.time() - start_ts) > 2.0:
+                if not first_frame_seen and not retried and (time.time() - start_ts) > 5.0:
                     retried = True
                     # restart process quickly
                     _stop_live_proc()
@@ -817,13 +817,15 @@ def live_diag():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=2.0
+            timeout=5.0   # was 2.0
         )
         ok = (p.returncode == 0)
         err = p.stderr or ""
+    except subprocess.TimeoutExpired:
+        # Friendlier reason — don't echo the whole command line
+        return jsonify({"probe": {"ok": False, "bin": vid_bin, "reason": "Camera init exceeded 5s (slow startup)."}})
     except Exception as e:
-        ok = False
-        err = str(e)
+        return jsonify({"probe": {"ok": False, "bin": vid_bin, "reason": str(e)}})
 
     # strip ANSI escape codes
     err = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", err)
@@ -890,8 +892,7 @@ def live_page():
             return;
           }
           // Keep waiting up to ~3s
-          if (++tries < 30) {
-            return setTimeout(wait, 100);
+          if (++tries < 70) return setTimeout(wait, 100);
           }
           // No frame: retry once by reconnecting the MJPEG stream
           if (!triedRetry) {
