@@ -134,7 +134,7 @@ def draw_screen(state):
             except Exception:
                 drw.text((2, 22), "next: --", font=FONT_SMALL, fill=WHITE)
         else:
-            drw.text((2, 22), "no schedules", font=FONT_SMALL, fill=WHITE)
+            drw.text((2, 22), "no schedules baby", font=FONT_SMALL, fill=WHITE)
 
     # Disk meter (bottom)
     disk = state.get("disk", {})
