@@ -194,6 +194,23 @@ def _timestamped_session():
 def _any_encoding_active():
     return any(v.get("status") in ("queued", "encoding") for v in _jobs.values())
 
+_schedules = {}        # {sid: {...state...}}
+_sched_timers = {}     # {sid: {'start': Timer|None, 'stop': Timer|None}}
+
+def _cancel_schedule_locked(sid: str):
+    """Assumes _sched_lock is held."""
+    timers = _sched_timers.pop(sid, {})
+    for t in timers.values():
+        try:
+            t and t.cancel()
+        except Exception:
+            pass
+    _schedules.pop(sid, None)
+    try:
+        _save_schedules()     # or your existing persistence function
+    except Exception:
+        pass
+
 # ---- Live viewfinder ----
 LIVE_PROC = None
 LIVE_LOCK = threading.Lock()
@@ -698,6 +715,21 @@ def encode(sess):
     _jobs[sess] = {"status":"queued","progress":0}
     _encode_q.put((sess, fps))
     return redirect(url_for("index"))
+
+@app.post("/schedule/cancel/<sid>")
+def schedule_cancel_one(sid):
+    with _sched_lock:
+        if sid in _schedules:
+            _cancel_schedule_locked(sid)
+    return redirect(url_for("schedule_page"))
+
+@app.post("/schedule/cancel")
+def schedule_cancel_compat():
+    with _sched_lock:
+        ids = list(_schedules.keys())
+        for sid in ids:
+            _cancel_schedule_locked(sid)
+    return redirect(url_for("schedule_page"))
 
 @app.get("/jobs")
 def jobs():
@@ -1761,6 +1793,7 @@ SCHED_TPL = '''<!doctype html>
   <label>Session name (optional)</label>
   <input type="text" name="sess_name" placeholder="(auto)">
   <button type="submit">Create Schedule</button>
+  <a class="link" href="{{ url_for('index') }}">Back</a>
 </form>
 
 <h2>Existing schedules</h2>
@@ -1776,9 +1809,8 @@ SCHED_TPL = '''<!doctype html>
     <div><b>End:</b>   {{ sc.end_h }}</div>
     <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
     <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
-    <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Cancel this schedule?')">
+    <form class="row" method="post" action="{{ url_for('schedule_cancel_one', sid=sid) }}" onsubmit="return confirm('Cancel this schedule?')">
       <button class="danger" type="submit">Cancel</button>
-      <a class="link" href="{{ url_for('index') }}">Back</a>
     </form>
   </div>
   {% endfor %}
