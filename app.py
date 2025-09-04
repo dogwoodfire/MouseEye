@@ -797,9 +797,7 @@ def live_mjpg():
     def gen():
         _trace("GEN start")
         buf = b""
-        # Safari/iOS: send a small preamble immediately so it doesn’t give up
-        yield (b"--frame\r\nContent-Type: text/plain\r\n\r\nstarting\r\n")
-
+        # 🚫 remove the text preamble, start with JPEG frames only
         try:
             while True:
                 if not _idle_now():
@@ -809,24 +807,20 @@ def live_mjpg():
 
                 chunk = proc.stdout.read(4096)
                 if not chunk:
-                    # EOF
                     break
 
                 buf += chunk
                 while True:
                     soi = buf.find(b"\xff\xd8")
-                    if soi == -1:
-                        break
+                    if soi == -1: break
                     eoi = buf.find(b"\xff\xd9", soi + 2)
-                    if eoi == -1:
-                        break
-                    frame = buf[soi:eoi + 2]
-                    buf = buf[eoi + 2:]
-
+                    if eoi == -1: break
+                    frame = buf[soi:eoi+2]
+                    buf = buf[eoi+2:]
                     yield (b"--frame\r\n"
-                           b"Content-Type: image/jpeg\r\n"
-                           b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
-                           + frame + b"\r\n")
+                          b"Content-Type: image/jpeg\r\n"
+                          b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
+                          + frame + b"\r\n")
         finally:
             cleanup()
 
