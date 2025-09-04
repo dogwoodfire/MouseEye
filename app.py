@@ -81,12 +81,16 @@ def _start_encode_worker_once():
                 if shutil.which("ionice"): prio += ["ionice", "-c3"]
                 if shutil.which("nice"):   prio += ["nice", "-n", "19"]
 
+                # ...after computing sess_dir, out, fps...
                 cmd = prio + [
                     FFMPEG, "-y",
-                    "-framerate", str(fps),
-                    "-i", os.path.join(sess_dir, "%06d.jpg"),
-                    "-vf", f"scale={CAPTURE_WIDTH}:{CAPTURE_HEIGHT}",
+                    "-framerate", str(fps),                          # input rate
+                    "-pattern_type", "glob",                         # read by glob, not %d
+                    "-i", os.path.join(sess_dir, "*.jpg"),
+                    "-vf", f"scale={CAPTURE_WIDTH}:{CAPTURE_HEIGHT},fps={fps}",  # lock exact fps
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                     "-pix_fmt", "yuv420p",
+                    "-r", str(fps),                                  # output rate (belt & braces)
                     out
                 ]
 
@@ -271,53 +275,56 @@ def _arm_timers_from_state():
 # ---------- Capture thread ----------
 def _capture_loop(sess_dir, interval):
     global _stop_event, _last_frame_ts
-    i = 0
-    timeout_s = 3
+    # start from the last existing frame index
+    existing = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
+    i = int(os.path.splitext(os.path.basename(existing[-1]))[0]) if existing else 0
+
+    timeout_s = max(2, min(5, int(interval)))  # a little more tolerant
     thumbs_dir = os.path.join(sess_dir, "thumbs")
     os.makedirs(thumbs_dir, exist_ok=True)
 
-    # shoot immediately, then every interval seconds on-the-second
-    next_due = time.time()
-
     while not _stop_event.is_set():
-        now = time.time()
-        if now < next_due - 0.01:
-            time.sleep(min(0.05, next_due - now))
-            continue
-
-        i += 1
-        jpg = os.path.join(sess_dir, f"{i:06d}.jpg")
+        target_idx = i + 1
+        jpg = os.path.join(sess_dir, f"{target_idx:06d}.jpg")
         cmd = [
             CAMERA_STILL, "-o", jpg,
             "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
-            "--quality", CAPTURE_QUALITY, "--immediate", "--nopreview"
+            "--quality", CAPTURE_QUALITY,
+            "--immediate", "--nopreview"
         ]
         try:
-            subprocess.run(cmd, check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=timeout_s)
+            subprocess.run(
+                cmd, check=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=timeout_s
+            )
+            # only now advance the counter (no gaps)
+            i = target_idx
             _last_frame_ts = time.time()
 
-            # make a small thumb only every 3rd frame to reduce load
-            if i % 3 == 1:
-                try:
-                    _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
-                except Exception:
-                    pass
+            # make/update thumbnail (non-fatal)
+            try:
+                _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
+            except Exception:
+                pass
 
         except subprocess.TimeoutExpired:
-            # skip; camera took too long
-            pass
+            # camera stalled — skip quickly; do NOT increment i
+            time.sleep(0.5)
         except Exception:
-            # transient failure; keep schedule
-            pass
-        finally:
-            # schedule next tick strictly
-            step = max(1, int(interval))
-            next_due += step
-            # if we fell behind by more than one tick, catch up
-            while next_due < time.time() - 0.05:
-                next_due += step
+            # transient failure — short backoff; do NOT increment i
+            time.sleep(min(2, interval))
+
+        # sleep between frames but allow early stop
+        sleep_left = float(interval)
+        step = 0.1
+        while sleep_left > 0 and not _stop_event.is_set():
+            # soft watchdog: if no good frame for > 3*interval, break early
+            if _last_frame_ts and (time.time() - _last_frame_ts) > (3 * interval):
+                break
+            t = min(step, sleep_left)
+            time.sleep(t)
+            sleep_left -= t
 
 # ---------- Stop helper (idempotent) ----------
 # def stop_timelapse():
