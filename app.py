@@ -694,6 +694,7 @@ def live_debug():
 
 @app.get("/live.mjpg")
 def live_mjpg():
+    _trace("ENTER /live.mjpg")
     # Only stream when idle, otherwise 503
     if not _idle_now():
         abort(503, "Busy")
@@ -737,6 +738,7 @@ def live_mjpg():
             env = dict(os.environ)
             env.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")
             env.setdefault("RPI_LOG_LEVEL", "error")
+            _trace("SPAWN camera proc")
             LIVE_PROC = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -745,6 +747,7 @@ def live_mjpg():
                 env=env,
                 start_new_session=True,
             )
+            _trace(f"SPAWNED pid={LIVE_PROC.pid if LIVE_PROC else 'None'}")
             # Drain stderr so it never blocks
             def _drain_stderr(p):
                 try:
@@ -765,7 +768,11 @@ def live_mjpg():
                         pass
             threading.Thread(target=_drain_stderr, args=(LIVE_PROC,), daemon=True).start()
     boundary = b"--frame"
-
+    def _trace(msg):
+        try:
+            _live_last_stderr.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
+        except Exception:
+            pass
     def cleanup_proc():
         global LIVE_PROC
         with LIVE_LOCK:
@@ -774,6 +781,7 @@ def live_mjpg():
         if not proc:
             return
         try:
+            _trace("CLEANUP proc")
             proc.terminate()
             try:
                 proc.wait(timeout=1.0)
@@ -789,6 +797,7 @@ def live_mjpg():
             pass
 
     def gen():
+        _trace("GEN start")
         buf = b""
         first_frame_seen = False
         retried = False
