@@ -23,6 +23,10 @@ CAPTURE_QUALITY = "90"
 FPS_CHOICES = [10, 24, 30]
 DEFAULT_FPS = 24
 
+# thumbnails (off by default; we serve full frames on index)
+GENERATE_THUMBS = False
+THUMB_WIDTH = 320  # only used if GENERATE_THUMBS = True
+
 # ---------- Globals ----------
 app = Flask(__name__)
 app.jinja_env.globals.update(datetime=datetime)
@@ -280,8 +284,6 @@ def _capture_loop(sess_dir, interval):
     i = int(os.path.splitext(os.path.basename(existing[-1]))[0]) if existing else 0
 
     timeout_s = max(2, min(5, int(interval)))  # a little more tolerant
-    thumbs_dir = os.path.join(sess_dir, "thumbs")
-    os.makedirs(thumbs_dir, exist_ok=True)
 
     while not _stop_event.is_set():
         target_idx = i + 1
@@ -302,11 +304,13 @@ def _capture_loop(sess_dir, interval):
             i = target_idx
             _last_frame_ts = time.time()
 
-            # make/update thumbnail (non-fatal)
-            try:
-                _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
-            except Exception:
-                pass
+            if GENERATE_THUMBS:
+                thumbs_dir = os.path.join(sess_dir, "thumbs")
+                os.makedirs(thumbs_dir, exist_ok=True)
+                try:
+                    _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
+                except Exception:
+                    pass
 
         except subprocess.TimeoutExpired:
             # camera stalled — skip quickly; do NOT increment i
@@ -556,8 +560,11 @@ def preview(sess):
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
-    tpath = _thumb_for(p, jpg)
-    path_to_send = tpath if os.path.exists(tpath) else jpg
+    if GENERATE_THUMBS:
+        tpath = _thumb_for(p, jpg)
+        path_to_send = tpath if os.path.exists(tpath) else jpg
+    else:
+        path_to_send = jpg
     resp = send_file(path_to_send, conditional=False)
     resp.headers["Cache-Control"] = "no-store"
     return resp
@@ -751,32 +758,43 @@ def live_mjpg():
     }
     return app.response_class(gen(), headers=headers)
 
+import re
+
 @app.get("/live_diag")
 def live_diag():
-    # Only attempt if idle
-    ok_idle = _idle_now()
-    if not ok_idle:
-        return jsonify({"idle": False, "probe": None})
-
     vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
     if not vid_bin:
-        return jsonify({"idle": True, "probe": {"ok": False, "bin": None, "err": "no rpicam-vid/libcamera-vid"}})
-
-    # Try both headless flags depending on binary
-    base = [vid_bin, "--codec", "mjpeg", "--framerate", "8", "--width", "640", "--height", "480", "-t", "2000", "-o", "-", "--inline"]
-    if os.path.basename(vid_bin) == "libcamera-vid":
-        cmd = base[:1] + ["-n"] + base[1:]
-    else:
-        cmd = base + ["--nopreview"]
+        return jsonify({"probe": {"ok": False, "bin": None, "reason": "No rpicam-vid/libcamera-vid installed"}})
 
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=5)
-        ok = (proc.returncode == 0)
-        return jsonify({"idle": True, "probe": {"ok": ok, "bin": vid_bin, "err": (proc.stderr or b"").decode(errors="replace")}})
-    except subprocess.TimeoutExpired:
-        return jsonify({"idle": True, "probe": {"ok": False, "bin": vid_bin, "err": "timeout"}})
+        p = subprocess.run(
+            [vid_bin, "--codec", "mjpeg", "-t", "100", "-o", "-"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=2.0
+        )
+        ok = (p.returncode == 0)
+        err = p.stderr or ""
     except Exception as e:
-        return jsonify({"idle": True, "probe": {"ok": False, "bin": vid_bin, "err": str(e)}})
+        ok = False
+        err = str(e)
+
+    # strip ANSI escape codes
+    err = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", err)
+
+    # pick a short, helpful line if we can
+    lines = [ln.strip() for ln in err.splitlines() if ln.strip()]
+    reason = ""
+    for ln in lines:
+        low = ln.lower()
+        if "failed to acquire camera" in low or "busy" in low or "in use" in low:
+            reason = ln
+            break
+    if not reason and lines:
+        reason = lines[-1]
+
+    return jsonify({"probe": {"ok": ok, "bin": vid_bin, "reason": reason}})
 
 @app.get("/live")
 def live_page():
@@ -837,17 +855,7 @@ def live_page():
                 };
                 setTimeout(tick, 100);
               }
-              // After ~2.5s, if still no image, show reason
-              setTimeout(async ()=>{
-                if (msgEl.style.display !== 'none') {
-                  try {
-                    const d = await fetch(DIAG_URL, {cache:'no-store'}).then(x=>x.json());
-                    if (d && d.probe && d.probe.ok === false) {
-                      msgEl.textContent = `Camera didn’t start (${d.probe.bin || 'no-bin'}): ${d.probe.err || 'unknown'}`;
-                    }
-                  } catch(_) {}
-                }
-              }, 2500);
+            msgEl.textContent = 'Camera didn’t start.';
             }
           }else{
             msgEl.style.display='flex';
