@@ -749,11 +749,20 @@ def live_mjpg():
             def _drain_stderr(p):
                 try:
                     if p.stderr:
-                        for _ in iter(lambda: p.stderr.read(4096), b""):
-                            pass
+                        for raw in iter(lambda: p.stderr.readline(), b""):
+                            try:
+                                line = raw.decode("utf-8", "ignore").strip()
+                            except Exception:
+                                line = ""
+                            if line:
+                                _live_last_stderr.append(line)
+                except Exception:
+                    pass
                 finally:
-                    try: p.stderr and p.stderr.close()
-                    except: pass
+                    try:
+                        p.stderr and p.stderr.close()
+                    except Exception:
+                        pass
             threading.Thread(target=_drain_stderr, args=(LIVE_PROC,), daemon=True).start()
     boundary = b"--frame"
 
@@ -786,7 +795,7 @@ def live_mjpg():
         start_ts = time.time()
 
         # Send a tiny preamble so iOS/Safari doesn’t give up early
-        yield (b"--frame\r\nContent-Type: text/plain\r\n\r\nstarting\r\n")
+        # yield (b"--frame\r\nContent-Type: text/plain\r\n\r\nstarting\r\n")
 
         def spawn_fallback():
             nonlocal retried, buf, start_ts
