@@ -723,10 +723,17 @@ def live_mjpg():
                 "--codec", "mjpeg",
                 "--width", str(CAPTURE_WIDTH),
                 "--height", str(CAPTURE_HEIGHT),
-                "-t", "0",           # run forever
-                "-o", "-",           # write MJPEG to stdout
+                "-t", "0",              # run forever
+                "-o", "-",              # write MJPEG to stdout
                 "--inline",
             ]
+
+            # Disable on-screen preview for both variants
+            base = os.path.basename(vid_bin)
+            if base.startswith("libcamera-"):
+                cmd.insert(1, "-n")             # libcamera-vid
+            else:
+                cmd.insert(1, "--nopreview")    # rpicam-vid
             if os.path.basename(vid_bin) == "libcamera-vid":
                 # disable on-screen preview for libcamera-vid
                 cmd.insert(1, "-n")
@@ -796,6 +803,10 @@ def live_mjpg():
         first_frame_seen = False
         retried = False
         start_ts = time.time()
+        # Flush a harmless first part so clients don't time out before first JPEG
+        yield (b"--frame\r\n"
+              b"Content-Type: text/plain\r\n\r\n"
+              b"starting\r\n")
         try:
             while True:
                 if not _idle_now():
@@ -893,13 +904,11 @@ def live_diag():
 
     return jsonify({"probe": {"ok": ok, "bin": vid_bin, "reason": reason}})
 
-
-@app.post("/live_kill")
+@app.route("/live_kill", methods=["GET","POST"])
 def live_kill():
     _stop_live_proc()
-    _force_release_camera()
+    _force_release_camera()   # from the previous step I gave you
     return ("", 204)
-
 
 @app.get("/live")
 def live_page():
