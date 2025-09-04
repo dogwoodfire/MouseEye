@@ -912,29 +912,31 @@ def live_page():
 </header>
 <main>
   <div class="wrap">
-  <div id="msg" class="msg show">Loading camera…</div>
-  <img id="live-img" src="{{ url_for('live_mjpg') }}?t={{ int(time.time()) }}" alt="live view" decoding="async">
-</div>
-  <script>
-    const img = document.getElementById('live-img');
-    const msg = document.getElementById('msg');
+    <div id="msg" class="msg show">Loading camera…</div>
+    <!-- cache-buster uses Jinja filter, not Python int() -->
+    <img id="live-img" src="{{ url_for('live_mjpg') }}?t={{ (time.time()*1000)|int }}" alt="live view" decoding="async">
+  </div>
+</main>
+<script>
+  const img = document.getElementById('live-img');
+  const msg = document.getElementById('msg');
 
-    // Hide the message once the browser has decoded any frame
-    let checks = 0;
-    const tick = () => {
-      if (img.naturalWidth > 0) {
-        msg.classList.remove('show');
-        return;
-      }
-      if (++checks < 100) setTimeout(tick, 100); // ~10s max
-    };
-    tick();
+  // Hide the message once the browser has decoded any frame
+  let checks = 0;
+  const tick = () => {
+    if (img.naturalWidth > 0) {
+      msg.classList.remove('show');
+      return;
+    }
+    if (++checks < 100) setTimeout(tick, 100); // ~10s max
+  };
+  tick();
 
-    img.addEventListener('error', () => {
-      msg.textContent = 'Could not connect to camera stream.';
-      msg.classList.add('show');
-    });
-  </script>
+  img.addEventListener('error', () => {
+    msg.textContent = 'Could not connect to camera stream.';
+    msg.classList.add('show');
+  });
+</script>
     """, time=time)
 
 # ---------- Template (single file) ----------
