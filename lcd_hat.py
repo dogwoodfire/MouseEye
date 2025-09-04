@@ -83,6 +83,7 @@ def _font(sz):
 F_TITLE  = _font(14)
 F_TEXT   = _font(12)
 F_SMALL  = _font(10)
+F_VALUE = _font(18)   # for the big centered value on wizard pages
 
 WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120); YELL=(255,210,80); BLUE=(90,160,220)
@@ -123,6 +124,37 @@ def _draw_center(msg, sub=None):
     if sub:
         sw = F_SMALL.getlength(sub)
         drw.text(((w-sw)//2, 64), sub, font=F_SMALL, fill=GRAY)
+    device.display(img)
+
+def _draw_wizard_page(title, value, tips=None, footer=None, step=None):
+    """Compact wizard layout for the 128x128 screen."""
+    img = Image.new("RGB", (device.width, device.height), (0,0,0))
+    drw = ImageDraw.Draw(img)
+
+    # Title
+    drw.text((2, 2), title, font=F_TITLE, fill=WHITE)
+
+    # Optional step indicator (top-right), e.g. ×10
+    if step is not None:
+        step_str = f"×{step}"
+        sw = F_SMALL.getlength(step_str)
+        drw.text((WIDTH - 2 - sw, 2), step_str, font=F_SMALL, fill=GRAY)
+
+    # Big centered value
+    val_str = str(value)
+    tw = F_VALUE.getlength(val_str)
+    drw.text(((WIDTH - tw)//2, 40), val_str, font=F_VALUE, fill=CYAN)
+
+    # Tips block near bottom
+    y = 80
+    for line in (tips or []):
+        drw.text((2, y), line, font=F_SMALL, fill=GRAY)
+        y += 12
+
+    # Optional footer at very bottom
+    if footer:
+        drw.text((2, HEIGHT - 12), footer, font=F_SMALL, fill=GRAY)
+
     device.display(img)
 
 # ----------------- HTTP helpers -----------------
@@ -317,9 +349,15 @@ class UI:
             elif self.state == self.WZ_ENC:
                 self._render_wz("Auto-encode", "Yes" if self.wz_encode else "No")
             elif self.state == self.WZ_CONFIRM:
-                summ = f"{self.wz_interval}s • {self.wz_hours}h{self.wz_mins:02d}m • {'AE' if self.wz_encode else 'no AE'}"
-                _draw_lines(["Press ✓ to start now via Schedule"],
-                            title="Confirm", footer=summ, hints=True)
+                total = self.wz_hours * 60 + self.wz_mins
+                summ  = f"{self.wz_interval}s • {self.wz_hours}h{self.wz_mins:02d}m • {'AE' if self.wz_encode else 'no AE'}"
+                _draw_lines(
+                    ["Press ✓ to start now", summ],
+                    title="Confirm",
+                    footer=None,
+                    highlight=-1,
+                    hints=False  # avoid right-side glyphs on small screen
+                )
             elif self.state == self.SCHED_LIST:
                 sch = _read_schedules()
                 lines = ["➕ New Schedule"]
@@ -359,12 +397,21 @@ class UI:
                     footer="↑/↓ to move, ✓ to select", hints=True)
 
     def _render_wz(self, title, value):
-        _draw_lines(
-            ["Use ↑/↓ to change", "← step=1, → step=10", "✓ to continue"],
-            title=f"{title}: {value}",
-            footer="Wizard",
-            hints=True
-        )
+        # default tips; tweak per step below
+        tips = ["↑/↓ change, ✓ next", "← step=1, → step=10"]
+        step = self.step
+
+        if self.state == self.WZ_INT:
+            _draw_wizard_page("Interval (s)", f"{self.wz_interval}", tips=tips, step=step)
+        elif self.state == self.WZ_HR:
+            _draw_wizard_page("Duration hours", f"{self.wz_hours}", tips=tips, step=step)
+        elif self.state == self.WZ_MIN:
+            # minutes limited 0–59 — keep the value 2-digit for clarity
+            _draw_wizard_page("Duration mins", f"{self.wz_mins:02d}", tips=tips, step=step)
+        elif self.state == self.WZ_ENC:
+            # toggle, so no step indicator and simpler tips
+            _draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
+                            tips=["↑/↓ toggle, ✓ next"], step=None)
 
 # ----------------- main loop -----------------
 def main():
