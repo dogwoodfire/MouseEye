@@ -919,15 +919,14 @@ def live_page():
 <main>
   <div class="wrap">
     <div id="msg" class="msg">Could not connect to camera stream.</div>
-    <!-- One request. No polling. Add a cache-buster once so the browser doesn’t reuse a stale connection. -->
-    <img id="live-img" src="{{ url_for('live_mjpg') }}?t={{ int(time.time()) }}" alt="live view">
+    <!-- one request; no polling -->
+    <img id="live-img" src="{{ url_for('live_mjpg') }}?t={{ time.time()|int }}" alt="live view">
   </div>
 </main>
 <script>
-  // Optional: show a friendly message if the single request errors out.
   const img = document.getElementById('live-img');
   const msg = document.getElementById('msg');
-  img.addEventListener('error', () => { msg.classList.add('show'); });
+  img.addEventListener('error', () => msg.classList.add('show'));
 </script>
     """, time=time)
 
