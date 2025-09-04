@@ -2,6 +2,7 @@
 PI_HOST ?= pi@pi-tl
 PI_DIR  ?= /home/pi/timelapse
 SERVICE ?= timelapse.service
+SERVICE_SUB ?= timelapse-lcd.service
 BRANCH  ?= main
 
 # Commit message (override: make deploy MSG="your message")
@@ -29,8 +30,8 @@ pi-pull:
 	ssh $(PI_HOST) 'set -e; cd $(PI_DIR) && git fetch --all && git checkout $(BRANCH) && git pull --ff-only'
 
 pi-restart:
-	$(call yellow,"[pi] Restarting $(SERVICE)…")
-	ssh $(PI_HOST) 'sudo systemctl restart $(SERVICE)'
+	$(call yellow,"[pi] Restarting $(SERVICE) and $(SERVICE_SUB)…")
+	ssh $(PI_HOST) 'sudo systemctl restart $(SERVICE) $(SERVICE_SUB)'
 
 pi-status:
 	$(call yellow,"[pi] Status of $(SERVICE)…")
