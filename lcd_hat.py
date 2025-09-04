@@ -214,10 +214,12 @@ class UI:
 
     # input binding → call small handlers
     def _bind_inputs(self):
-        if btn_up:   btn_up.when_pressed   = lambda: self.nav(-1)
-        if btn_down: btn_down.when_pressed = lambda: self.nav(+1)
+    # MENUS / WIZARD via side keys
+        if btn_up:   btn_up.when_pressed   = lambda: self.nav(+1)   # was -1
+        if btn_down: btn_down.when_pressed = lambda: self.nav(-1)   # was +1
         if btn_ok:   btn_ok.when_pressed   = self.ok
 
+        # Joystick direct value changes (already correct)
         if js_up:    js_up.when_pressed    = lambda: self.adjust(+1)
         if js_down:  js_down.when_pressed  = lambda: self.adjust(-1)
         if js_left:  js_left.when_pressed  = self.step_small
@@ -336,6 +338,21 @@ class UI:
         self.render()
 
     # ---------- render ----------
+
+    def _draw_confirm(interval_s, h, m, auto_encode):
+        lines = [
+            f"Interval: {interval_s}s",
+            f"Duration: {h}h{m:02d}m",
+            f"Auto-encode: {'Yes' if auto_encode else 'No'}",
+        ]
+        _draw_lines(
+            lines,
+            title="Confirm",
+            footer="Press ✓ to start",
+            highlight=-1,
+            hints=False  # no right-side glyphs here
+        )
+        
     def render(self):
         try:
             if self.state == self.HOME:
@@ -349,15 +366,7 @@ class UI:
             elif self.state == self.WZ_ENC:
                 self._render_wz("Auto-encode", "Yes" if self.wz_encode else "No")
             elif self.state == self.WZ_CONFIRM:
-                total = self.wz_hours * 60 + self.wz_mins
-                summ  = f"{self.wz_interval}s • {self.wz_hours}h{self.wz_mins:02d}m • {'AE' if self.wz_encode else 'no AE'}"
-                _draw_lines(
-                    ["Press ✓ to start now", summ],
-                    title="Confirm",
-                    footer=None,
-                    highlight=-1,
-                    hints=False  # avoid right-side glyphs on small screen
-                )
+                _draw_confirm(self.wz_interval, self.wz_hours, self.wz_mins, self.wz_encode)
             elif self.state == self.SCHED_LIST:
                 sch = _read_schedules()
                 lines = ["➕ New Schedule"]
