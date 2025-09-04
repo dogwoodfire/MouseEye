@@ -27,7 +27,17 @@ DEFAULT_FPS = 24
 GENERATE_THUMBS = False
 THUMB_WIDTH = 320  # only used if GENERATE_THUMBS = True
 
+import atexit
+def _cleanup_all():
+    try: _stop_live_proc()
+    except: pass
+    try: stop_timelapse()
+    except: pass
+    _force_release_camera()
+atexit.register(_cleanup_all)
+
 # ---------- Globals ----------
+
 app = Flask(__name__)
 app.jinja_env.globals.update(datetime=datetime)
 
@@ -51,6 +61,15 @@ _stop_event = threading.Event()
 _capture_thread = None
 _current_session = None   # session name (string) while capturing
 _jobs = {}                # encode job progress by session
+
+_last_live_spawn = 0
+def _can_spawn_live(period=1.0):
+    global _last_live_spawn
+    now = time.time()
+    if now - _last_live_spawn < period:
+        return False
+    _last_live_spawn = now
+    return True
 
 # --- Encode queue/worker (back-pressure + low priority) ---
 import queue
@@ -563,8 +582,8 @@ def start():
         interval = CAPTURE_INTERVAL_SEC
 
     # refuse to start if low on disk
-    if not _enough_space(500):
-        abort(507)  # Insufficient Storage
+    if not _enough_space(50):
+        abort(507, "Low Storage")  # Insufficient Storage
 
     # optional duration for automatic stop
     hr_str = request.form.get("duration_hours", "0") or "0"
@@ -746,6 +765,55 @@ def download(sess):
     if not os.path.exists(p): abort(404)
     return send_file(p, as_attachment=True, download_name=f"{sess}.mp4")
 
+@app.get("/lcd_status")
+def lcd_status():
+    try:
+        active = bool(_current_session)
+        frames = 0
+        if _current_session:
+            sd = _session_path(_current_session)
+            if os.path.isdir(sd):
+                frames = len(glob.glob(os.path.join(sd, "*.jpg")))
+        remaining = None
+        if active and _capture_end_ts:
+            rem = int(_capture_end_ts - time.time())
+            if rem > 0: remaining = rem
+
+        nxt = _get_next_schedule()
+        next_sched = None
+        if nxt:
+            # keep it small & machine-friendly
+            # (use timestamps so the HAT can render human text itself)
+            # you already compute active_now; keep it.
+            # include id so a future LCD menu could cancel by id if wanted.
+            next_sched = {
+                "id": nxt["id"],
+                "start_ts": int(_schedules[nxt["id"]]["start_ts"]) if nxt["id"] in _schedules else None,
+                "end_ts":   int(_schedules[nxt["id"]]["end_ts"])   if nxt["id"] in _schedules else None,
+                "interval": nxt["interval"],
+                "fps": nxt["fps"],
+                "name": nxt.get("sess"),
+                "active_now": bool(nxt["active_now"]),
+                "auto_encode": bool(nxt["auto_encode"]),
+            }
+
+        return jsonify({
+            "active": active,
+            "session": _current_session or "",
+            "frames": frames,
+            "remaining_sec": remaining,     # null if not set
+            "encoding": _any_encoding_active(),
+            "disk": _disk_stats(),
+            "next_sched": next_sched,
+            "live_idle": _idle_now(),
+        })
+    except Exception:
+        # never crash the LCD
+        return jsonify({
+            "active": False, "session": "", "frames": 0,
+            "remaining_sec": None, "encoding": False,
+            "disk": _disk_stats(), "next_sched": None, "live_idle": True
+        })
 
 @app.get("/test_capture")
 def test_capture():
@@ -844,6 +912,7 @@ def live_mjpg():
     env.setdefault("RPI_LOG_LEVEL", "error")
 
     _trace("SPAWN camera proc")
+    if not _can_spawn_live(): abort(429)  # Too Many Requests
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         bufsize=0, env=env, start_new_session=True,
@@ -926,6 +995,7 @@ def live_mjpg():
     }
     return app.response_class(gen(), headers=headers)
 import re
+
 
 @app.get("/live_diag")
 def live_diag():
@@ -1765,7 +1835,7 @@ SCHED_TPL = '''<!doctype html>
   .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .muted{color:#6b7280}
   .danger{background:#ef4444;color:#fff;border:0}
-  .link{padding:8px 12px;background:#eee;border-radius:6px;text-decoration:none;color:#111}
+  .link{padding:8px 12px;background:#eee;border-radius:10px;text-decoration:none;color:#111}
   .full{width:100%}
 </style>
 
@@ -1793,7 +1863,7 @@ SCHED_TPL = '''<!doctype html>
   <label>Session name (optional)</label>
   <input type="text" name="sess_name" placeholder="(auto)">
   <button type="submit">Create Schedule</button>
-  <a class="link" href="{{ url_for('index') }}">Back</a>
+  <a class="link" href="{{ url_for('index') }}">← Back</a>
 </form>
 
 <h2>Existing schedules</h2>
@@ -1845,6 +1915,12 @@ def _sched_fire_stop(sess_name="", fps=24, auto_encode=False):
                     c.post(f'/encode/{sess_name}', data={'fps': fps})
                 except Exception:
                     pass
+
+@app.after_request
+def _no_store_for_diag(resp):
+    if request.path in ("/live_diag", "/live_status", "/live_debug"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 @app.get("/disk")
 def disk():
