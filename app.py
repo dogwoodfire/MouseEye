@@ -711,7 +711,7 @@ def live_mjpg():
         vid_bin = shutil.which("libcamera-vid") or shutil.which("rpicam-vid")
         if not vid_bin:
             abort(500, "No camera video binary found (libcamera-vid/rpicam-vid).")
-
+        _force_release_camera()
         _warmup_camera()
 
         def build_cmd(w, h, use_alt=False):
@@ -854,41 +854,56 @@ import re
 
 @app.get("/live_diag")
 def live_diag():
+    """
+    Non-invasive diagnostics for the /live page.
+    - If the preview process is running, DO NOT open the camera again.
+      Just report that it's already running.
+    - Only when no preview process is running do we try a short probe.
+    """
+    # Prefer rpicam-vid, then libcamera-vid
     vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
+
+    with LIVE_LOCK:
+        running = bool(LIVE_PROC and LIVE_PROC.poll() is None)
+
+    # If preview already running, don't grab the camera again.
+    if running:
+        return jsonify({"probe": {
+            "ok": False,
+            "bin": vid_bin,
+            "reason": "Preview already running — still connecting.",
+            "noninvasive": True
+        }})
+
+    # No preview running — do a quick, tolerant probe
     if not vid_bin:
-        return jsonify({"probe": {"ok": False, "bin": None, "reason": "No rpicam-vid/libcamera-vid installed"}})
+        return jsonify({"probe": {"ok": False, "bin": None,
+                                  "reason": "No rpicam-vid/libcamera-vid installed"}})
 
     try:
+        # Keep it short and quiet; add -n for libcamera-vid
+        cmd = [vid_bin, "--codec", "mjpeg", "-t", "200", "-o", "-"]
+        if os.path.basename(vid_bin) == "libcamera-vid":
+            cmd.insert(1, "-n")
         p = subprocess.run(
-            [vid_bin, "--codec", "mjpeg", "-t", "100", "-o", "-"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=5.0   # was 2.0
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            text=True, timeout=2.5
         )
         ok = (p.returncode == 0)
-        err = p.stderr or ""
+        err = (p.stderr or "").strip()
     except subprocess.TimeoutExpired:
-        # Friendlier reason — don't echo the whole command line
-        return jsonify({"probe": {"ok": False, "bin": vid_bin, "reason": "Camera init exceeded 5s (slow startup)."}})
+        return jsonify({"probe": {"ok": False, "bin": vid_bin,
+                                  "reason": "Camera init exceeded 2.5s (slow startup)."}})
     except Exception as e:
         return jsonify({"probe": {"ok": False, "bin": vid_bin, "reason": str(e)}})
 
-    # strip ANSI escape codes
-    err = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", err)
-
-    # pick a short, helpful line if we can
-    lines = [ln.strip() for ln in err.splitlines() if ln.strip()]
+    # Return last line as a compact reason
     reason = ""
-    for ln in lines:
-        low = ln.lower()
-        if "failed to acquire camera" in low or "busy" in low or "in use" in low:
-            reason = ln
-            break
-    if not reason and lines:
-        reason = lines[-1]
-
-    return jsonify({"probe": {"ok": ok, "bin": vid_bin, "reason": reason}})
+    if err:
+        lines = [ln.strip() for ln in err.splitlines() if ln.strip()]
+        if lines:
+            reason = lines[-1]
+    return jsonify({"probe": {"ok": ok, "bin": vid_bin, "reason": reason, "noninvasive": False}})
 
 @app.route("/live_kill", methods=["GET","POST"])
 def live_kill():
@@ -952,7 +967,7 @@ def live_page():
             tries = 0;
             imgEl.src = '';
             setTimeout(() => {
-              imgEl.src = LIVE_URL;
+              imgEl.src = LIVE_URL + '?t=' + Date.now();
               setTimeout(wait, 100);
             }, 300);
             return;
@@ -998,7 +1013,7 @@ def live_page():
               msgEl.style.display = 'flex';
               msgEl.textContent = 'Connecting to camera…';
               imgEl._ffwArmed = false;       // reset watcher state
-              imgEl.src = LIVE_URL;
+              imgEl.src = LIVE_URL + '?t=' + Date.now();
               armFirstFrameWatch();
             }
           } else {
