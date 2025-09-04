@@ -39,7 +39,7 @@ except Exception:
 # Try to open the device. If this fails, we quit silently (no HAT / SPI disabled).
 try:
     serial = spi(port=SPI_PORT, device=SPI_DEVICE, gpio_DC=PIN_DC, gpio_RST=PIN_RST, bus_speed_hz=8000000)
-    device = st7735(serial, width=WIDTH, height=HEIGHT, rotation=0, offset_left=2, offset_top=3, bgr=True, invert=True)  # set rotation if needed
+    device = st7735(serial, width=WIDTH, height=HEIGHT, rotation=0, offset_left=2, offset_top=3, bgr=False, invert=True)  # set rotation if needed
     # after constructing `device`
     device.clear()
     device.display(Image.new("RGB", (128,128), "black"))
