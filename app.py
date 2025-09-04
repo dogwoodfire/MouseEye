@@ -903,8 +903,8 @@ def live_page():
   .wrap{position:relative;max-width:1024px;margin:0 auto;background:#000;border-radius:8px;overflow:hidden}
   #live-img{width:100%;height:auto;display:block}
   a.btn{color:#111827;background:#f3f4f6;border:1px solid #374151;border-radius:8px;padding:8px 12px;text-decoration:none}
-  .msg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.35);font-size:14px}
-  .msg.show{display:flex}
+  .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);font-size:14px}
+  .msg.hidden{display:none}
 </style>
 <header>
   <a class="btn" href="{{ url_for('index') }}">← Back</a>
@@ -912,32 +912,50 @@ def live_page():
 </header>
 <main>
   <div class="wrap">
-    <div id="msg" class="msg show">Loading camera…</div>
-    <!-- cache-buster uses Jinja filter, not Python int() -->
-    <img id="live-img" src="{{ url_for('live_mjpg') }}?t={{ (time.time()*1000)|int }}" alt="live view" decoding="async">
+    <div id="msg" class="msg">Loading camera…</div>
+    <!-- Note: no src initially; we set it from JS after the page is shown -->
+    <img id="live-img" alt="live view" decoding="async">
   </div>
 </main>
 <script>
   const img = document.getElementById('live-img');
   const msg = document.getElementById('msg');
+  const STREAM_URL = "{{ url_for('live_mjpg') }}";
 
-  // Hide the message once the browser has decoded any frame
-  let checks = 0;
-  const tick = () => {
+  // Hide message once a frame has definitely arrived
+  function hideWhenReady() {
     if (img.naturalWidth > 0) {
-      msg.classList.remove('show');
-      return;
+      msg.classList.add('hidden');
+      return true;
     }
-    if (++checks < 100) setTimeout(tick, 100); // ~10s max
-  };
-  tick();
+    return false;
+  }
 
+  // 1) Try the simple case: when the first frame decodes, many browsers fire 'load' once.
+  img.addEventListener('load', hideWhenReady);
+
+  // 2) Safety net: poll naturalWidth in case the 'load' event doesn't fire for MJPEG.
+  let tries = 0;
+  (function poll() {
+    if (hideWhenReady()) return;
+    if (tries++ < 150) setTimeout(poll, 100); // up to ~15s
+  })();
+
+  // 3) Error path
   img.addEventListener('error', () => {
     msg.textContent = 'Could not connect to camera stream.';
-    msg.classList.add('show');
+    msg.classList.remove('hidden');
+  });
+
+  // Defer starting the stream until after the page is painted.
+  // This avoids any “hang” on the previous page and ensures the overlay is visible first.
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      img.src = STREAM_URL + "?t=" + Date.now();
+    }, 50);
   });
 </script>
-    """, time=time)
+    """)
 
 # ---------- Template (single file) ----------
 TPL_INDEX = r"""
