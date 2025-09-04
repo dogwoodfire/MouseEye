@@ -200,6 +200,21 @@ LIVE_LOCK = threading.Lock()
 from collections import deque
 _live_last_stderr = deque(maxlen=120)  # keep the last ~120 lines from libcamera/rpicam-vid
 
+def _force_release_camera():
+    """
+    Best-effort: kill any leftover processes that hold the camera.
+    Safe to call right before spawning live preview.
+    """
+    names = ["rpicam-vid", "libcamera-vid", "rpicam-still", "libcamera-still"]
+    for nm in names:
+        try:
+            subprocess.run(["pkill", "-TERM", "-x", nm], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    # Give the kernel a moment to release /dev/media*/video* nodes
+    time.sleep(0.3)
+
 def _idle_now():
     return (_capture_thread is None or not _capture_thread.is_alive()) and not _any_encoding_active()
 
@@ -690,6 +705,17 @@ def live_mjpg():
         vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
         if not vid_bin:
             abort(500, "No camera video binary found (rpicam-vid/libcamera-vid).")
+        # If another process has the camera, try to free it once
+        try:
+            p = subprocess.run(
+                [vid_bin, "--codec", "mjpeg", "-t", "1", "-o", "-"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=1.5
+            )
+            if p.returncode != 0 and ("in use" in (p.stderr or "").lower() or "pipeline handler in use" in (p.stderr or "").lower()):
+                _force_release_camera()
+        except Exception:
+            # ignore; we'll try to spawn below anyway
+            pass
         _warmup_camera()
         if LIVE_PROC is None or LIVE_PROC.poll() is not None:
             cmd = [
@@ -866,6 +892,14 @@ def live_diag():
         reason = lines[-1]
 
     return jsonify({"probe": {"ok": ok, "bin": vid_bin, "reason": reason}})
+
+
+@app.post("/live_kill")
+def live_kill():
+    _stop_live_proc()
+    _force_release_camera()
+    return ("", 204)
+
 
 @app.get("/live")
 def live_page():
