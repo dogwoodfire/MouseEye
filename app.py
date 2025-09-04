@@ -756,11 +756,7 @@ def live_mjpg():
                         pass
             threading.Thread(target=_drain_stderr, args=(LIVE_PROC,), daemon=True).start()
     boundary = b"--frame"
-    def _trace(msg):
-        try:
-            _live_last_stderr.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
-        except Exception:
-            pass
+  
     def cleanup_proc():
         global LIVE_PROC
         with LIVE_LOCK:
