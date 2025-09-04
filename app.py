@@ -898,127 +898,38 @@ def live_kill():
 
 @app.get("/live")
 def live_page():
-    tpl = r"""
-    <!doctype html>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Live View</title>
-    <style>
-      body{margin:0;background:#0b0b0b;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-      header{display:flex;gap:10px;align-items:center;padding:10px;border-bottom:1px solid #222}
-      main{padding:10px}
-      .wrap{position:relative;max-width:1024px;margin:0 auto;background:#000;border-radius:8px;overflow:hidden}
-      #live-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);font-size:14px}
-      #live-img{width:100%;height:auto;display:block}
-      .row{display:flex;gap:10px;align-items:center}
-      a.btn{color:#111827;background:#f3f4f6;border:1px solid #374151;border-radius:8px;padding:8px 12px;text-decoration:none}
-    </style>
-    <header>
-      <a class="btn" href="{{ url_for('index') }}">← Back</a>
-      <h1 style="margin:0;font-size:16px">Viewfinder 📷</h1>
-    </header>
-    <main>
-      <div class="wrap">
-        <div id="live-msg">Connecting to camera…</div>
-        <img id="live-img" alt="live view">
-      </div>
-    </main>
-        <script>
-      const LIVE_URL   = "{{ url_for('live_mjpg') }}";
-      const STATUS_URL = "{{ url_for('live_status') }}";
-      const DIAG_URL   = "{{ url_for('live_diag') }}";
-
-      const msgEl = document.getElementById('live-msg');
-      const imgEl = document.getElementById('live-img');
-
-      // First-frame watcher with a single automatic retry
-      function armFirstFrameWatch() {
-        if (imgEl._ffwArmed) return;
-        imgEl._ffwArmed = true;
-
-        let triedRetry = false;
-        let tries = 0;
-
-        const wait = () => {
-          // Got a frame?
-          if (imgEl.naturalWidth > 0) {
-            msgEl.style.display = 'none';
-            return;
-          }
-          // Keep waiting up to ~3s
-          if (++tries < 70) return setTimeout(wait, 100);
-          // No frame: retry once by reconnecting the MJPEG stream
-          if (!triedRetry) {
-            triedRetry = true;
-            tries = 0;
-            imgEl.src = '';
-            setTimeout(() => {
-              imgEl.src = LIVE_URL + '?t=' + Date.now();
-              setTimeout(wait, 100);
-            }, 300);
-            return;
-          }
-
-          // Still no frame after retry — show a clean reason if we can
-          (async () => {
-            try {
-              const d = await fetch(DIAG_URL, { cache: 'no-store' }).then(r => r.json());
-              if (d && d.probe && d.probe.ok === false) {
-                msgEl.textContent = `Camera didn’t start. ${d.probe.reason || ''}`;
-              } else {
-                msgEl.textContent = 'Camera didn’t start.';
-              }
-            } catch {
-              msgEl.textContent = 'Camera didn’t start.';
-            }
-            msgEl.style.display = 'flex';
-          })();
-        };
-
-        setTimeout(wait, 100);
-      }
-
-      async function tick() {
-        try {
-          const r = await fetch(STATUS_URL, { cache: 'no-store' });
-          const j = r.ok ? await r.json() : { idle: false };
-
-          if (j.idle) {
-            // Bind handlers once
-            if (!imgEl._bound) {
-              imgEl._bound = true;
-              imgEl.addEventListener('load', () => { msgEl.style.display = 'none'; });
-              imgEl.addEventListener('error', () => {
-                msgEl.style.display = 'flex';
-                msgEl.textContent = 'Failed to open camera stream';
-              });
-            }
-
-            // Start stream if not already set
-            if (!imgEl.src) {
-              msgEl.style.display = 'flex';
-              msgEl.textContent = 'Connecting to camera…';
-              imgEl._ffwArmed = false;       // reset watcher state
-              imgEl.src = LIVE_URL + '?t=' + Date.now();
-              armFirstFrameWatch();
-            }
-          } else {
-            // Busy (capturing/encoding)
-            msgEl.style.display = 'flex';
-            msgEl.textContent = 'Camera busy (capturing/encoding)…';
-            if (imgEl.src) imgEl.src = '';   // stop requesting stream
-            imgEl._ffwArmed = false;         // reset watcher for next time
-          }
-        } catch {
-          msgEl.style.display = 'flex';
-          msgEl.textContent = 'Checking camera…';
-        }
-      }
-
-      tick();
-      setInterval(tick, 3000);
-    </script>
-    """
-    return render_template_string(tpl)
+    return render_template_string(r"""
+<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Live View</title>
+<style>
+  body{margin:0;background:#0b0b0b;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;gap:10px;align-items:center;padding:10px;border-bottom:1px solid #222}
+  main{padding:10px}
+  .wrap{position:relative;max-width:1024px;margin:0 auto;background:#000;border-radius:8px;overflow:hidden}
+  #live-img{width:100%;height:auto;display:block}
+  a.btn{color:#111827;background:#f3f4f6;border:1px solid #374151;border-radius:8px;padding:8px 12px;text-decoration:none}
+  .msg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.35);font-size:14px}
+  .msg.show{display:flex}
+</style>
+<header>
+  <a class="btn" href="{{ url_for('index') }}">← Back</a>
+  <h1 style="margin:0;font-size:16px">Viewfinder 📷</h1>
+</header>
+<main>
+  <div class="wrap">
+    <div id="msg" class="msg">Could not connect to camera stream.</div>
+    <!-- One request. No polling. Add a cache-buster once so the browser doesn’t reuse a stale connection. -->
+    <img id="live-img" src="{{ url_for('live_mjpg') }}?t={{ int(time.time()) }}" alt="live view">
+  </div>
+</main>
+<script>
+  // Optional: show a friendly message if the single request errors out.
+  const img = document.getElementById('live-img');
+  const msg = document.getElementById('msg');
+  img.addEventListener('error', () => { msg.classList.add('show'); });
+</script>
+    """, time=time)
 
 # ---------- Template (single file) ----------
 TPL_INDEX = r"""
