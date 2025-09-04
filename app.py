@@ -198,7 +198,13 @@ def _any_encoding_active():
 LIVE_PROC = None
 LIVE_LOCK = threading.Lock()
 from collections import deque
-_live_last_stderr = deque(maxlen=120)  # keep the last ~120 lines from libcamera/rpicam-vid
+_live_last_stderr = deque(maxlen=120)
+
+def _trace(msg: str):
+    try:
+        _live_last_stderr.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
+    except Exception:
+        pass
 
 def _force_release_camera():
     """
@@ -695,43 +701,29 @@ def live_debug():
 @app.get("/live.mjpg")
 def live_mjpg():
     _trace("ENTER /live.mjpg")
-    # Only stream when idle, otherwise 503
     if not _idle_now():
         abort(503, "Busy")
 
-    _stop_live_proc()  # ensure no stale proc
+    _stop_live_proc()
 
     global LIVE_PROC
     with LIVE_LOCK:
-        # Prefer libcamera-vid; fall back to rpicam-vid
         vid_bin = shutil.which("libcamera-vid") or shutil.which("rpicam-vid")
         if not vid_bin:
             abort(500, "No camera video binary found (libcamera-vid/rpicam-vid).")
 
-        _warmup_camera()  # keep your warmup call
+        _warmup_camera()
 
         def build_cmd(w, h, use_alt=False):
             base = os.path.basename(vid_bin)
             if base.startswith("libcamera-"):
-                # No preview; MJPEG over stdout
-                return [
-                    vid_bin, "-n",
-                    "--codec", "mjpeg",
-                    "--width", str(w), "--height", str(h),
-                    "--framerate", "30",
-                    "-t", "0",
-                    "-o", "-",
-                ]
+                return [vid_bin, "-n", "--codec", "mjpeg",
+                        "--width", str(w), "--height", str(h),
+                        "--framerate", "30", "-t", "0", "-o", "-"]
             else:
-                # rpicam-vid variant (also no preview)
-                return [
-                    vid_bin, "--nopreview",
-                    "--codec", "mjpeg",
-                    "--width", str(w), "--height", str(h),
-                    "--framerate", "30",
-                    "-t", "0",
-                    "-o", "-",
-                ]
+                return [vid_bin, "--nopreview", "--codec", "mjpeg",
+                        "--width", str(w), "--height", str(h),
+                        "--framerate", "30", "-t", "0", "-o", "-"]
 
         if LIVE_PROC is None or LIVE_PROC.poll() is not None:
             cmd = build_cmd(CAPTURE_WIDTH, CAPTURE_HEIGHT)
@@ -740,12 +732,8 @@ def live_mjpg():
             env.setdefault("RPI_LOG_LEVEL", "error")
             _trace("SPAWN camera proc")
             LIVE_PROC = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-                env=env,
-                start_new_session=True,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                bufsize=0, env=env, start_new_session=True
             )
             _trace(f"SPAWNED pid={LIVE_PROC.pid if LIVE_PROC else 'None'}")
             # Drain stderr so it never blocks
