@@ -87,6 +87,8 @@ F_VALUE  = _font(18)
 WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120);  YELL=(255,210,80);   BLUE=(90,160,220)
 
+self.confirm_idx = 0   # 0 = Yes, 1 = No
+
 def _clear():
     img = Image.new("RGB", (device.width, device.height), (0,0,0))
     device.display(img)
@@ -138,8 +140,26 @@ def _draw_wizard_page(title, value, tips=None, step=None):
         drw.text((2, y), line, font=F_SMALL, fill=GRAY); y += 12
     device.display(img)
 
-def _draw_confirm(title, lines, footer="Press ✓ to confirm"):
-    _draw_lines(lines, title=title, footer=footer, highlight=-1, hints=False)
+def _draw_confirm(self, interval_s, h, m, auto_encode, hi):
+    lines = [
+        f"Interval:  {interval_s}s",
+        f"Duration:  {h}h{m:02d}m",
+        f"Auto-enc.: {'Yes' if auto_encode else 'No'}",
+        "",
+    ]
+    # two options on one line; bracket the highlighted choice
+    yes = "[Yes]" if hi == 0 else " Yes "
+    no  = "[No] " if hi == 1 else " No  "
+    lines.append(f"{yes}    {no}")
+
+    # draw: no right-side hints here; footer shows how to act
+    _draw_lines(
+        lines,
+        title="Confirm",
+        footer="↑/↓ choose, ✓ select",
+        highlight=-1,
+        hints=False
+    )
 
 # ----------------- HTTP helpers -----------------
 def _http_json(url, timeout=1.2):
@@ -272,65 +292,58 @@ class UI:
             self.render()
 
     def adjust(self, delta):
-        s = self.state
-        if s == self.TL_INT:
-            self.tl_interval = max(1, self.tl_interval + delta * self.step)
-        elif s == self.TL_HR:
-            self.tl_hours = max(0, min(999, self.tl_hours + delta * self.step))
-        elif s == self.TL_MIN:
-            self.tl_mins = max(0, min(59,  self.tl_mins  + delta * self.step))
-        elif s == self.TL_ENC:
-            self.tl_encode = not self.tl_encode
-
-        elif s == self.SCH_OFF_H:
-            self.sch_off_h = max(0, min(999, self.sch_off_h + delta * self.step))
-        elif s == self.SCH_OFF_M:
-            self.sch_off_m = max(1,  min(59,  self.sch_off_m + delta * self.step))  # at least 1 minute
-        elif s == self.SCH_INT:
-            self.sch_interval = max(1, self.sch_interval + delta * self.step)
-        elif s == self.SCH_DUR_H:
-            self.sch_hours = max(0, min(999, self.sch_hours + delta * self.step))
-        elif s == self.SCH_DUR_M:
-            self.sch_mins = max(0, min(59,  self.sch_mins  + delta * self.step))
-        elif s == self.SCH_ENC:
-            self.sch_encode = not self.sch_encode
-
+        if self.state == self.WZ_INT:
+            self.wz_interval = max(1, self.wz_interval + delta * self.step)
+        elif self.state == self.WZ_HR:
+            self.wz_hours = max(0, min(999, self.wz_hours + delta * self.step))
+        elif self.state == self.WZ_MIN:
+            self.wz_mins = max(0, min(59,  self.wz_mins  + delta * self.step))
+        elif self.state == self.WZ_ENC:
+            self.wz_encode = not self.wz_encode
+        elif self.state == self.WZ_CONFIRM:
+            self._draw_confirm(self.wz_interval, self.wz_hours, self.wz_mins, self.wz_encode, self.confirm_idx)
         self.render()
 
     # ---------- OK flow ----------
     def ok(self):
-        if time.time() < self._armed_at:
-            return
-
         if self.state == self.HOME:
-            self._home_ok()
+            items = getattr(self, "_home_items", self.menu_items)
+            sel = items[self.menu_idx] if items else None
+            if not sel:
+                return
+            if sel.startswith("⏹ Stop Capture"):
+                self.stop_capture()
+            elif sel == "Quick Start":
+                self.quick_start()
+            elif sel == "New Timelapse":
+                self.start_wizard()
+            elif sel == "Schedules":
+                self.open_schedules()
             return
 
-        # Immediate timelapse wizard
-        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_ENC):
-            self.state += 1 if self.state != self.TL_ENC else self.TL_CONFIRM - self.TL_ENC
+        elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
+            # advance through wizard steps
+            self.state += 1
+            if self.state == self.WZ_CONFIRM:
+                self.confirm_idx = 0  # default to "Yes"
             self.render()
-            return
-        if self.state == self.TL_CONFIRM:
-            self._start_timelapse_now()
-            return
 
-        # New schedule wizard
-        if self.state in (self.SCH_OFF_H, self.SCH_OFF_M, self.SCH_INT, self.SCH_DUR_H, self.SCH_DUR_M, self.SCH_ENC):
-            order = [self.SCH_OFF_H, self.SCH_OFF_M, self.SCH_INT, self.SCH_DUR_H, self.SCH_DUR_M, self.SCH_ENC]
-            idx = order.index(self.state)
-            self.state = self.SCH_CONFIRM if idx == len(order)-1 else order[idx+1]
-            self.render()
-            return
-        if self.state == self.SCH_CONFIRM:
-            self._arm_schedule()
-            return
-
-        if self.state == self.SCHED_LIST:
-            if self.menu_idx == 0:
-                self._start_schedule_wizard()
+        elif self.state == self.WZ_CONFIRM:
+            if self.confirm_idx == 0:
+                # YES → start via schedule
+                self.start_now_via_schedule()
             else:
-                # (view-only for now)
+                # NO → discard and go home
+                _draw_center("Discarded")
+                time.sleep(0.5)
+                self.state = self.HOME
+                self.menu_idx = 0
+                self.render()
+
+        elif self.state == self.SCHED_LIST:
+            if self.menu_idx == 0:
+                self.start_wizard()
+            else:
                 self.render()
             return
 
