@@ -4,8 +4,8 @@ import os, sys, time, json
 from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
-import RPi.GPIO as GPIO
-GPIO.setwarnings(False)
+import os
+os.environ.setdefault("GPIOZERO_PIN_FACTORY", "rpigpio")
 
 # ----------------- HAT wiring (BCM) -----------------
 PIN_DC   = int(os.environ.get("LCD_PIN_DC",   "25"))
