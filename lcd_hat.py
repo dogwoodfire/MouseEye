@@ -67,7 +67,7 @@ from luma.lcd.device import st7735
 # ---------- SPI + device helpers (8 MHz for stability) ----------
 def _mk_serial():
     return spi(port=SPI_PORT, device=SPI_DEVICE,
-               gpio_DC=PIN_DC, gpio_RST=PIN_RST,
+               gpio_DC=PIN_DC, gpio_RST=None,
                bus_speed_hz=8_000_000)
 
 def _mk_device(serial_obj):
