@@ -64,7 +64,7 @@ from gpiozero import Button, PWMLED
 from luma.core.interface.serial import spi
 from luma.lcd.device import st7735
 
-# ---------- SPI + device helpers (8MHz for stability) ----------
+# ---------- SPI + device helpers (8 MHz for stability) ----------
 def _mk_serial():
     return spi(port=SPI_PORT, device=SPI_DEVICE,
                gpio_DC=PIN_DC, gpio_RST=PIN_RST,
@@ -138,7 +138,8 @@ class UI:
         self.serial = _mk_serial()
         self.device = _mk_device(self.serial)
         self._draw_lock = threading.Lock()
-        self._need_home_clear = True   # one-shot hard blank before next Home
+        self._need_home_clear = True       # per-home blank
+        self._need_hard_clear = True       # one-shot blank on next render
         self._busy = False
         self._screen_off = False
         self._spin_idx = 0
@@ -149,7 +150,7 @@ class UI:
         except Exception:
             self.bl = None
 
-        # input
+        # input (constructed before binding)
         self.btn_up   = self._mk_button(KEY1)
         self.btn_ok   = self._mk_button(KEY2)
         self.btn_down = self._mk_button(KEY3)
@@ -171,32 +172,30 @@ class UI:
         self.confirm_idx = 0
         self._last_status = {}
 
-        # bind inputs
+        # bind inputs and draw
         self._bind_inputs()
-        # first draw
         self.render(force=True)
 
-        self._need_hard_clear = True   # clear once before first Home
+    # ---------- one-shot clears ----------
+    def _request_hard_clear(self):
+        self._need_hard_clear = True
 
-        # add these methods anywhere in UI:
-        def _request_hard_clear(self):
-            self._need_hard_clear = True
-
-        def _maybe_hard_clear(self):
-            if self._need_hard_clear:
-                try:
-                    # OFF -> black -> black -> ON -> black (very thorough)
-                    try: self.device.command(0x28)  # Display OFF
-                    except Exception: pass
-                    img = Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
-                    self.device.display(img); time.sleep(0.02)
-                    self.device.display(img); time.sleep(0.02)
-                    try: self.device.command(0x29)  # Display ON
-                    except Exception: pass
-                    self.device.display(img); time.sleep(0.02)
-                except Exception:
-                    pass
-                self._need_hard_clear = False
+    def _maybe_hard_clear(self):
+        if not self._need_hard_clear:
+            return
+        try:
+            # OFF -> black -> black -> ON -> black
+            try: self.device.command(0x28)  # display off
+            except Exception: pass
+            img = Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
+            self.device.display(img); time.sleep(0.02)
+            self.device.display(img); time.sleep(0.02)
+            try: self.device.command(0x29)  # display on
+            except Exception: pass
+            self.device.display(img); time.sleep(0.02)
+        except Exception:
+            pass
+        self._need_hard_clear = False
 
     # ---------- low-level LCD helpers ----------
     def _hard_clear(self):
@@ -215,7 +214,7 @@ class UI:
     def _clear(self): self._present(self._blank())
 
     def _lcd_reinit(self):
-        # re-create SPI + device (reset toggled by luma) and blank once
+        # re-create SPI + device and blank once
         self.serial = _mk_serial()
         self.device = _mk_device(self.serial)
         time.sleep(0.05)
@@ -407,7 +406,7 @@ class UI:
             if self.confirm_idx == 0: self.start_now_via_schedule()
             else:
                 self._draw_center("Discarded"); time.sleep(0.5)
-                self.state = self.HOME; self.menu_idx = 0; self.render()
+                self.state = self.HOME; self.menu_idx = 0; self._request_hard_clear(); self.render()
             return
 
         if self.state == self.SCHED_LIST:
@@ -417,26 +416,26 @@ class UI:
 
     # ---------- actions ----------
     def quick_start(self):
-        if self.busy: return
-        self.busy = True
-        _draw_center("Starting...")
+        if self._busy: return
+        self._busy = True
+        self._draw_center("Starting...")
         ok = _http_post_form(START_URL, {"interval": 10})
-        _draw_center("Started" if ok else "Failed", "Quick Start")
+        self._draw_center("Started" if ok else "Failed", "Quick Start")
         time.sleep(0.6)
-        self.busy = False
-        self._request_hard_clear()       # <— returning to Home
+        self._busy = False
+        self._request_hard_clear()
         self.render(force=True)
 
     def stop_capture(self):
-        if self.busy: return
-        self.busy = True
-        _draw_center("Stopping...")
+        if self._busy: return
+        self._busy = True
+        self._draw_center("Stopping...")
         ok = _http_post_form(STOP_URL, {})
-        _draw_center("Stopped" if ok else "Failed")
+        self._draw_center("Stopped" if ok else "Failed")
         time.sleep(0.6)
-        self.busy = False
+        self._busy = False
         self.state = self.HOME; self.menu_idx = 0
-        self._request_hard_clear()       # <—
+        self._request_hard_clear()
         self.render(force=True)
 
     def start_wizard(self):
@@ -465,55 +464,49 @@ class UI:
         })
         self._draw_center("Scheduled" if ok else "Failed", "Starts now")
         time.sleep(0.8)
-        self.busy = False
+        self._busy = False
         self.state = self.HOME; self.menu_idx = 0
-        self._request_hard_clear()       # <— back to Home
+        self._request_hard_clear()
         self.render(force=True)
 
     def open_schedules(self):
-        if self.busy: return
-        self._request_hard_clear()       # <—
+        if self._busy: return
+        self._request_hard_clear()
         self.state = self.SCHED_LIST
         self.menu_idx = 0
-        self.render
+        self.render()
 
     def toggle_rotation(self):
         if self._busy: return
         self._busy = True
         self._unbind_inputs()            # freeze callbacks during reset
-
         try:
-            # blank old orientation (once)
+            # blank old orientation
             self._hard_clear()
 
-            # flip and persist
+            # flip + persist
             self.rot_deg = 90 if self.rot_deg == 0 else 0
             _save_prefs({"rot_deg": self.rot_deg})
 
             # safe re-init + clear in new orientation
             self._lcd_reinit()
 
-            # force BL on (some boards drop it on reset)
+            # ensure backlight on
             try:
                 if self.bl is not None: self.bl.value = 1.0
             except Exception: pass
 
-            # rebind inputs with new orientation mapping
+            # rebind inputs with new mapping
             self._bind_inputs()
 
-            # show confirmation
-            self._request_hard_clear()       # make the next screen draw onto a clean panel
-            _draw_center("Rotation set", f"{ROT_DEG} degrees")
+            # show confirmation then go Home
+            self._request_hard_clear()
+            self._draw_center("Rotation set", f"{self.rot_deg} degrees")
             time.sleep(0.6)
             self.state = self.HOME
             self.render(force=True)
         finally:
             self._busy = False
-
-        # back to home and ensure first home draw starts from a blank panel
-        self._need_home_clear = True
-        self.state = self.HOME
-        self.render(force=True)
 
     # ---------- render ----------
     def _draw_confirm(self, interval_s, h, m, auto_encode, hi):
@@ -632,12 +625,12 @@ def main():
             if st.get("encoding"):
                 ui.state = UI.ENCODING
                 ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
-                _draw_encoding(ui._spin_idx)
+                ui._draw_encoding(ui._spin_idx)
             else:
                 if ui.state == UI.ENCODING:
                     ui.state = UI.HOME
                     ui.menu_idx = 0
-                    ui._request_hard_clear()     # <—
+                    ui._request_hard_clear()
                 if ui.state == UI.HOME:
                     ui._render_home()
             last_poll = now
