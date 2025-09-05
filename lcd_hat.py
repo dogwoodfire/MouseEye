@@ -118,15 +118,24 @@ def _draw_lines(lines, title=None, footer=None, highlight=-1, hints=True):
         drw.text((WIDTH-14, 98), "↓", font=F_TEXT,  fill=GRAY)
     device.display(img)
 
-def _draw_center(msg, sub=None, color=WHITE):
-    img = _blank()
+def _draw_center(msg, sub=None):
+    img = Image.new("RGB", (device.width, device.height), (0,0,0))
     drw = ImageDraw.Draw(img)
     w,h = device.width, device.height
+
+    # first (big) line
     tw  = F_TITLE.getlength(msg)
-    drw.text(((w - tw)//2, 42), msg, font=F_TITLE, fill=color)
+    drw.text(((w-tw)//2, 36), msg, font=F_TITLE, fill=WHITE)
+
     if sub:
-        sw = F_SMALL.getlength(sub)
-        drw.text(((w - sw)//2, 64), sub, font=F_SMALL, fill=GRAY)
+        # split on line breaks
+        lines = sub.split("\n")
+        y = 60
+        for line in lines:
+            sw = F_SMALL.getlength(line)
+            drw.text(((w-sw)//2, y), line, font=F_SMALL, fill=GRAY)
+            y += 14   # line spacing
+
     device.display(img)
 
 def _draw_wizard_page(title, value, tips=None, footer=None, step=None):
