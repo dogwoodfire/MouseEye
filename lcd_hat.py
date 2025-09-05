@@ -128,6 +128,15 @@ RED=(255,80,80)
 
 _rot_pending_clear = False
 
+_home_needs_clear = False
+
+def _hard_clear():
+    """Blank the panel twice to purge any ghosted pixels."""
+    with _draw_lock:
+        img = Image.new("RGB", (device.width, device.height), (0,0,0))
+        device.display(img); time.sleep(0.03)
+        device.display(img); time.sleep(0.03)
+
 # ----------------- Drawing core (lock + auto-reinit) -----------------
 _draw_lock = threading.Lock()
 
@@ -223,6 +232,8 @@ def _draw_encoding(spin_idx=0):
     drw.text(((WIDTH-int(tw))//2, 40), msg, font=F_TITLE, fill=YELL)
     drw.text(((WIDTH-int(sw))//2, 62), sp,  font=F_TITLE, fill=YELL)
     _present(img)
+    
+
 
 # ----------------- HTTP helpers -----------------
 def _http_json(url, timeout=1.2):
@@ -326,7 +337,7 @@ class UI:
         """
         Map physical joystick to on-screen directions.
         - 0° : identity (up->up, down->down, left->left, right->right)
-        - 90°: flip axes (up<->down, left<->right)
+        - 90°: rotate controls 90° (Up→Right, Right→Down, Down→Left, Left→Up)
         """
         if ROT_DEG == 0:
             m = {
@@ -335,12 +346,12 @@ class UI:
                 'left':  self._logical_left,
                 'right': self._logical_right,
             }
-        else:  # 90° CCW: flip each axis
+        else:  # 90° CCW screen: rotate controls so they feel natural
             m = {
-                'up':    self._logical_down,
-                'down':  self._logical_up,
-                'left':  self._logical_right,
-                'right': self._logical_left,
+                'up':    self._logical_right,
+                'right': self._logical_down,
+                'down':  self._logical_left,
+                'left':  self._logical_up,
             }
 
         if js_up:    js_up.when_pressed    = self._wrap_wake(m['up'])
@@ -374,6 +385,8 @@ class UI:
         self.screen_off = False
         self.state = self.HOME
         self.menu_idx = 0
+        from __main__ import _home_needs_clear
+        _home_needs_clear = True
         self.render(force=True)
 
     # ---------- state helpers ----------
@@ -458,6 +471,8 @@ class UI:
         _draw_center("Started" if ok else "Failed", "Quick Start")
         time.sleep(0.6)
         self.busy = False
+        from __main__ import _home_needs_clear
+        _home_needs_clear = True
         self.render(force=True)
 
     def stop_capture(self):
@@ -469,6 +484,8 @@ class UI:
         time.sleep(0.6)
         self.busy = False
         self.state = self.HOME; self.menu_idx = 0
+        from __main__ import _home_needs_clear
+        _home_needs_clear = True
         self.render(force=True)
 
     def start_wizard(self):
@@ -498,6 +515,8 @@ class UI:
         time.sleep(0.8)
         self.busy = False
         self.state = self.HOME; self.menu_idx = 0
+        from __main__ import _home_needs_clear
+        _home_needs_clear = True
         self.render(force=True)
 
     def open_schedules(self):
@@ -506,16 +525,13 @@ class UI:
         self.render()
 
     def toggle_rotation(self):
-        global ROT_DEG, _rot_pending_clear
+        global ROT_DEG, _rot_pending_clear, _home_needs_clear
         ROT_DEG = 90 if ROT_DEG == 0 else 0
         _save_prefs({"rot_deg": ROT_DEG})
-
-        # Rebind joystick for the new orientation and request the hard clear
         self._rebind_joystick()
-        _rot_pending_clear = True
-
+        _rot_pending_clear = True      # clear in _present()
+        _home_needs_clear  = True      # also ensure Home blanks before draw
         _draw_center("Rotation set", f"{ROT_DEG} degrees")
-        _clear()
         time.sleep(0.6)
         self.state = self.HOME
         self.render(force=True)
@@ -535,6 +551,11 @@ class UI:
                     highlight=-1, hints=False)
 
     def _render_home(self):
+        global _home_needs_clear
+        # one-shot hard blank if requested
+        if _home_needs_clear:
+            _hard_clear()
+            _home_needs_clear = False
         st = self._status()
         if st.get("encoding"):
             self.state = self.ENCODING; _draw_encoding(self._spin_idx); return
