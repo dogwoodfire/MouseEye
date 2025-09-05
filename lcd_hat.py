@@ -507,7 +507,7 @@ class UI:
         # temporarily mark state so render() doesn’t overwrite the screen
         prev_state = self.state
         self.state = None
-        _draw_center("Screen off", "Press any key")
+        _draw_center("Screen off", "Press any key to wake up")
         time.sleep(2.5)
         self._sleep_screen()
         self.state = prev_state
