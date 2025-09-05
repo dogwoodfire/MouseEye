@@ -128,26 +128,21 @@ def _draw_center(msg, sub=None):
     drw.text(((w-tw)//2, 36), msg, font=F_TITLE, fill=WHITE)
 
     if sub:
-        # split on line breaks
+        # support multi-line centered subtitle
         lines = sub.split("\n")
         y = 60
         for line in lines:
             sw = F_SMALL.getlength(line)
             drw.text(((w-sw)//2, y), line, font=F_SMALL, fill=GRAY)
-            y += 14   # line spacing
+            y += 14
 
     device.display(img)
 
-def _draw_wizard_page(title, value, tips=None, footer=None, step=None):
+def _draw_wizard_page(title, value, tips=None, footer=None):
     img = _blank()
     drw = ImageDraw.Draw(img)
     # Title
     drw.text((2, 2), title, font=F_TITLE, fill=WHITE)
-    # Step indicator (top-right)
-    if step is not None:
-        s = f"×{step}"
-        sw = F_SMALL.getlength(s)
-        drw.text((WIDTH - 2 - sw, 2), s, font=F_SMALL, fill=GRAY)
     # Big centered value
     val_str = str(value)
     tw = F_VALUE.getlength(val_str)
@@ -218,10 +213,9 @@ class UI:
         self.wz_hours    = 0
         self.wz_mins     = 0
         self.wz_encode   = True
-        self.step        = 1
         self.confirm_idx = 0  # 0=Yes, 1=No
 
-        # status cache
+        # status cache / spinner
         self._last_status = {}
         self._spin_idx = 0
 
@@ -237,48 +231,55 @@ class UI:
         self._last_status = st
         return st
 
-    # wrap handlers so ANY press wakes screen first
+    # ---------- wake wrapper ----------
     def _wrap_wake(self, fn):
         def inner():
             if self.screen_off:
                 self._wake_screen()
-                # after wake, do NOT run the original action (tap to wake behavior)
-                return
+                return  # tap-to-wake: ignore the original action
             fn()
         return inner
 
+    # ---------- input bindings ----------
     def _bind_inputs(self):
-        # Side buttons (Waveshare K1/K2/K3)
-        if btn_up:   btn_up.when_pressed   = lambda: self.nav(-1)  # move up in lists; decrease in wizard
-        if btn_down: btn_down.when_pressed = lambda: self.nav(+1)  # move down in lists; increase in wizard
-        if btn_ok:   btn_ok.when_pressed   = self.ok
+        # Side buttons (K1/K2/K3) — wrapped so any press wakes the screen
+        if btn_up:   btn_up.when_pressed   = self._wrap_wake(lambda: self.nav(-1))
+        if btn_down: btn_down.when_pressed = self._wrap_wake(lambda: self.nav(+1))
+        if btn_ok:   btn_ok.when_pressed   = self._wrap_wake(self.ok)
 
-        # Joystick — make it work on HOME and adjust values in wizard
-        if js_up:    js_up.when_pressed    = self.on_js_up
-        if js_down:  js_down.when_pressed  = self.on_js_down
-        if js_left:  js_left.when_pressed  = self.on_js_left
-        if js_right: js_right.when_pressed = self.on_js_right
-        if js_push:  js_push.when_pressed  = self.ok
+        # Joystick (also wrapped)
+        if js_up:    js_up.when_pressed    = self._wrap_wake(self.on_js_up)
+        if js_down:  js_down.when_pressed  = self._wrap_wake(self.on_js_down)
+        if js_left:  js_left.when_pressed  = self._wrap_wake(self.on_js_left)
+        if js_right: js_right.when_pressed = self._wrap_wake(self.on_js_right)
+        if js_push:  js_push.when_pressed  = self._wrap_wake(self.ok)
 
+    # ---------- joystick handlers ----------
     def on_js_up(self):
-        if self.state in (self.HOME, self.SCHED_LIST):
-            self.nav(-1)                 # move cursor up
+        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM):
+            self.nav(-1)                 # move cursor up / toggle to Yes
         else:
             self.adjust(+1)              # increase by 1 in wizard
 
     def on_js_down(self):
-        if self.state in (self.HOME, self.SCHED_LIST):
-            self.nav(+1)                 # move cursor down
+        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM):
+            self.nav(+1)                 # move cursor down / toggle to No
         else:
             self.adjust(-1)              # decrease by 1 in wizard
 
     def on_js_left(self):
         if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
             self.adjust(-10)             # -10 in wizard
+        elif self.state == self.WZ_CONFIRM:
+            self.confirm_idx = 1 - self.confirm_idx
+            self.render()
 
     def on_js_right(self):
         if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
             self.adjust(+10)             # +10 in wizard
+        elif self.state == self.WZ_CONFIRM:
+            self.confirm_idx = 1 - self.confirm_idx
+            self.render()
 
     # ---------- screen power ----------
     def _sleep_screen(self):
@@ -304,7 +305,6 @@ class UI:
 
     # ---------- state helpers ----------
     def nav(self, delta):
-        # Menus: move selection
         if self.state == self.HOME:
             items = getattr(self, "_home_items", self.menu_items)
             if items:
@@ -312,12 +312,21 @@ class UI:
             else:
                 self.menu_idx = 0
             self.render()
+
         elif self.state == self.SCHED_LIST:
+            # clamp within range
             self.menu_idx = max(0, self.menu_idx + delta)
             self.render()
+
+        elif self.state == self.WZ_CONFIRM:
+            # up/down/left/right toggles between Yes(0) and No(1)
+            self.confirm_idx = 1 - self.confirm_idx
+            self.render()
+
         else:
-            # In wizard, side buttons act like up/down by 1
-            self.adjust(+1 if delta > 0 else -1)
+            # In wizard (INT/HR/MIN/ENC), side buttons behave like ↑/↓ by 1,
+            # with **UP increasing** and **DOWN decreasing** (invert delta).
+            self.adjust(-1 if delta > 0 else +1)
 
     def adjust(self, delta):
         if self.state == self.WZ_INT:
@@ -331,14 +340,6 @@ class UI:
             if abs(delta) >= 1:
                 self.wz_encode = not self.wz_encode
         self.render()
-
-    def step_small(self):
-        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN) and not self.screen_off:
-            self.step = 1;  self.render()
-
-    def step_big(self):
-        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN) and not self.screen_off:
-            self.step = 10; self.render()
 
     def ok(self):
         if self.state == self.ENCODING or self.screen_off:
@@ -405,7 +406,6 @@ class UI:
         self.wz_hours    = 0
         self.wz_mins     = 0
         self.wz_encode   = True
-        self.step        = 1
         self.confirm_idx = 0
         self.state = self.WZ_INT
         self.render()
@@ -481,20 +481,19 @@ class UI:
             footer="↑/↓ to move, ✓ to select", hints=True
         )
 
-    def _render_wz(self, title, value=None):
-        # concise tips, no step indicator
+    def _render_wz(self):
         if self.state == self.WZ_INT:
             _draw_wizard_page("Interval (s)", f"{self.wz_interval}",
-                            tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
+                              tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
         elif self.state == self.WZ_HR:
             _draw_wizard_page("Duration hours", f"{self.wz_hours}",
-                            tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
+                              tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
         elif self.state == self.WZ_MIN:
             _draw_wizard_page("Duration mins", f"{self.wz_mins:02d}",
-                            tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
+                              tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
         elif self.state == self.WZ_ENC:
             _draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
-                            tips=["↑/↓ toggle", "✓ next"])
+                              tips=["↑/↓ toggle", "✓ next"])
 
     def render(self, force=False):
         if self.screen_off:
@@ -528,11 +527,10 @@ class UI:
         except Exception:
             pass  # never crash the loop
 
-    # small helper to show "sleeping" for a brief beat before off
+    # show "sleeping" for a beat, then turn panel off
     def _draw_center_sleep_then_off(self):
-        # temporarily mark state so render() doesn’t overwrite the screen
         prev_state = self.state
-        self.state = None
+        self.state = None  # prevent render() from overwriting
         _draw_center("Screen off", "Press any key\n to wake up")
         time.sleep(2.5)
         self._sleep_screen()
@@ -550,7 +548,7 @@ def main():
             time.sleep(0.1)
             continue
 
-        # Poll /lcd_status periodically
+        # Poll /lcd_status periodically for encoding state
         if now - last_poll > 0.5:
             st = _http_json(STATUS_URL) or {}
             ui._last_status = st
