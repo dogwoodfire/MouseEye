@@ -504,9 +504,13 @@ class UI:
 
     # small helper to show "sleeping" for a brief beat before off
     def _draw_center_sleep_then_off(self):
+        # temporarily mark state so render() doesn’t overwrite the screen
+        prev_state = self.state
+        self.state = None
         _draw_center("Screen off", "Press any key")
-        time.sleep(1.5)
+        time.sleep(2.5)
         self._sleep_screen()
+        self.state = prev_state
 
 # ----------------- main loop -----------------
 def main():
