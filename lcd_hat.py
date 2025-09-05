@@ -4,7 +4,13 @@ import os, sys, time, json
 from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
-os.environ.setdefault("GPIOZERO_PIN_FACTORY", "rpigpio")
+# Choose the best GPIOZero pin factory: prefer lgpio, fall back to rpigpio
+try:
+    from gpiozero.pins.lgpio import LGPIOFactory
+    PIN_FACTORY = LGPIOFactory()
+except Exception:
+    from gpiozero.pins.rpigpio import RPiGPIOFactory
+    PIN_FACTORY = RPiGPIOFactory()
 
 # ----------------- HAT wiring (BCM) -----------------
 PIN_DC   = int(os.environ.get("LCD_PIN_DC",   "25"))
@@ -97,7 +103,7 @@ except Exception:
 # Buttons
 def _mk_button(pin):
     try:
-        return Button(pin, pull_up=True, bounce_time=0.08)
+        return Button(pin, pull_up=True, bounce_time=0.08, pin_factory=PIN_FACTORY)
     except Exception:
         return None
 
