@@ -4,13 +4,13 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 import os, sys, time, json, threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 
 DEBUG = os.environ.get("DEBUG") == "1"
-def log(*a): 
-    if DEBUG: 
+def log(*a):
+    if DEBUG:
         print(*a, file=sys.stderr, flush=True)
 
 # ---------- GPIO factory (prefer lgpio; fallback to RPi.GPIO) ----------
@@ -86,15 +86,20 @@ def _mk_device(serial_obj):
 
 # ----------------- Fonts & colors -----------------
 def _load_font(size_px):
-    try:
-        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", size_px)
-    except Exception:
-        return ImageFont.load_default()
+    for path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, size_px)
+        except Exception:
+            pass
+    return ImageFont.load_default()
 
-F_TITLE = _load_font(14)
-F_TEXT  = _load_font(12)
-F_SMALL = _load_font(10)
-F_VALUE = _load_font(18)
+F_TITLE = _load_font(13)
+F_TEXT  = _load_font(11)
+F_SMALL = _load_font(9)
+F_VALUE = _load_font(17)
 
 WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120);  YELL=(255,210,80);  BLUE=(90,160,220)
@@ -136,7 +141,8 @@ def _read_schedules():
 #                              UI CONTROLLER
 # =====================================================================
 class UI:
-    HOME, WZ_INT, WZ_HR, WZ_MIN, WZ_ENC, WZ_CONFIRM, SCHED_LIST, ENCODING = range(8)
+    # Reworked wizard: start/end clock times instead of duration
+    HOME, WZ_INT, WZ_SH, WZ_SM, WZ_EH, WZ_EM, WZ_ENC, WZ_CONFIRM, SCHED_LIST, ENCODING = range(10)
 
     def __init__(self):
         # prefs
@@ -146,7 +152,7 @@ class UI:
         # lcd
         self.serial = _mk_serial()
         self.device = _mk_device(self.serial)
-        self._draw_lock = threading.RLock()   # <— re-entrant lock
+        self._draw_lock = threading.RLock()
         self._need_home_clear = True
         self._need_hard_clear = True
         self._busy = False
@@ -174,30 +180,46 @@ class UI:
         self.menu_idx = 0
         self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
         self._home_items = self.menu_items[:]
+
+        now = datetime.now()
         self.wz_interval = 10
-        self.wz_hours    = 0
-        self.wz_mins     = 0
+        self.wz_start_h  = now.hour
+        self.wz_start_m  = (now.minute + 1) % 60
+        self.wz_end_h    = (now.hour + 1) % 24
+        self.wz_end_m    = self.wz_start_m
         self.wz_encode   = True
         self.confirm_idx = 0
         self._last_status = {}
 
         # bind inputs and draw
         self._bind_inputs()
-
-        # draw something immediately so the panel isn’t left blank
         self._draw_center("Booting…")
         time.sleep(0.2)
-
         self._need_home_clear = True
         self._need_hard_clear = True
         self.render(force=True)
+
+    # ---------- panel power helpers (hide rotate flash) ----------
+    def _panel_off(self):
+        try:
+            self.device.command(0x28)  # Display OFF
+            self.device.command(0x10)  # Sleep IN
+        except Exception:
+            pass
+
+    def _panel_on(self):
+        try:
+            self.device.command(0x11)  # Sleep OUT
+            time.sleep(0.12)
+            self.device.command(0x29)  # Display ON
+        except Exception:
+            pass
 
     # ---------- one-shot clears ----------
     def _request_hard_clear(self):
         self._need_hard_clear = True
 
     def _hard_clear(self):
-        # DO NOT call _present() here (avoids nested lock). Draw directly.
         img = Image.new("RGB", (self.device.width, self.device.height), (0, 0, 0))
         frame = img.rotate(90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
         with self._draw_lock:
@@ -214,7 +236,6 @@ class UI:
         self._need_hard_clear = False
 
     def _present(self, img):
-        # rotate frame in software
         frame = img.rotate(90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
         with self._draw_lock:
             self.device.display(frame)
@@ -334,10 +355,10 @@ class UI:
         if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM): self.nav(+1)
         else: self.adjust(-1)
     def _logical_left(self):
-        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN): self.adjust(-10)
+        if self.state in (self.WZ_INT, self.WZ_SH, self.WZ_SM, self.WZ_EH, self.WZ_EM): self.adjust(-10 if self.state==self.WZ_INT else -1)
         elif self.state == self.WZ_CONFIRM: self.confirm_idx = 1 - self.confirm_idx; self.render()
     def _logical_right(self):
-        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN): self.adjust(+10)
+        if self.state in (self.WZ_INT, self.WZ_SH, self.WZ_SM, self.WZ_EH, self.WZ_EM): self.adjust(+10 if self.state==self.WZ_INT else +1)
         elif self.state == self.WZ_CONFIRM: self.confirm_idx = 1 - self.confirm_idx; self.render()
 
     # ---------- screen power ----------
@@ -375,11 +396,16 @@ class UI:
     def adjust(self, delta):
         if self._busy: return
         if self.state == self.WZ_INT:
-            self.wz_interval = max(1, self.wz_interval + delta)
-        elif self.state == self.WZ_HR:
-            self.wz_hours = max(0, min(999, self.wz_hours + delta))
-        elif self.state == self.WZ_MIN:
-            self.wz_mins = max(0, min(59, self.wz_mins + delta))
+            step = 10 if abs(delta) >= 10 else 1
+            self.wz_interval = max(1, self.wz_interval + (step if delta>0 else -step))
+        elif self.state == self.WZ_SH:
+            self.wz_start_h = (self.wz_start_h + delta) % 24
+        elif self.state == self.WZ_SM:
+            self.wz_start_m = (self.wz_start_m + delta) % 60
+        elif self.state == self.WZ_EH:
+            self.wz_end_h = (self.wz_end_h + delta) % 24
+        elif self.state == self.WZ_EM:
+            self.wz_end_m = (self.wz_end_m + delta) % 60
         elif self.state == self.WZ_ENC:
             if abs(delta) >= 1: self.wz_encode = not self.wz_encode
         self.render()
@@ -399,7 +425,7 @@ class UI:
             elif sel.startswith("Rotate display"): self.toggle_rotation()
             return
 
-        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
+        if self.state in (self.WZ_INT, self.WZ_SH, self.WZ_SM, self.WZ_EH, self.WZ_EM, self.WZ_ENC):
             self.state += 1
             if self.state == self.WZ_CONFIRM: self.confirm_idx = 0
             self.render(); return
@@ -442,8 +468,14 @@ class UI:
 
     def start_wizard(self):
         if self._busy: return
-        self.wz_interval = 10; self.wz_hours = 0; self.wz_mins = 0
-        self.wz_encode = True; self.confirm_idx = 0
+        now = datetime.now()
+        self.wz_interval = 10
+        self.wz_start_h  = now.hour
+        self.wz_start_m  = (now.minute + 1) % 60
+        self.wz_end_h    = (now.hour + 1) % 24
+        self.wz_end_m    = self.wz_start_m
+        self.wz_encode   = True
+        self.confirm_idx = 0
         self._request_hard_clear()
         self.state = self.WZ_INT
         self.render()
@@ -451,25 +483,36 @@ class UI:
     def start_now_via_schedule(self):
         if self._busy: return
         self._busy = True
-        start_local = datetime.now().strftime("%Y-%m-%dT%H:%M")
-        dur_hr, dur_min = self.wz_hours, self.wz_mins
-        if dur_hr == 0 and dur_min == 0: dur_min = 1
-        self._draw_center("Arming...")
-        ok = _http_post_form(SCHED_ARM_URL, {
-            "start_local": start_local,
-            "duration_hr":  str(dur_hr),
-            "duration_min": str(dur_min),
-            "interval":     str(self.wz_interval),
-            "fps":          "24",
-            "auto_encode":  "on" if self.wz_encode else "",
-            "sess_name":    "",
-        })
-        self._draw_center("Scheduled" if ok else "Failed", "Starts now")
-        time.sleep(0.8)
-        self._busy = False
-        self.state = self.HOME; self.menu_idx = 0
-        self._request_hard_clear()
-        self.render(force=True)
+        try:
+            now = datetime.now()
+            start = now.replace(hour=self.wz_start_h, minute=self.wz_start_m,
+                                second=0, microsecond=0)
+            end   = now.replace(hour=self.wz_end_h, minute=self.wz_end_m,
+                                second=0, microsecond=0)
+            if end <= start:
+                end += timedelta(days=1)
+            dur = end - start
+            mins = max(1, int(dur.total_seconds() // 60))
+            dur_hr, dur_min = divmod(mins, 60)
+
+            start_local = start.strftime("%Y-%m-%dT%H:%M")
+            self._draw_center("Arming...")
+            ok = _http_post_form(SCHED_ARM_URL, {
+                "start_local": start_local,
+                "duration_hr":  str(dur_hr),
+                "duration_min": str(dur_min),
+                "interval":     str(self.wz_interval),
+                "fps":          "24",
+                "auto_encode":  "on" if self.wz_encode else "",
+                "sess_name":    "",
+            })
+            self._draw_center("Scheduled" if ok else "Failed", "Using start/stop")
+            time.sleep(0.8)
+        finally:
+            self._busy = False
+            self.state = self.HOME; self.menu_idx = 0
+            self._request_hard_clear()
+            self.render(force=True)
 
     def open_schedules(self):
         if self._busy: return
@@ -483,13 +526,19 @@ class UI:
         self._busy = True
         self._unbind_inputs()
         try:
+            # hide transition
+            if self.bl is not None: self.bl.value = 0.0
+            self._panel_off()
+
             self._hard_clear()
             self.rot_deg = 90 if self.rot_deg == 0 else 0
             _save_prefs({"rot_deg": self.rot_deg})
+
             self._lcd_reinit()
-            try:
-                if self.bl is not None: self.bl.value = 1.0
-            except Exception: pass
+            self._hard_clear()
+            self._panel_on()
+            if self.bl is not None: self.bl.value = 1.0
+
             self._bind_inputs()
             self._request_hard_clear()
             self._draw_center("Rotation set", f"{self.rot_deg} degrees")
@@ -500,10 +549,11 @@ class UI:
             self._busy = False
 
     # ---------- render ----------
-    def _draw_confirm(self, interval_s, h, m, auto_encode, hi):
+    def _draw_confirm(self, interval_s, sh, sm, eh, em, auto_encode, hi):
         lines = [
             f"Interval:  {interval_s}s",
-            f"Duration:  {h}h{m:02d}m",
+            f"Start:     {sh:02d}:{sm:02d}",
+            f"End:       {eh:02d}:{em:02d}",
             f"Auto-enc.: {'Yes' if auto_encode else 'No'}",
             "",
         ]
@@ -546,12 +596,18 @@ class UI:
         if self.state == self.WZ_INT:
             self._draw_wizard_page("Interval (s)", f"{self.wz_interval}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
-        elif self.state == self.WZ_HR:
-            self._draw_wizard_page("Duration hours", f"{self.wz_hours}",
-                                   tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
-        elif self.state == self.WZ_MIN:
-            self._draw_wizard_page("Duration mins", f"{self.wz_mins:02d}",
-                                   tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.WZ_SH:
+            self._draw_wizard_page("Start hour", f"{self.wz_start_h:02d}",
+                                   tips=["UP/DOWN ±1, wrap 0–23", "OK next"])
+        elif self.state == self.WZ_SM:
+            self._draw_wizard_page("Start minute", f"{self.wz_start_m:02d}",
+                                   tips=["UP/DOWN ±1, wrap 0–59", "OK next"])
+        elif self.state == self.WZ_EH:
+            self._draw_wizard_page("End hour", f"{self.wz_end_h:02d}",
+                                   tips=["UP/DOWN ±1, wrap 0–23", "OK next"])
+        elif self.state == self.WZ_EM:
+            self._draw_wizard_page("End minute", f"{self.wz_end_m:02d}",
+                                   tips=["UP/DOWN ±1, wrap 0–59", "OK next"])
         elif self.state == self.WZ_ENC:
             self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
                                    tips=["UP/DOWN toggle", "OK next"])
@@ -564,11 +620,11 @@ class UI:
                 self._draw_encoding(self._spin_idx); return
             if self.state == self.HOME:
                 self._render_home()
-            elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
+            elif self.state in (self.WZ_INT, self.WZ_SH, self.WZ_SM, self.WZ_EH, self.WZ_EM, self.WZ_ENC):
                 self._render_wz()
             elif self.state == self.WZ_CONFIRM:
-                self._draw_confirm(self.wz_interval, self.wz_hours, self.wz_mins,
-                                   self.wz_encode, self.confirm_idx)
+                self._draw_confirm(self.wz_interval, self.wz_start_h, self.wz_start_m,
+                                   self.wz_end_h, self.wz_end_m, self.wz_encode, self.confirm_idx)
             elif self.state == self.SCHED_LIST:
                 self._maybe_hard_clear()
                 sch = _read_schedules()
