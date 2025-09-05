@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os, sys, time, json
+import os, sys, time, json, traceback, threading
 from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
-# Choose the best GPIOZero pin factory: prefer lgpio, fall back to rpigpio
+
+# -------- Pin factory (prefer lgpio, fall back to RPi.GPIO) --------
 try:
     from gpiozero.pins.lgpio import LGPIOFactory
     PIN_FACTORY = LGPIOFactory()
@@ -19,7 +20,7 @@ PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))  # Backlight (PWM LED)
 
 # Waveshare 1.44" LCD HAT keys + joystick
 KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up
-KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # Accept
+KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # OK
 KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down
 JS_UP    = int(os.environ.get("LCD_JS_UP",    "6"))
 JS_DOWN  = int(os.environ.get("LCD_JS_DOWN",  "19"))
@@ -43,7 +44,6 @@ SCHED_FILE      = "/home/pi/timelapse/schedule.json"
 
 # ----------------- Preferences (rotation) -----------------
 PREFS_FILE = "/home/pi/timelapse/lcd_prefs.json"
-
 def _load_prefs():
     try:
         with open(PREFS_FILE, "r") as f:
@@ -52,46 +52,40 @@ def _load_prefs():
                 return p
     except Exception:
         pass
-    return {"rot_deg": 0}  # default 0°
-
+    return {"rot_deg": 0}
 def _save_prefs(p):
     try:
         with open(PREFS_FILE, "w") as f:
             json.dump(p, f)
     except Exception:
         pass
-
-# Global rotation state (0 or 90)
-ROT_DEG = 0
 try:
     ROT_DEG = 90 if int(_load_prefs().get("rot_deg", 0)) == 90 else 0
 except Exception:
     ROT_DEG = 0
 
-# ----------------- Lazy imports -----------------
-import traceback
+# ----------------- Imports & LCD init -----------------
+from PIL import Image, ImageDraw, ImageFont
+from gpiozero import Button, PWMLED
+from luma.core.interface.serial import spi
+from luma.lcd.device import st7735
+
+# NOTE: calmer SPI (8 MHz) to reduce white-outs
+def _mk_serial():
+    return spi(port=SPI_PORT, device=SPI_DEVICE,
+               gpio_DC=PIN_DC, gpio_RST=PIN_RST,
+               bus_speed_hz=8_000_000)
+
+def _mk_device(serial_obj):
+    # raw device always rotation=0; we rotate frames in software
+    return st7735(serial_obj, width=WIDTH, height=HEIGHT,
+                  rotation=0, h_offset=0, v_offset=0, bgr=True)
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
-    from luma.core.interface.serial import spi
-    from luma.lcd.device import st7735
-    from gpiozero import Button, PWMLED
+    serial = _mk_serial()
+    device = _mk_device(serial)
 except Exception:
-    print("LCD import/init failed:", file=sys.stderr)
-    traceback.print_exc()
-    sys.exit(1)
-
-# ----------------- LCD init -----------------
-try:
-    serial = spi(port=SPI_PORT, device=SPI_DEVICE,
-                 gpio_DC=PIN_DC, gpio_RST=PIN_RST,
-                 bus_speed_hz=16000000)
-    device = st7735(serial, width=WIDTH, height=HEIGHT,
-                    rotation=0, h_offset=0, v_offset=0, bgr=True)
-except Exception:
-    print("LCD device init failed:", file=sys.stderr)
-    traceback.print_exc()
-    sys.exit(1)
+    print("LCD device init failed:", file=sys.stderr); traceback.print_exc(); sys.exit(1)
 
 # Backlight control (optional)
 try:
@@ -107,10 +101,10 @@ def _mk_button(pin):
     except Exception:
         return None
 
-btn_up    = _mk_button(KEY1)     # up
-btn_ok    = _mk_button(KEY2)     # accept
-btn_down  = _mk_button(KEY3)     # down
-js_up     = _mk_button(JS_UP)
+btn_up    = _mk_button(KEY1)     # side keys
+btn_ok    = _mk_button(KEY2)
+btn_down  = _mk_button(KEY3)
+js_up     = _mk_button(JS_UP)    # joystick
 js_down   = _mk_button(JS_DOWN)
 js_left   = _mk_button(JS_LEFT)
 js_right  = _mk_button(JS_RIGHT)
@@ -132,77 +126,76 @@ WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120);  YELL=(255,210,80);  BLUE=(90,160,220)
 RED=(255,80,80)
 
-# ----------------- Drawing helpers -----------------
-def _blank():
-    return Image.new("RGB", (device.width, device.height), (0,0,0))
+# ----------------- Drawing core (lock + auto-reinit) -----------------
+_draw_lock = threading.Lock()
+
+def _lcd_reinit():
+    """Recreate serial + device (togs reset line)"""
+    global serial, device
+    try:
+        s = _mk_serial()
+        d = _mk_device(s)
+        serial = s
+        device = d
+        return True
+    except Exception:
+        return False
 
 def _present(img):
-    """Display the image, applying UI rotation if set."""
-    if ROT_DEG == 90:
-        device.display(img.rotate(90, expand=False, resample=Image.NEAREST))
-    else:
-        device.display(img)
-
-def _clear():
-    _present(_blank())
-
-def _text_w(font, txt):  # robust width helper across PIL versions
+    """Rotate frame if needed, serialize display, and auto-reinit on failure."""
+    frame = img.rotate(90, expand=False, resample=Image.NEAREST) if ROT_DEG == 90 else img
     try:
-        return font.getlength(txt)
+        with _draw_lock:
+            device.display(frame)
+        return True
     except Exception:
-        try:
-            return font.getsize(txt)[0]
-        except Exception:
-            return len(txt) * 6  # crude fallback
+        if _lcd_reinit():
+            try:
+                with _draw_lock:
+                    device.display(frame)
+                return True
+            except Exception:
+                return False
+        return False
+
+def _blank():   return Image.new("RGB", (device.width, device.height), (0,0,0))
+def _clear():   _present(_blank())
+
+def _text_w(font, txt):
+    try:   return font.getlength(txt)
+    except Exception:
+        try:   return font.getsize(txt)[0]
+        except Exception: return len(txt) * 6
 
 def _draw_lines(lines, title=None, footer=None, highlight=-1, hints=True):
-    img = _blank()
-    drw = ImageDraw.Draw(img)
-    y = 2
+    img = _blank(); drw = ImageDraw.Draw(img); y = 2
     if title:
         drw.text((2,y), title, font=F_TITLE, fill=WHITE); y += 18
     for i, txt in enumerate(lines):
-        fill = CYAN if i == highlight else WHITE
-        drw.text((2,y), txt, font=F_TEXT, fill=fill); y += 14
+        drw.text((2,y), txt, font=F_TEXT, fill=(CYAN if i==highlight else WHITE)); y += 14
     if footer:
         drw.text((2, HEIGHT-12), footer, font=F_SMALL, fill=GRAY)
     if hints:
-        # Right-side hints: UP / OK / DOWN
-        drw.text((WIDTH-26,  8), "UP",   font=F_SMALL,  fill=GRAY)
-        drw.text((WIDTH-26, 54), "OK",   font=F_SMALL,  fill=GRAY)
-        drw.text((WIDTH-26, 98), "DOWN", font=F_SMALL,  fill=GRAY)
+        drw.text((WIDTH-26,  8), "UP",   font=F_SMALL, fill=GRAY)
+        drw.text((WIDTH-26, 54), "OK",   font=F_SMALL, fill=GRAY)
+        drw.text((WIDTH-26, 98), "DOWN", font=F_SMALL, fill=GRAY)
     _present(img)
 
 def _draw_center(msg, sub=None):
-    img = Image.new("RGB", (device.width, device.height), (0,0,0))
-    drw = ImageDraw.Draw(img)
-    w,h = device.width, device.height
-
-    # first (big) line
-    tw  = _text_w(F_TITLE, msg)
-    drw.text(((w-int(tw))//2, 36), msg, font=F_TITLE, fill=WHITE)
-
+    img = _blank(); drw = ImageDraw.Draw(img); w = device.width
+    tw = _text_w(F_TITLE, msg); drw.text(((w-int(tw))//2, 36), msg, font=F_TITLE, fill=WHITE)
     if sub:
-        # support multi-line centered subtitle
-        lines = sub.split("\n")
         y = 60
-        for line in lines:
+        for line in sub.split("\n"):
             sw = _text_w(F_SMALL, line)
-            drw.text(((w-int(sw))//2, y), line, font=F_SMALL, fill=GRAY)
-            y += 14
-
+            drw.text(((w-int(sw))//2, y), line, font=F_SMALL, fill=GRAY); y += 14
     _present(img)
 
 def _draw_wizard_page(title, value, tips=None, footer=None):
-    img = _blank()
-    drw = ImageDraw.Draw(img)
-    # Title
+    img = _blank(); drw = ImageDraw.Draw(img)
     drw.text((2, 2), title, font=F_TITLE, fill=WHITE)
-    # Big centered value
-    val_str = str(value)
-    tw = _text_w(F_VALUE, val_str)
+    val_str = str(value); tw = _text_w(F_VALUE, val_str)
     drw.text(((WIDTH - int(tw))//2, 40), val_str, font=F_VALUE, fill=CYAN)
-    # Tips near bottom
     y = 80
     for line in (tips or []):
         drw.text((2, y), line, font=F_SMALL, fill=GRAY); y += 12
@@ -210,15 +203,11 @@ def _draw_wizard_page(title, value, tips=None, footer=None):
         drw.text((2, HEIGHT-12), footer, font=F_SMALL, fill=GRAY)
     _present(img)
 
-# ASCII spinner (no Unicode)
 SPINNER = ["-", "\\", "|", "/"]
 def _draw_encoding(spin_idx=0):
-    img = _blank()
-    drw = ImageDraw.Draw(img)
-    msg = "Encoding..."
-    sp  = SPINNER[spin_idx % len(SPINNER)]
-    tw  = _text_w(F_TITLE, msg)
-    sw  = _text_w(F_TITLE, sp)
+    img = _blank(); drw = ImageDraw.Draw(img)
+    msg = "Encoding..."; sp = SPINNER[spin_idx % len(SPINNER)]
+    tw = _text_w(F_TITLE, msg); sw = _text_w(F_TITLE, sp)
     drw.text(((WIDTH-int(tw))//2, 40), msg, font=F_TITLE, fill=YELL)
     drw.text(((WIDTH-int(sw))//2, 62), sp,  font=F_TITLE, fill=YELL)
     _present(img)
@@ -260,8 +249,8 @@ class UI:
     def __init__(self):
         self.state = self.HOME
         self.menu_idx = 0
-        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off"]  # base items
-        self._home_items = self.menu_items[:]  # actual rendered items
+        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off"]  # base
+        self._home_items = self.menu_items[:]
 
         # wizard values
         self.wz_interval = 10
@@ -274,8 +263,9 @@ class UI:
         self._last_status = {}
         self._spin_idx = 0
 
-        # screen power
+        # screen power & busy guard
         self.screen_off = False
+        self.busy = False
 
         self._bind_inputs()
         self.render(force=True)
@@ -290,100 +280,105 @@ class UI:
     def _wrap_wake(self, fn):
         def inner():
             if self.screen_off:
-                self._wake_screen()
-                return  # tap-to-wake: ignore the original action
+                self._wake_screen(); return
             fn()
         return inner
 
+    # ---------- logical joystick actions (screen-relative) ----------
+    def _logical_up(self):
+        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM):
+            self.nav(-1)
+        else:
+            self.adjust(+1)
+
+    def _logical_down(self):
+        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM):
+            self.nav(+1)
+        else:
+            self.adjust(-1)
+
+    def _logical_left(self):
+        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
+            self.adjust(-10)
+        elif self.state == self.WZ_CONFIRM:
+            self.confirm_idx = 1 - self.confirm_idx; self.render()
+
+    def _logical_right(self):
+        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
+            self.adjust(+10)
+        elif self.state == self.WZ_CONFIRM:
+            self.confirm_idx = 1 - self.confirm_idx; self.render()
+
+    # Map physical joystick pins to logical directions depending on ROT_DEG
+    def _rebind_joystick(self):
+        # orientation map: for 0° -> identity; for 90° CCW:
+        #   physical UP->logical LEFT, DOWN->RIGHT, LEFT->DOWN, RIGHT->UP
+        if ROT_DEG == 0:
+            m = {
+                'up':   self._logical_up,
+                'down': self._logical_down,
+                'left': self._logical_left,
+                'right':self._logical_right,
+            }
+        else:  # 90 CCW
+            m = {
+                'up':   self._logical_left,
+                'down': self._logical_right,
+                'left': self._logical_down,
+                'right':self._logical_up,
+            }
+        if js_up:    js_up.when_pressed    = self._wrap_wake(m['up'])
+        if js_down:  js_down.when_pressed  = self._wrap_wake(m['down'])
+        if js_left:  js_left.when_pressed  = self._wrap_wake(m['left'])
+        if js_right: js_right.when_pressed = self._wrap_wake(m['right'])
+        if js_push:  js_push.when_pressed  = self._wrap_wake(self.ok)
+
     # ---------- input bindings ----------
     def _bind_inputs(self):
-        # Side buttons (K1/K2/K3) — wrapped so any press wakes the screen
+        # side keys (not rotated)
         if btn_up:   btn_up.when_pressed   = self._wrap_wake(lambda: self.nav(-1))
         if btn_down: btn_down.when_pressed = self._wrap_wake(lambda: self.nav(+1))
         if btn_ok:   btn_ok.when_pressed   = self._wrap_wake(self.ok)
-
-        # Joystick (also wrapped)
-        if js_up:    js_up.when_pressed    = self._wrap_wake(self.on_js_up)
-        if js_down:  js_down.when_pressed  = self._wrap_wake(self.on_js_down)
-        if js_left:  js_left.when_pressed  = self._wrap_wake(self.on_js_left)
-        if js_right: js_right.when_pressed = self._wrap_wake(self.on_js_right)
-        if js_push:  js_push.when_pressed  = self._wrap_wake(self.ok)
-
-    # ---------- joystick handlers ----------
-    def on_js_up(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM):
-            self.nav(-1)                 # move cursor up / toggle to Yes
-        else:
-            self.adjust(+1)              # increase by 1 in wizard
-
-    def on_js_down(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM):
-            self.nav(+1)                 # move cursor down / toggle to No
-        else:
-            self.adjust(-1)              # decrease by 1 in wizard
-
-    def on_js_left(self):
-        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
-            self.adjust(-10)             # -10 in wizard
-        elif self.state == self.WZ_CONFIRM:
-            self.confirm_idx = 1 - self.confirm_idx
-            self.render()
-
-    def on_js_right(self):
-        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
-            self.adjust(+10)             # +10 in wizard
-        elif self.state == self.WZ_CONFIRM:
-            self.confirm_idx = 1 - self.confirm_idx
-            self.render()
+        # joystick (orientation-aware)
+        self._rebind_joystick()
 
     # ---------- screen power ----------
     def _sleep_screen(self):
         self.screen_off = True
         try:
-            if bl is not None:
-                bl.value = 0.0
+            if bl is not None: bl.value = 0.0
         except Exception:
             pass
-        _clear()  # also blank panel
+        _clear()
 
     def _wake_screen(self):
         try:
-            if bl is not None:
-                bl.value = 1.0
+            if bl is not None: bl.value = 1.0
         except Exception:
             pass
         self.screen_off = False
-        # return to Home on wake
         self.state = self.HOME
         self.menu_idx = 0
         self.render(force=True)
 
     # ---------- state helpers ----------
     def nav(self, delta):
+        if self.busy: return
         if self.state == self.HOME:
             items = getattr(self, "_home_items", self.menu_items)
-            if items:
-                self.menu_idx = (self.menu_idx + delta) % len(items)
-            else:
-                self.menu_idx = 0
+            self.menu_idx = (self.menu_idx + delta) % max(1, len(items))
             self.render()
-
         elif self.state == self.SCHED_LIST:
-            # clamp within range
             self.menu_idx = max(0, self.menu_idx + delta)
             self.render()
-
         elif self.state == self.WZ_CONFIRM:
-            # up/down/left/right toggles between Yes(0) and No(1)
             self.confirm_idx = 1 - self.confirm_idx
             self.render()
-
         else:
-            # In wizard, side buttons behave like ↑/↓ by 1,
-            # with UP increasing and DOWN decreasing (invert delta).
             self.adjust(-1 if delta > 0 else +1)
 
     def adjust(self, delta):
+        if self.busy: return
         if self.state == self.WZ_INT:
             self.wz_interval = max(1, self.wz_interval + delta)
         elif self.state == self.WZ_HR:
@@ -396,14 +391,13 @@ class UI:
         self.render()
 
     def ok(self):
-        if self.state == self.ENCODING or self.screen_off:
-            return
+        if self.busy or self.screen_off: return
+        if self.state == self.ENCODING:  return
 
         if self.state == self.HOME:
             items = getattr(self, "_home_items", self.menu_items)
             sel = items[self.menu_idx] if items else None
-            if not sel:
-                return
+            if not sel: return
             if sel.startswith("Stop capture"):
                 self.stop_capture()
             elif sel == "Quick Start":
@@ -418,60 +412,63 @@ class UI:
                 self.toggle_rotation()
             return
 
-        elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
+        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
             self.state += 1
             if self.state == self.WZ_CONFIRM:
                 self.confirm_idx = 0
             self.render()
+            return
 
-        elif self.state == self.WZ_CONFIRM:
+        if self.state == self.WZ_CONFIRM:
             if self.confirm_idx == 0:
                 self.start_now_via_schedule()
             else:
-                _draw_center("Discarded")
-                time.sleep(0.5)
-                self.state = self.HOME
-                self.menu_idx = 0
-                self.render()
+                _draw_center("Discarded"); time.sleep(0.5)
+                self.state = self.HOME; self.menu_idx = 0; self.render()
+            return
 
-        elif self.state == self.SCHED_LIST:
+        if self.state == self.SCHED_LIST:
             if self.menu_idx == 0:
                 self.start_wizard()
             else:
                 self.render()
+            return
 
-    # ---------- actions ----------
+    # ---------- actions (busy-guarded) ----------
     def quick_start(self):
+        if self.busy: return
+        self.busy = True
         _draw_center("Starting...")
         ok = _http_post_form(START_URL, {"interval": 10})
         _draw_center("Started" if ok else "Failed", "Quick Start")
         time.sleep(0.6)
+        self.busy = False
         self.render(force=True)
 
     def stop_capture(self):
+        if self.busy: return
+        self.busy = True
         _draw_center("Stopping...")
         ok = _http_post_form(STOP_URL, {})
         _draw_center("Stopped" if ok else "Failed")
         time.sleep(0.6)
-        self.state = self.HOME
-        self.menu_idx = 0
+        self.busy = False
+        self.state = self.HOME; self.menu_idx = 0
         self.render(force=True)
 
     def start_wizard(self):
-        self.wz_interval = 10
-        self.wz_hours    = 0
-        self.wz_mins     = 0
-        self.wz_encode   = True
-        self.confirm_idx = 0
+        if self.busy: return
+        self.wz_interval = 10; self.wz_hours = 0; self.wz_mins = 0
+        self.wz_encode = True; self.confirm_idx = 0
         self.state = self.WZ_INT
         self.render()
 
     def start_now_via_schedule(self):
+        if self.busy: return
+        self.busy = True
         start_local = datetime.now().strftime("%Y-%m-%dT%H:%M")
         dur_hr, dur_min = self.wz_hours, self.wz_mins
-        if dur_hr == 0 and dur_min == 0:
-            dur_min = 1  # minimal window to trigger
-
+        if dur_hr == 0 and dur_min == 0: dur_min = 1
         _draw_center("Arming...")
         ok = _http_post_form(SCHED_ARM_URL, {
             "start_local": start_local,
@@ -484,22 +481,22 @@ class UI:
         })
         _draw_center("Scheduled" if ok else "Failed", "Starts now")
         time.sleep(0.8)
-        self.state = self.HOME
-        self.menu_idx = 0
+        self.busy = False
+        self.state = self.HOME; self.menu_idx = 0
         self.render(force=True)
 
     def open_schedules(self):
-        self.state = self.SCHED_LIST
-        self.menu_idx = 0
+        if self.busy: return
+        self.state = self.SCHED_LIST; self.menu_idx = 0
         self.render()
 
     def toggle_rotation(self):
         global ROT_DEG
         ROT_DEG = 90 if ROT_DEG == 0 else 0
         _save_prefs({"rot_deg": ROT_DEG})
+        self._rebind_joystick()     # <- update mapping to match rotation
         _draw_center("Rotation set", f"{ROT_DEG} degrees")
         time.sleep(0.6)
-        # redraw home with the new label & orientation
         self.state = self.HOME
         self.render(force=True)
 
@@ -514,43 +511,24 @@ class UI:
         yes = "[Yes]" if hi == 0 else " Yes "
         no  = "[No] " if hi == 1 else " No  "
         lines.append(f"{yes}    {no}")
-        _draw_lines(
-            lines,
-            title="Confirm",
-            footer="UP/DOWN choose, OK select",
-            highlight=-1,
-            hints=False
-        )
+        _draw_lines(lines, title="Confirm", footer="UP/DOWN choose, OK select",
+                    highlight=-1, hints=False)
 
     def _render_home(self):
         st = self._status()
         if st.get("encoding"):
-            self.state = self.ENCODING
-            _draw_encoding(self._spin_idx)
-            return
-
+            self.state = self.ENCODING; _draw_encoding(self._spin_idx); return
         status = "Idle"
         if st.get("encoding"): status = "Encoding"
         elif st.get("active"): status = "Capturing"
-
         items = []
-        if st.get("active"):
-            items.append("Stop capture")
+        if st.get("active"): items.append("Stop capture")
         items += ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
-
-        # Add rotation toggle displaying current state
-        rot_label = f"Rotate display: {'90°' if ROT_DEG == 90 else '0°'}"
-        items.append(rot_label)
-
+        items.append(f"Rotate display: {'90°' if ROT_DEG == 90 else '0°'}")
         self._home_items = items
-
-        if self.menu_idx >= len(items):
-            self.menu_idx = max(0, len(items)-1)
-
-        _draw_lines(
-            items, title=status, highlight=self.menu_idx,
-            footer="UP/DOWN move, OK select", hints=True
-        )
+        if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
+        _draw_lines(items, title=status, highlight=self.menu_idx,
+                    footer="UP/DOWN move, OK select", hints=True)
 
     def _render_wz(self):
         if self.state == self.WZ_INT:
@@ -567,12 +545,10 @@ class UI:
                               tips=["UP/DOWN toggle", "OK next"])
 
     def render(self, force=False):
-        if self.screen_off:
-            return  # don't draw while asleep
+        if self.screen_off or self.busy: return
         try:
             if self.state == self.ENCODING:
-                _draw_encoding(self._spin_idx)
-                return
+                _draw_encoding(self._spin_idx); return
             if self.state == self.HOME:
                 self._render_home()
             elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
@@ -596,12 +572,12 @@ class UI:
             else:
                 _clear()
         except Exception:
-            pass  # never crash the loop
+            pass
 
     # show "sleeping" for a beat, then turn panel off
     def _draw_center_sleep_then_off(self):
         prev_state = self.state
-        self.state = None  # prevent render() from overwriting
+        self.state = None
         _draw_center("Screen off", "Press any key\n to wake up")
         time.sleep(2.5)
         self._sleep_screen()
@@ -614,9 +590,8 @@ def main():
     while True:
         now = time.time()
 
-        if ui.screen_off:
-            time.sleep(0.1)
-            continue
+        if ui.screen_off or ui.busy:
+            time.sleep(0.1); continue
 
         # Poll /lcd_status periodically for encoding state
         if now - last_poll > 0.5:
@@ -629,11 +604,9 @@ def main():
                 _draw_encoding(ui._spin_idx)
             else:
                 if ui.state == UI.ENCODING:
-                    ui.state = UI.HOME
-                    ui.menu_idx = 0
+                    ui.state = UI.HOME; ui.menu_idx = 0
                 if ui.state == UI.HOME:
                     ui._render_home()
-
             last_poll = now
 
         if ui.state == UI.HOME:
