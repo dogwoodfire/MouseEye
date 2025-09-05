@@ -248,15 +248,37 @@ class UI:
         return inner
 
     def _bind_inputs(self):
-        if btn_up:   btn_up.when_pressed   = self._wrap_wake(lambda: self.nav(-1))
-        if btn_down: btn_down.when_pressed = self._wrap_wake(lambda: self.nav(+1))
-        if btn_ok:   btn_ok.when_pressed   = self._wrap_wake(self.ok)
+        # Side buttons (Waveshare K1/K2/K3)
+        if btn_up:   btn_up.when_pressed   = lambda: self.nav(-1)  # move up in lists; decrease in wizard
+        if btn_down: btn_down.when_pressed = lambda: self.nav(+1)  # move down in lists; increase in wizard
+        if btn_ok:   btn_ok.when_pressed   = self.ok
 
-        if js_up:    js_up.when_pressed    = self._wrap_wake(lambda: self.adjust(+1))
-        if js_down:  js_down.when_pressed  = self._wrap_wake(lambda: self.adjust(-1))
-        if js_left:  js_left.when_pressed  = self._wrap_wake(self.step_small)
-        if js_right: js_right.when_pressed = self._wrap_wake(self.step_big)
-        if js_push:  js_push.when_pressed  = self._wrap_wake(self.ok)
+        # Joystick — make it work on HOME and adjust values in wizard
+        if js_up:    js_up.when_pressed    = self.on_js_up
+        if js_down:  js_down.when_pressed  = self.on_js_down
+        if js_left:  js_left.when_pressed  = self.on_js_left
+        if js_right: js_right.when_pressed = self.on_js_right
+        if js_push:  js_push.when_pressed  = self.ok
+
+    def on_js_up(self):
+        if self.state in (self.HOME, self.SCHED_LIST):
+            self.nav(-1)                 # move cursor up
+        else:
+            self.adjust(+1)              # increase by 1 in wizard
+
+    def on_js_down(self):
+        if self.state in (self.HOME, self.SCHED_LIST):
+            self.nav(+1)                 # move cursor down
+        else:
+            self.adjust(-1)              # decrease by 1 in wizard
+
+    def on_js_left(self):
+        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
+            self.adjust(-10)             # -10 in wizard
+
+    def on_js_right(self):
+        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
+            self.adjust(+10)             # +10 in wizard
 
     # ---------- screen power ----------
     def _sleep_screen(self):
@@ -282,9 +304,7 @@ class UI:
 
     # ---------- state helpers ----------
     def nav(self, delta):
-        if self.state == self.ENCODING or self.screen_off:
-            return
-
+        # Menus: move selection
         if self.state == self.HOME:
             items = getattr(self, "_home_items", self.menu_items)
             if items:
@@ -295,26 +315,21 @@ class UI:
         elif self.state == self.SCHED_LIST:
             self.menu_idx = max(0, self.menu_idx + delta)
             self.render()
-        elif self.state == self.WZ_CONFIRM:
-            self.confirm_idx = (self.confirm_idx + (1 if delta > 0 else -1)) % 2
-            self.render()
         else:
-            # numeric wizard pages: up/down handled by adjust()
-            pass
+            # In wizard, side buttons act like up/down by 1
+            self.adjust(+1 if delta > 0 else -1)
 
     def adjust(self, delta):
-        if self.state == self.ENCODING or self.screen_off:
-            return
         if self.state == self.WZ_INT:
-            self.wz_interval = max(1, self.wz_interval + delta * self.step)
+            self.wz_interval = max(1, self.wz_interval + delta)
         elif self.state == self.WZ_HR:
-            self.wz_hours = max(0, min(999, self.wz_hours + delta * self.step))
+            self.wz_hours = max(0, min(999, self.wz_hours + delta))
         elif self.state == self.WZ_MIN:
-            self.wz_mins = max(0, min(59,  self.wz_mins  + delta * self.step))
+            self.wz_mins = max(0, min(59, self.wz_mins + delta))
         elif self.state == self.WZ_ENC:
-            self.wz_encode = not self.wz_encode
-        elif self.state == self.WZ_CONFIRM:
-            self.confirm_idx = (self.confirm_idx + (1 if delta > 0 else -1)) % 2
+            # toggle only on ±1; ignore ±10
+            if abs(delta) >= 1:
+                self.wz_encode = not self.wz_encode
         self.render()
 
     def step_small(self):
@@ -466,18 +481,20 @@ class UI:
             footer="↑/↓ to move, ✓ to select", hints=True
         )
 
-    def _render_wz(self):
-        tips = ["↑/↓ change, ✓ next", "← step=1, → step=10"]
-        step = self.step
+    def _render_wz(self, title, value=None):
+        # concise tips, no step indicator
         if self.state == self.WZ_INT:
-            _draw_wizard_page("Interval (s)", f"{self.wz_interval}", tips=tips, step=step)
+            _draw_wizard_page("Interval (s)", f"{self.wz_interval}",
+                            tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
         elif self.state == self.WZ_HR:
-            _draw_wizard_page("Duration hours", f"{self.wz_hours}", tips=tips, step=step)
+            _draw_wizard_page("Duration hours", f"{self.wz_hours}",
+                            tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
         elif self.state == self.WZ_MIN:
-            _draw_wizard_page("Duration mins", f"{self.wz_mins:02d}", tips=tips, step=step)
+            _draw_wizard_page("Duration mins", f"{self.wz_mins:02d}",
+                            tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
         elif self.state == self.WZ_ENC:
             _draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
-                              tips=["↑/↓ toggle, ✓ next"], step=None)
+                            tips=["↑/↓ toggle", "✓ next"])
 
     def render(self, force=False):
         if self.screen_off:
