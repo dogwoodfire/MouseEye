@@ -182,24 +182,17 @@ class UI:
 
     def _hard_clear(self):
         with self._draw_lock:
-            img = Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
-            # draw via _present so clear respects current rotation
-            self._present(img); time.sleep(0.03)
-            self._present(img); time.sleep(0.03)
+            b = self._blank()
+            self._present(b); time.sleep(0.02)
+            self._present(b); time.sleep(0.02)
 
     def _maybe_hard_clear(self):
         if not self._need_hard_clear:
             return
         try:
-            try: self.device.command(0x28)  # display off
-            except Exception: pass
-            img = Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
-            # use _present here (rotation-aware)
-            self._present(img); time.sleep(0.02)
-            self._present(img); time.sleep(0.02)
-            try: self.device.command(0x29)  # display on
-            except Exception: pass
-            self._present(img); time.sleep(0.02)
+            # thorough double-black, rotation-aware
+            self._present(self._blank()); time.sleep(0.02)
+            self._present(self._blank()); time.sleep(0.02)
         except Exception:
             pass
         self._need_hard_clear = False
