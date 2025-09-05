@@ -505,7 +505,7 @@ class UI:
     # small helper to show "sleeping" for a brief beat before off
     def _draw_center_sleep_then_off(self):
         _draw_center("Screen off", "Press any key")
-        time.sleep(0.25)
+        time.sleep(1.5)
         self._sleep_screen()
 
 # ----------------- main loop -----------------
