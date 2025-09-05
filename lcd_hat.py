@@ -348,6 +348,10 @@ class UI:
         self.menu_idx = 0
         self._need_home_clear = True
         self.render(force=True)
+        self._draw_center("Booting…")
+        time.sleep(0.3)
+        self._request_hard_clear()
+        self.render(force=True)
 
     # ---------- state helpers ----------
     def nav(self, delta):
