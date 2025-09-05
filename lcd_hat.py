@@ -4,14 +4,7 @@ import os, sys, time, json
 from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
-from gpiozero.pins.lgpio import LGPIOFactory
-_FACTORY = LGPIOFactory()
-
-def _mk_button(pin):
-    try:
-        return Button(pin, pull_up=True, bounce_time=0.08, pin_factory=_FACTORY)
-    except Exception:
-        return None
+os.environ.setdefault("GPIOZERO_PIN_FACTORY", "rpigpio")
 
 # ----------------- HAT wiring (BCM) -----------------
 PIN_DC   = int(os.environ.get("LCD_PIN_DC",   "25"))
@@ -42,8 +35,35 @@ TEST_URL        = f"{LOCAL}/test_capture"
 SCHED_ARM_URL   = f"{LOCAL}/schedule/arm"
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"
 
+# ----------------- Preferences (rotation) -----------------
+PREFS_FILE = "/home/pi/timelapse/lcd_prefs.json"
+
+def _load_prefs():
+    try:
+        with open(PREFS_FILE, "r") as f:
+            p = json.load(f)
+            if isinstance(p, dict):
+                return p
+    except Exception:
+        pass
+    return {"rot_deg": 0}  # default 0°
+
+def _save_prefs(p):
+    try:
+        with open(PREFS_FILE, "w") as f:
+            json.dump(p, f)
+    except Exception:
+        pass
+
+# Global rotation state (0 or 90)
+ROT_DEG = 0
+try:
+    ROT_DEG = 90 if int(_load_prefs().get("rot_deg", 0)) == 90 else 0
+except Exception:
+    ROT_DEG = 0
+
 # ----------------- Lazy imports -----------------
-import traceback   # <-- put once at the very top of the file with other imports
+import traceback
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -77,7 +97,7 @@ except Exception:
 # Buttons
 def _mk_button(pin):
     try:
-        return Button(pin, pull_up=True, bounce_time=0.08, pin_factory=_FACTORY)
+        return Button(pin, pull_up=True, bounce_time=0.08)
     except Exception:
         return None
 
@@ -91,13 +111,9 @@ js_right  = _mk_button(JS_RIGHT)
 js_push   = _mk_button(JS_PUSH)
 
 # ----------------- Fonts & colors -----------------
-from PIL import ImageFont
-
 def _load_font(size_px):
     try:
-        return ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", size_px
-        )
+        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", size_px)
     except Exception:
         return ImageFont.load_default()
 
@@ -114,8 +130,15 @@ RED=(255,80,80)
 def _blank():
     return Image.new("RGB", (device.width, device.height), (0,0,0))
 
+def _present(img):
+    """Display the image, applying UI rotation if set."""
+    if ROT_DEG == 90:
+        device.display(img.rotate(90, expand=False, resample=Image.NEAREST))
+    else:
+        device.display(img)
+
 def _clear():
-    device.display(_blank())
+    _present(_blank())
 
 def _text_w(font, txt):  # robust width helper across PIL versions
     try:
@@ -142,7 +165,7 @@ def _draw_lines(lines, title=None, footer=None, highlight=-1, hints=True):
         drw.text((WIDTH-26,  8), "UP",   font=F_SMALL,  fill=GRAY)
         drw.text((WIDTH-26, 54), "OK",   font=F_SMALL,  fill=GRAY)
         drw.text((WIDTH-26, 98), "DOWN", font=F_SMALL,  fill=GRAY)
-    device.display(img)
+    _present(img)
 
 def _draw_center(msg, sub=None):
     img = Image.new("RGB", (device.width, device.height), (0,0,0))
@@ -162,7 +185,7 @@ def _draw_center(msg, sub=None):
             drw.text(((w-int(sw))//2, y), line, font=F_SMALL, fill=GRAY)
             y += 14
 
-    device.display(img)
+    _present(img)
 
 def _draw_wizard_page(title, value, tips=None, footer=None):
     img = _blank()
@@ -179,7 +202,7 @@ def _draw_wizard_page(title, value, tips=None, footer=None):
         drw.text((2, y), line, font=F_SMALL, fill=GRAY); y += 12
     if footer:
         drw.text((2, HEIGHT-12), footer, font=F_SMALL, fill=GRAY)
-    device.display(img)
+    _present(img)
 
 # ASCII spinner (no Unicode)
 SPINNER = ["-", "\\", "|", "/"]
@@ -192,7 +215,7 @@ def _draw_encoding(spin_idx=0):
     sw  = _text_w(F_TITLE, sp)
     drw.text(((WIDTH-int(tw))//2, 40), msg, font=F_TITLE, fill=YELL)
     drw.text(((WIDTH-int(sw))//2, 62), sp,  font=F_TITLE, fill=YELL)
-    device.display(img)
+    _present(img)
 
 # ----------------- HTTP helpers -----------------
 def _http_json(url, timeout=1.2):
@@ -231,7 +254,7 @@ class UI:
     def __init__(self):
         self.state = self.HOME
         self.menu_idx = 0
-        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
+        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off"]  # base items
         self._home_items = self.menu_items[:]  # actual rendered items
 
         # wizard values
@@ -385,6 +408,8 @@ class UI:
                 self.open_schedules()
             elif sel == "Screen off":
                 self._draw_center_sleep_then_off()
+            elif sel.startswith("Rotate display"):
+                self.toggle_rotation()
             return
 
         elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
@@ -462,6 +487,16 @@ class UI:
         self.menu_idx = 0
         self.render()
 
+    def toggle_rotation(self):
+        global ROT_DEG
+        ROT_DEG = 90 if ROT_DEG == 0 else 0
+        _save_prefs({"rot_deg": ROT_DEG})
+        _draw_center("Rotation set", f"{ROT_DEG} degrees")
+        time.sleep(0.6)
+        # redraw home with the new label & orientation
+        self.state = self.HOME
+        self.render(force=True)
+
     # ---------- render ----------
     def _draw_confirm(self, interval_s, h, m, auto_encode, hi):
         lines = [
@@ -496,6 +531,11 @@ class UI:
         if st.get("active"):
             items.append("Stop capture")
         items += ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
+
+        # Add rotation toggle displaying current state
+        rot_label = f"Rotate display: {'90°' if ROT_DEG == 90 else '0°'}"
+        items.append(rot_label)
+
         self._home_items = items
 
         if self.menu_idx >= len(items):
@@ -600,8 +640,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-    finally:
-        try:
-            GPIO.cleanup()
-        except Exception:
-            pass
