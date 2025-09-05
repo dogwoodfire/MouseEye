@@ -180,29 +180,29 @@ class UI:
     def _request_hard_clear(self):
         self._need_hard_clear = True
 
+    def _hard_clear(self):
+        with self._draw_lock:
+            img = Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
+            # draw via _present so clear respects current rotation
+            self._present(img); time.sleep(0.03)
+            self._present(img); time.sleep(0.03)
+
     def _maybe_hard_clear(self):
         if not self._need_hard_clear:
             return
         try:
-            # OFF -> black -> black -> ON -> black
             try: self.device.command(0x28)  # display off
             except Exception: pass
             img = Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
-            self.device.display(img); time.sleep(0.02)
-            self.device.display(img); time.sleep(0.02)
+            # use _present here (rotation-aware)
+            self._present(img); time.sleep(0.02)
+            self._present(img); time.sleep(0.02)
             try: self.device.command(0x29)  # display on
             except Exception: pass
-            self.device.display(img); time.sleep(0.02)
+            self._present(img); time.sleep(0.02)
         except Exception:
             pass
         self._need_hard_clear = False
-
-    # ---------- low-level LCD helpers ----------
-    def _hard_clear(self):
-        with self._draw_lock:
-            img = Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
-            self.device.display(img); time.sleep(0.03)
-            self.device.display(img); time.sleep(0.03)
 
     def _present(self, img):
         # rotate frame in software
@@ -214,10 +214,10 @@ class UI:
     def _clear(self): self._present(self._blank())
 
     def _lcd_reinit(self):
-        # re-create SPI + device and blank once
         self.serial = _mk_serial()
         self.device = _mk_device(self.serial)
         time.sleep(0.05)
+        # rotation-aware blank after reinit
         self._hard_clear()
 
     # ---------- fonts helpers ----------
@@ -479,27 +479,29 @@ class UI:
     def toggle_rotation(self):
         if self._busy: return
         self._busy = True
-        self._unbind_inputs()            # freeze callbacks during reset
+        self._unbind_inputs()
         try:
-            # blank old orientation
+            # clear old orientation
             self._hard_clear()
 
             # flip + persist
             self.rot_deg = 90 if self.rot_deg == 0 else 0
             _save_prefs({"rot_deg": self.rot_deg})
 
-            # safe re-init + clear in new orientation
+            # re-init panel and BL
             self._lcd_reinit()
-
-            # ensure backlight on
             try:
                 if self.bl is not None: self.bl.value = 1.0
             except Exception: pass
 
-            # rebind inputs with new mapping
+            # clear in the **new** orientation (important)
+            self._present(self._blank()); time.sleep(0.02)
+            self._present(self._blank()); time.sleep(0.02)
+
+            # rebind inputs for new mapping
             self._bind_inputs()
 
-            # show confirmation then go Home
+            # confirm + go home
             self._request_hard_clear()
             self._draw_center("Rotation set", f"{self.rot_deg} degrees")
             time.sleep(0.6)
