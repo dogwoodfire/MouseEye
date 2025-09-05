@@ -35,15 +35,17 @@ SCHED_ARM_URL   = f"{LOCAL}/schedule/arm"
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"
 
 # ----------------- Lazy imports -----------------
+import traceback   # <-- put once at the very top of the file with other imports
+
 try:
     from PIL import Image, ImageDraw, ImageFont
     from luma.core.interface.serial import spi
     from luma.lcd.device import st7735
     from gpiozero import Button, PWMLED
-import traceback
-print("LCD init/import failed:", file=sys.stderr)
-traceback.print_exc()
-sys.exit(1)
+except Exception:
+    print("LCD import/init failed:", file=sys.stderr)
+    traceback.print_exc()
+    sys.exit(1)
 
 # ----------------- LCD init -----------------
 try:
