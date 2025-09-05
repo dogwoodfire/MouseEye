@@ -20,8 +20,8 @@ PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))  # Backlight (PWM LED)
 
 # Waveshare 1.44" LCD HAT keys + joystick
 KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up (side key)
-KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # OK
-KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down (side key)
+KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # OK  (side key)
+KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down(side key)
 JS_UP    = int(os.environ.get("LCD_JS_UP",    "6"))
 JS_DOWN  = int(os.environ.get("LCD_JS_DOWN",  "19"))
 JS_LEFT  = int(os.environ.get("LCD_JS_LEFT",  "5"))
@@ -70,7 +70,7 @@ from gpiozero import Button, PWMLED
 from luma.core.interface.serial import spi
 from luma.lcd.device import st7735
 
-# NOTE: calmer SPI (8 MHz) to reduce white-outs
+# ---- safer SPI (8 MHz) ----
 def _mk_serial():
     return spi(port=SPI_PORT, device=SPI_DEVICE,
                gpio_DC=PIN_DC, gpio_RST=PIN_RST,
@@ -126,15 +126,13 @@ WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120);  YELL=(255,210,80);  BLUE=(90,160,220)
 RED=(255,80,80)
 
-# ---- draw state ----
-_rot_pending_clear = False
-_home_needs_clear  = True  # one-shot hard blank on first Home render
-
-# ----------------- Drawing core (lock + auto-reinit) -----------------
-_draw_lock = threading.Lock()
+# ---- draw / device state ----
+_draw_lock          = threading.Lock()
+_rot_pending_clear  = False
+_home_needs_clear   = True  # one-shot hard blank on first Home render
 
 def _lcd_reinit():
-    """Recreate serial + device (toggles reset line)"""
+    """Recreate serial + device (toggles reset line)."""
     global serial, device
     try:
         s = _mk_serial()
@@ -156,14 +154,11 @@ def _present(img):
     """Rotate frame if needed, serialize display, and auto-reinit on failure."""
     global _rot_pending_clear
     frame = img.rotate(90, expand=False, resample=Image.NEAREST) if ROT_DEG == 90 else img
-
     try:
         with _draw_lock:
-            # ► If rotation just changed, hard clear twice to purge ghosting
             if _rot_pending_clear:
                 _hard_clear()
                 _rot_pending_clear = False
-
             device.display(frame)
         return True
     except Exception:
@@ -303,36 +298,40 @@ class UI:
         return inner
 
     # ---------- logical joystick actions (screen-relative) ----------
-    def _logical_up(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM):
-            self.nav(-1)
-        else:
-            self.adjust(+1)
-
-    def _logical_down(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM):
-            self.nav(+1)
-        else:
-            self.adjust(-1)
-
+    def _logical_up(self):   self._nav_or_adjust(-1, +1)
+    def _logical_down(self): self._nav_or_adjust(+1, -1)
     def _logical_left(self):
-        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
-            self.adjust(-10)
-        elif self.state == self.WZ_CONFIRM:
-            self.confirm_idx = 1 - self.confirm_idx; self.render()
-
+        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN): self.adjust(-10)
+        elif self.state == self.WZ_CONFIRM: self.confirm_idx = 1 - self.confirm_idx; self.render()
     def _logical_right(self):
-        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN):
-            self.adjust(+10)
-        elif self.state == self.WZ_CONFIRM:
-            self.confirm_idx = 1 - self.confirm_idx; self.render()
+        if self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN): self.adjust(+10)
+        elif self.state == self.WZ_CONFIRM: self.confirm_idx = 1 - self.confirm_idx; self.render()
+
+    def _nav_or_adjust(self, nav_delta, adj_delta):
+        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM):
+            self.nav(nav_delta)
+        else:
+            self.adjust(adj_delta)
+
+    # ---- input (un)binding ----
+    def _unbind_inputs(self):
+        # Joystick
+        if js_up:    js_up.when_pressed = None
+        if js_down:  js_down.when_pressed = None
+        if js_left:  js_left.when_pressed = None
+        if js_right: js_right.when_pressed = None
+        if js_push:  js_push.when_pressed = None
+        # Side keys
+        if btn_up:   btn_up.when_pressed = None
+        if btn_down: btn_down.when_pressed = None
+        if btn_ok:   btn_ok.when_pressed = None
 
     def _rebind_joystick(self):
         """
         Map physical joystick to on-screen directions.
-        The screen rotates 90° CCW; to keep controls intuitive,
-        rotate the controls 90° CW:
-          Up -> Left, Right -> Up, Down -> Right, Left -> Down
+        Screen rotates 90° CCW → rotate controls 90° CCW so they stay intuitive:
+          Up→Left, Right→Up, Down→Right, Left→Down
+        (If you prefer CW instead, swap to the CW map shown below.)
         """
         if ROT_DEG == 0:
             m = {
@@ -341,13 +340,16 @@ class UI:
                 'left':  self._logical_left,
                 'right': self._logical_right,
             }
-        else:  # screen is 90° CCW → rotate controls 90° CW
+        else:  # 90° CCW screen → CCW control rotation
             m = {
                 'up':    self._logical_left,
                 'right': self._logical_up,
                 'down':  self._logical_right,
                 'left':  self._logical_down,
             }
+            # ---- CW alternative (uncomment to use CW mapping) ----
+            # m = {'up': self._logical_right, 'right': self._logical_down,
+            #      'down': self._logical_left, 'left': self._logical_up}
 
         if js_up:    js_up.when_pressed    = self._wrap_wake(m['up'])
         if js_down:  js_down.when_pressed  = self._wrap_wake(m['down'])
@@ -355,7 +357,6 @@ class UI:
         if js_right: js_right.when_pressed = self._wrap_wake(m['right'])
         if js_push:  js_push.when_pressed  = self._wrap_wake(self.ok)
 
-    # ---------- input bindings ----------
     def _bind_inputs(self):
         # side keys (not rotated)
         if btn_up:   btn_up.when_pressed   = self._wrap_wake(lambda: self.nav(-1))
@@ -523,15 +524,39 @@ class UI:
         self.state = self.SCHED_LIST; self.menu_idx = 0
         self.render()
 
+    # ---- robust rotation (no freezes) ----
     def toggle_rotation(self):
         global ROT_DEG, _rot_pending_clear, _home_needs_clear
-        ROT_DEG = 90 if ROT_DEG == 0 else 0
-        _save_prefs({"rot_deg": ROT_DEG})
-        self._rebind_joystick()
-        _rot_pending_clear = True      # clear in _present()
-        _home_needs_clear  = True      # also ensure Home blanks before draw
+        if self.busy: return
+        self.busy = True
+
+        # stop callbacks firing during rotation/reinit
+        self._unbind_inputs()
+
+        try:
+            # pre-clear to avoid tearing with the old orientation
+            _hard_clear()
+
+            # change rotation + persist
+            ROT_DEG = 90 if ROT_DEG == 0 else 0
+            _save_prefs({"rot_deg": ROT_DEG})
+
+            # ensure next present blanks and reinit hardware now
+            _rot_pending_clear = True
+            _lcd_reinit()       # toggles reset line
+            _hard_clear()       # clear immediately after reset
+
+            # rebind with new orientation map
+            self._rebind_joystick()
+            self._bind_inputs()
+
+            _home_needs_clear = True
+        finally:
+            self.busy = False
+
+        # brief confirmation, then draw Home
         _draw_center("Rotation set", f"{ROT_DEG} degrees")
-        time.sleep(0.6)
+        time.sleep(0.5)
         self.state = self.HOME
         self.render(force=True)
 
@@ -551,7 +576,6 @@ class UI:
 
     def _render_home(self):
         global _home_needs_clear
-        # one-shot hard blank if requested
         if _home_needs_clear:
             _hard_clear()
             _home_needs_clear = False
