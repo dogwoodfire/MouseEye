@@ -4,7 +4,6 @@ import os, sys, time, json
 from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
-import os
 os.environ.setdefault("GPIOZERO_PIN_FACTORY", "rpigpio")
 
 # ----------------- HAT wiring (BCM) -----------------
