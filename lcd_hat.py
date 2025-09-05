@@ -141,8 +141,10 @@ def _read_schedules():
 #                              UI CONTROLLER
 # =====================================================================
 class UI:
-    # Reworked wizard: start/end clock times instead of duration
-    HOME, WZ_INT, WZ_SH, WZ_SM, WZ_EH, WZ_EM, WZ_ENC, WZ_CONFIRM, SCHED_LIST, ENCODING = range(10)
+    # Timelapse wizard (start now): interval, duration hr, duration min, enc, confirm
+    HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
+    SCH_INT, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
+    SCHED_LIST, ENCODING = range(15)
 
     def __init__(self):
         # prefs
@@ -175,21 +177,24 @@ class UI:
         self.js_right = self._mk_button(JS_RIGHT)
         self.js_push  = self._mk_button(JS_PUSH)
 
+        # defaults for both wizards
+        now = datetime.now()
+        self.wz_interval = 10
+        self.tl_hours = 0
+        self.tl_mins  = 0
+        self.sch_start_h  = now.hour
+        self.sch_start_m  = (now.minute + 1) % 60
+        self.sch_end_h    = (now.hour + 1) % 24
+        self.sch_end_m    = self.sch_start_m
+        self.wz_encode   = True
+        self.confirm_idx = 0
+        self._last_status = {}
+
         # state
         self.state = self.HOME
         self.menu_idx = 0
         self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
         self._home_items = self.menu_items[:]
-
-        now = datetime.now()
-        self.wz_interval = 10
-        self.wz_start_h  = now.hour
-        self.wz_start_m  = (now.minute + 1) % 60
-        self.wz_end_h    = (now.hour + 1) % 24
-        self.wz_end_m    = self.wz_start_m
-        self.wz_encode   = True
-        self.confirm_idx = 0
-        self._last_status = {}
 
         # bind inputs and draw
         self._bind_inputs()
@@ -349,17 +354,26 @@ class UI:
 
     # ---------- logical joystick actions ----------
     def _logical_up(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM): self.nav(-1)
+        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM): self.nav(-1)
         else: self.adjust(+1)
     def _logical_down(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.WZ_CONFIRM): self.nav(+1)
+        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM): self.nav(+1)
         else: self.adjust(-1)
     def _logical_left(self):
-        if self.state in (self.WZ_INT, self.WZ_SH, self.WZ_SM, self.WZ_EH, self.WZ_EM): self.adjust(-10 if self.state==self.WZ_INT else -1)
-        elif self.state == self.WZ_CONFIRM: self.confirm_idx = 1 - self.confirm_idx; self.render()
+        # left/right = fast step (±10) for interval AND all schedule fields
+        if self.state in (self.TL_INT, self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
+            self.adjust(-10)
+        elif self.state in (self.TL_HR, self.TL_MIN):  # timelapse duration: fast step too
+            self.adjust(-10)
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM):
+            self.confirm_idx = 1 - self.confirm_idx; self.render()
     def _logical_right(self):
-        if self.state in (self.WZ_INT, self.WZ_SH, self.WZ_SM, self.WZ_EH, self.WZ_EM): self.adjust(+10 if self.state==self.WZ_INT else +1)
-        elif self.state == self.WZ_CONFIRM: self.confirm_idx = 1 - self.confirm_idx; self.render()
+        if self.state in (self.TL_INT, self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
+            self.adjust(+10)
+        elif self.state in (self.TL_HR, self.TL_MIN):
+            self.adjust(+10)
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM):
+            self.confirm_idx = 1 - self.confirm_idx; self.render()
 
     # ---------- screen power ----------
     def _sleep_screen(self):
@@ -388,25 +402,40 @@ class UI:
             self.render()
         elif self.state == self.SCHED_LIST:
             self.menu_idx = max(0, self.menu_idx + delta); self.render()
-        elif self.state == self.WZ_CONFIRM:
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
         else:
             self.adjust(-1 if delta > 0 else +1)
 
     def adjust(self, delta):
         if self._busy: return
-        if self.state == self.WZ_INT:
+        # Timelapse wizard
+        if self.state == self.TL_INT:
             step = 10 if abs(delta) >= 10 else 1
             self.wz_interval = max(1, self.wz_interval + (step if delta>0 else -step))
-        elif self.state == self.WZ_SH:
-            self.wz_start_h = (self.wz_start_h + delta) % 24
-        elif self.state == self.WZ_SM:
-            self.wz_start_m = (self.wz_start_m + delta) % 60
-        elif self.state == self.WZ_EH:
-            self.wz_end_h = (self.wz_end_h + delta) % 24
-        elif self.state == self.WZ_EM:
-            self.wz_end_m = (self.wz_end_m + delta) % 60
-        elif self.state == self.WZ_ENC:
+        elif self.state == self.TL_HR:
+            step = 10 if abs(delta) >= 10 else 1
+            self.tl_hours = max(0, min(999, self.tl_hours + (step if delta>0 else -step)))
+        elif self.state == self.TL_MIN:
+            step = 10 if abs(delta) >= 10 else 1
+            self.tl_mins = max(0, min(59, self.tl_mins + (step if delta>0 else -step)))
+        # Schedule wizard
+        elif self.state == self.SCH_INT:
+            step = 10 if abs(delta) >= 10 else 1
+            self.wz_interval = max(1, self.wz_interval + (step if delta>0 else -step))
+        elif self.state == self.SCH_SH:
+            step = 10 if abs(delta) >= 10 else 1
+            self.sch_start_h = (self.sch_start_h + (step if delta>0 else -step)) % 24
+        elif self.state == self.SCH_SM:
+            step = 10 if abs(delta) >= 10 else 1
+            self.sch_start_m = (self.sch_start_m + (step if delta>0 else -step)) % 60
+        elif self.state == self.SCH_EH:
+            step = 10 if abs(delta) >= 10 else 1
+            self.sch_end_h = (self.sch_end_h + (step if delta>0 else -step)) % 24
+        elif self.state == self.SCH_EM:
+            step = 10 if abs(delta) >= 10 else 1
+            self.sch_end_m = (self.sch_end_m + (step if delta>0 else -step)) % 60
+        elif self.state in (self.TL_ENC, self.SCH_ENC):
             if abs(delta) >= 1: self.wz_encode = not self.wz_encode
         self.render()
 
@@ -419,28 +448,41 @@ class UI:
             if not sel: return
             if sel.startswith("Stop capture"): self.stop_capture()
             elif sel == "Quick Start":         self.quick_start()
-            elif sel == "New Timelapse":       self.start_wizard()
+            elif sel == "New Timelapse":       self.start_tl_wizard()
             elif sel == "Schedules":           self.open_schedules()
             elif sel == "Screen off":          self._draw_center_sleep_then_off()
             elif sel.startswith("Rotate display"): self.toggle_rotation()
             return
 
-        if self.state in (self.WZ_INT, self.WZ_SH, self.WZ_SM, self.WZ_EH, self.WZ_EM, self.WZ_ENC):
+        # advance through TL or SCH wizard
+        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_ENC):
             self.state += 1
-            if self.state == self.WZ_CONFIRM: self.confirm_idx = 0
+            if self.state == self.TL_CONFIRM: self.confirm_idx = 0
             self.render(); return
 
-        if self.state == self.WZ_CONFIRM:
-            if self.confirm_idx == 0: self.start_now_via_schedule()
-            else:
-                self._draw_center("Discarded"); time.sleep(0.5)
-                self.state = self.HOME; self.menu_idx = 0; self._request_hard_clear(); self.render()
+        if self.state in (self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM, self.SCH_ENC):
+            self.state += 1
+            if self.state == self.SCH_CONFIRM: self.confirm_idx = 0
+            self.render(); return
+
+        if self.state == self.TL_CONFIRM:
+            if self.confirm_idx == 0: self.start_timelapse_now()
+            else: self._abort_to_home()
+            return
+
+        if self.state == self.SCH_CONFIRM:
+            if self.confirm_idx == 0: self.arm_schedule_with_times()
+            else: self._abort_to_home()
             return
 
         if self.state == self.SCHED_LIST:
-            if self.menu_idx == 0: self.start_wizard()
+            if self.menu_idx == 0: self.start_schedule_wizard()
             else: self.render()
             return
+
+    def _abort_to_home(self):
+        self._draw_center("Discarded"); time.sleep(0.5)
+        self.state = self.HOME; self.menu_idx = 0; self._request_hard_clear(); self.render()
 
     # ---------- actions ----------
     def quick_start(self):
@@ -466,29 +508,66 @@ class UI:
         self._request_hard_clear()
         self.render(force=True)
 
-    def start_wizard(self):
+    # --- New Timelapse (start now; duration hr/min) ---
+    def start_tl_wizard(self):
+        if self._busy: return
+        self.wz_interval = 10
+        self.tl_hours = 0
+        self.tl_mins  = 0
+        self.wz_encode = True
+        self.confirm_idx = 0
+        self._request_hard_clear()
+        self.state = self.TL_INT
+        self.render()
+
+    def start_timelapse_now(self):
+        if self._busy: return
+        self._busy = True
+        try:
+            dur_hr = max(0, int(self.tl_hours))
+            dur_min = max(0, int(self.tl_mins))
+            if dur_hr == 0 and dur_min == 0: dur_min = 1
+            start_local = datetime.now().strftime("%Y-%m-%dT%H:%M")
+            self._draw_center("Starting…")
+            ok = _http_post_form(SCHED_ARM_URL, {
+                "start_local": start_local,
+                "duration_hr":  str(dur_hr),
+                "duration_min": str(dur_min),
+                "interval":     str(self.wz_interval),
+                "fps":          "24",
+                "auto_encode":  "on" if self.wz_encode else "",
+                "sess_name":    "",
+            })
+            self._draw_center("Scheduled" if ok else "Failed", "Starts now")
+            time.sleep(0.8)
+        finally:
+            self._busy = False
+            self.state = self.HOME; self.menu_idx = 0
+            self._request_hard_clear()
+            self.render(force=True)
+
+    # --- New Schedule (start/end clock times) ---
+    def start_schedule_wizard(self):
         if self._busy: return
         now = datetime.now()
         self.wz_interval = 10
-        self.wz_start_h  = now.hour
-        self.wz_start_m  = (now.minute + 1) % 60
-        self.wz_end_h    = (now.hour + 1) % 24
-        self.wz_end_m    = self.wz_start_m
-        self.wz_encode   = True
+        self.sch_start_h  = now.hour
+        self.sch_start_m  = (now.minute + 1) % 60
+        self.sch_end_h    = (now.hour + 1) % 24
+        self.sch_end_m    = self.sch_start_m
+        self.wz_encode = True
         self.confirm_idx = 0
         self._request_hard_clear()
-        self.state = self.WZ_INT
+        self.state = self.SCH_INT
         self.render()
 
-    def start_now_via_schedule(self):
+    def arm_schedule_with_times(self):
         if self._busy: return
         self._busy = True
         try:
             now = datetime.now()
-            start = now.replace(hour=self.wz_start_h, minute=self.wz_start_m,
-                                second=0, microsecond=0)
-            end   = now.replace(hour=self.wz_end_h, minute=self.wz_end_m,
-                                second=0, microsecond=0)
+            start = now.replace(hour=self.sch_start_h, minute=self.sch_start_m, second=0, microsecond=0)
+            end   = now.replace(hour=self.sch_end_h, minute=self.sch_end_m, second=0, microsecond=0)
             if end <= start:
                 end += timedelta(days=1)
             dur = end - start
@@ -496,7 +575,7 @@ class UI:
             dur_hr, dur_min = divmod(mins, 60)
 
             start_local = start.strftime("%Y-%m-%dT%H:%M")
-            self._draw_center("Arming...")
+            self._draw_center("Arming…")
             ok = _http_post_form(SCHED_ARM_URL, {
                 "start_local": start_local,
                 "duration_hr":  str(dur_hr),
@@ -549,7 +628,21 @@ class UI:
             self._busy = False
 
     # ---------- render ----------
-    def _draw_confirm(self, interval_s, sh, sm, eh, em, auto_encode, hi):
+    def _draw_confirm_tl(self, interval_s, h, m, auto_encode, hi):
+        lines = [
+            f"Interval:  {interval_s}s",
+            f"Duration:  {h}h{m:02d}m",
+            f"Auto-enc.: {'Yes' if auto_encode else 'No'}",
+            "",
+        ]
+        yes = "[Yes]" if hi == 0 else " Yes "
+        no  = "[No] " if hi == 1 else " No  "
+        lines.append(f"{yes}    {no}")
+        self._draw_lines(lines, title="Confirm",
+                         footer="UP/DOWN choose, OK select",
+                         highlight=-1, hints=False)
+
+    def _draw_confirm_sch(self, interval_s, sh, sm, eh, em, auto_encode, hi):
         lines = [
             f"Interval:  {interval_s}s",
             f"Start:     {sh:02d}:{sm:02d}",
@@ -593,22 +686,36 @@ class UI:
 
     def _render_wz(self):
         self._maybe_hard_clear()
-        if self.state == self.WZ_INT:
+        # Timelapse wizard pages
+        if self.state == self.TL_INT:
             self._draw_wizard_page("Interval (s)", f"{self.wz_interval}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
-        elif self.state == self.WZ_SH:
-            self._draw_wizard_page("Start hour", f"{self.wz_start_h:02d}",
-                                   tips=["UP/DOWN ±1, wrap 0–23", "OK next"])
-        elif self.state == self.WZ_SM:
-            self._draw_wizard_page("Start minute", f"{self.wz_start_m:02d}",
-                                   tips=["UP/DOWN ±1, wrap 0–59", "OK next"])
-        elif self.state == self.WZ_EH:
-            self._draw_wizard_page("End hour", f"{self.wz_end_h:02d}",
-                                   tips=["UP/DOWN ±1, wrap 0–23", "OK next"])
-        elif self.state == self.WZ_EM:
-            self._draw_wizard_page("End minute", f"{self.wz_end_m:02d}",
-                                   tips=["UP/DOWN ±1, wrap 0–59", "OK next"])
-        elif self.state == self.WZ_ENC:
+        elif self.state == self.TL_HR:
+            self._draw_wizard_page("Duration hours", f"{self.tl_hours}",
+                                   tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.TL_MIN:
+            self._draw_wizard_page("Duration mins", f"{self.tl_mins:02d}",
+                                   tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.TL_ENC:
+            self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
+                                   tips=["UP/DOWN toggle", "OK next"])
+        # Schedule wizard pages
+        elif self.state == self.SCH_INT:
+            self._draw_wizard_page("Interval (s)", f"{self.wz_interval}",
+                                   tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.SCH_SH:
+            self._draw_wizard_page("Start hour", f"{self.sch_start_h:02d}",
+                                   tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.SCH_SM:
+            self._draw_wizard_page("Start minute", f"{self.sch_start_m:02d}",
+                                   tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.SCH_EH:
+            self._draw_wizard_page("End hour", f"{self.sch_end_h:02d}",
+                                   tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.SCH_EM:
+            self._draw_wizard_page("End minute", f"{self.sch_end_m:02d}",
+                                   tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.SCH_ENC:
             self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
                                    tips=["UP/DOWN toggle", "OK next"])
 
@@ -620,11 +727,17 @@ class UI:
                 self._draw_encoding(self._spin_idx); return
             if self.state == self.HOME:
                 self._render_home()
-            elif self.state in (self.WZ_INT, self.WZ_SH, self.WZ_SM, self.WZ_EH, self.WZ_EM, self.WZ_ENC):
+            elif self.state in (
+                self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_ENC,
+                self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM, self.SCH_ENC,
+            ):
                 self._render_wz()
-            elif self.state == self.WZ_CONFIRM:
-                self._draw_confirm(self.wz_interval, self.wz_start_h, self.wz_start_m,
-                                   self.wz_end_h, self.wz_end_m, self.wz_encode, self.confirm_idx)
+            elif self.state == self.TL_CONFIRM:
+                self._draw_confirm_tl(self.wz_interval, self.tl_hours, self.tl_mins,
+                                      self.wz_encode, self.confirm_idx)
+            elif self.state == self.SCH_CONFIRM:
+                self._draw_confirm_sch(self.wz_interval, self.sch_start_h, self.sch_start_m,
+                                       self.sch_end_h, self.sch_end_m, self.wz_encode, self.confirm_idx)
             elif self.state == self.SCHED_LIST:
                 self._maybe_hard_clear()
                 sch = _read_schedules()
