@@ -27,12 +27,12 @@ WIDTH, HEIGHT = 128, 128
 
 # ----------------- Backend endpoints -----------------
 LOCAL = "http://127.0.0.1:5050"
-STATUS_URL      = f"{LOCAL}/lcd_status"     # must exist in your Flask app
+STATUS_URL      = f"{LOCAL}/lcd_status"
 START_URL       = f"{LOCAL}/start"
 STOP_URL        = f"{LOCAL}/stop"
 TEST_URL        = f"{LOCAL}/test_capture"
 SCHED_ARM_URL   = f"{LOCAL}/schedule/arm"
-SCHED_FILE      = "/home/pi/timelapse/schedule.json"   # same file your app uses
+SCHED_FILE      = "/home/pi/timelapse/schedule.json"
 
 # ----------------- Lazy imports -----------------
 try:
@@ -48,7 +48,6 @@ try:
     serial = spi(port=SPI_PORT, device=SPI_DEVICE,
                  gpio_DC=PIN_DC, gpio_RST=PIN_RST,
                  bus_speed_hz=16000000)
-    # tweak offsets/rotation if you still see edge noise
     device = st7735(serial, width=WIDTH, height=HEIGHT,
                     rotation=0, h_offset=0, v_offset=0, bgr=True)
 except Exception:
@@ -78,16 +77,33 @@ js_right  = _mk_button(JS_RIGHT)
 js_push   = _mk_button(JS_PUSH)
 
 # ----------------- Fonts & colors -----------------
-def _font(sz):
-    try:
-        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", sz)
-    except Exception:
-        return ImageFont.load_default()
+def _load_font_prefer_bitmap(size_ttf: int, fallback_default=True):
+    """
+    Try crisp bitmap fonts first; fall back to DejaVu TTF or PIL default.
+    """
+    candidates = [
+        # Terminus BDF (install: sudo apt-get install fonts-terminus)
+        ("/usr/share/fonts/X11/misc/ter-u12n.bdf", None),
+        ("/usr/share/fonts/X11/misc/ter-u14n.bdf", None),
+        # unscii (install: sudo apt-get install fonts-unscii)
+        ("/usr/share/fonts/truetype/unscii/unscii-8.ttf", size_ttf),
+        # DejaVu mono (fallback TTF)
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", size_ttf),
+    ]
+    for path, sz in candidates:
+        try:
+            if path.endswith((".bdf", ".pcf")):
+                return ImageFont.load(path)
+            else:
+                return ImageFont.truetype(path, sz)
+        except Exception:
+            continue
+    return ImageFont.load_default() if fallback_default else None
 
-F_TITLE  = _font(14)
-F_TEXT   = _font(12)
-F_SMALL  = _font(10)
-F_VALUE  = _font(18)  # big centered value
+F_TITLE = _load_font_prefer_bitmap(14)
+F_TEXT  = _load_font_prefer_bitmap(12)
+F_SMALL = _load_font_prefer_bitmap(10)
+F_VALUE = _load_font_prefer_bitmap(18)
 
 WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120);  YELL=(255,210,80);  BLUE=(90,160,220)
@@ -99,6 +115,15 @@ def _blank():
 
 def _clear():
     device.display(_blank())
+
+def _text_w(font, txt):  # robust width helper across PIL versions
+    try:
+        return font.getlength(txt)
+    except Exception:
+        try:
+            return font.getsize(txt)[0]
+        except Exception:
+            return len(txt) * 6  # crude fallback
 
 def _draw_lines(lines, title=None, footer=None, highlight=-1, hints=True):
     img = _blank()
@@ -112,10 +137,10 @@ def _draw_lines(lines, title=None, footer=None, highlight=-1, hints=True):
     if footer:
         drw.text((2, HEIGHT-12), footer, font=F_SMALL, fill=GRAY)
     if hints:
-        # Right-side hints: ↑ ✓ ↓
-        drw.text((WIDTH-14,  8), "↑", font=F_TEXT,  fill=GRAY)
-        drw.text((WIDTH-16, 54), "✓", font=F_TEXT,  fill=GRAY)
-        drw.text((WIDTH-14, 98), "↓", font=F_TEXT,  fill=GRAY)
+        # Right-side hints: UP / OK / DOWN
+        drw.text((WIDTH-26,  8), "UP",   font=F_SMALL,  fill=GRAY)
+        drw.text((WIDTH-26, 54), "OK",   font=F_SMALL,  fill=GRAY)
+        drw.text((WIDTH-26, 98), "DOWN", font=F_SMALL,  fill=GRAY)
     device.display(img)
 
 def _draw_center(msg, sub=None):
@@ -124,16 +149,16 @@ def _draw_center(msg, sub=None):
     w,h = device.width, device.height
 
     # first (big) line
-    tw  = F_TITLE.getlength(msg)
-    drw.text(((w-tw)//2, 36), msg, font=F_TITLE, fill=WHITE)
+    tw  = _text_w(F_TITLE, msg)
+    drw.text(((w-int(tw))//2, 36), msg, font=F_TITLE, fill=WHITE)
 
     if sub:
         # support multi-line centered subtitle
         lines = sub.split("\n")
         y = 60
         for line in lines:
-            sw = F_SMALL.getlength(line)
-            drw.text(((w-sw)//2, y), line, font=F_SMALL, fill=GRAY)
+            sw = _text_w(F_SMALL, line)
+            drw.text(((w-int(sw))//2, y), line, font=F_SMALL, fill=GRAY)
             y += 14
 
     device.display(img)
@@ -145,8 +170,8 @@ def _draw_wizard_page(title, value, tips=None, footer=None):
     drw.text((2, 2), title, font=F_TITLE, fill=WHITE)
     # Big centered value
     val_str = str(value)
-    tw = F_VALUE.getlength(val_str)
-    drw.text(((WIDTH - tw)//2, 40), val_str, font=F_VALUE, fill=CYAN)
+    tw = _text_w(F_VALUE, val_str)
+    drw.text(((WIDTH - int(tw))//2, 40), val_str, font=F_VALUE, fill=CYAN)
     # Tips near bottom
     y = 80
     for line in (tips or []):
@@ -155,17 +180,17 @@ def _draw_wizard_page(title, value, tips=None, footer=None):
         drw.text((2, HEIGHT-12), footer, font=F_SMALL, fill=GRAY)
     device.display(img)
 
-# Encoding overlay (spinner)
-SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+# ASCII spinner (no Unicode)
+SPINNER = ["-", "\\", "|", "/"]
 def _draw_encoding(spin_idx=0):
     img = _blank()
     drw = ImageDraw.Draw(img)
-    msg = "Encoding…"
+    msg = "Encoding..."
     sp  = SPINNER[spin_idx % len(SPINNER)]
-    tw  = F_TITLE.getlength(msg)
-    sw  = F_TITLE.getlength(sp)
-    drw.text(((WIDTH-tw)//2, 40), msg, font=F_TITLE, fill=YELL)
-    drw.text(((WIDTH-sw)//2, 62), sp,  font=F_TITLE, fill=YELL)
+    tw  = _text_w(F_TITLE, msg)
+    sw  = _text_w(F_TITLE, sp)
+    drw.text(((WIDTH-int(tw))//2, 40), msg, font=F_TITLE, fill=YELL)
+    drw.text(((WIDTH-int(sw))//2, 62), sp,  font=F_TITLE, fill=YELL)
     device.display(img)
 
 # ----------------- HTTP helpers -----------------
@@ -205,7 +230,7 @@ class UI:
     def __init__(self):
         self.state = self.HOME
         self.menu_idx = 0
-        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "🖥 Screen off"]
+        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
         self._home_items = self.menu_items[:]  # actual rendered items
 
         # wizard values
@@ -324,8 +349,8 @@ class UI:
             self.render()
 
         else:
-            # In wizard (INT/HR/MIN/ENC), side buttons behave like ↑/↓ by 1,
-            # with **UP increasing** and **DOWN decreasing** (invert delta).
+            # In wizard, side buttons behave like ↑/↓ by 1,
+            # with UP increasing and DOWN decreasing (invert delta).
             self.adjust(-1 if delta > 0 else +1)
 
     def adjust(self, delta):
@@ -336,7 +361,6 @@ class UI:
         elif self.state == self.WZ_MIN:
             self.wz_mins = max(0, min(59, self.wz_mins + delta))
         elif self.state == self.WZ_ENC:
-            # toggle only on ±1; ignore ±10
             if abs(delta) >= 1:
                 self.wz_encode = not self.wz_encode
         self.render()
@@ -350,7 +374,7 @@ class UI:
             sel = items[self.menu_idx] if items else None
             if not sel:
                 return
-            if sel.startswith("⏹ Stop Capture"):
+            if sel.startswith("Stop capture"):
                 self.stop_capture()
             elif sel == "Quick Start":
                 self.quick_start()
@@ -358,7 +382,7 @@ class UI:
                 self.start_wizard()
             elif sel == "Schedules":
                 self.open_schedules()
-            elif sel.startswith("🖥"):
+            elif sel == "Screen off":
                 self._draw_center_sleep_then_off()
             return
 
@@ -386,14 +410,14 @@ class UI:
 
     # ---------- actions ----------
     def quick_start(self):
-        _draw_center("Starting…")
+        _draw_center("Starting...")
         ok = _http_post_form(START_URL, {"interval": 10})
         _draw_center("Started" if ok else "Failed", "Quick Start")
         time.sleep(0.6)
         self.render(force=True)
 
     def stop_capture(self):
-        _draw_center("Stopping…")
+        _draw_center("Stopping...")
         ok = _http_post_form(STOP_URL, {})
         _draw_center("Stopped" if ok else "Failed")
         time.sleep(0.6)
@@ -416,7 +440,7 @@ class UI:
         if dur_hr == 0 and dur_min == 0:
             dur_min = 1  # minimal window to trigger
 
-        _draw_center("Arming…")
+        _draw_center("Arming...")
         ok = _http_post_form(SCHED_ARM_URL, {
             "start_local": start_local,
             "duration_hr":  str(dur_hr),
@@ -451,7 +475,7 @@ class UI:
         _draw_lines(
             lines,
             title="Confirm",
-            footer="↑/↓ choose, ✓ select",
+            footer="UP/DOWN choose, OK select",
             highlight=-1,
             hints=False
         )
@@ -469,8 +493,8 @@ class UI:
 
         items = []
         if st.get("active"):
-            items.append("⏹ Stop Capture")
-        items += ["Quick Start", "New Timelapse", "Schedules", "🖥 Screen off"]
+            items.append("Stop capture")
+        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
         self._home_items = items
 
         if self.menu_idx >= len(items):
@@ -478,22 +502,22 @@ class UI:
 
         _draw_lines(
             items, title=status, highlight=self.menu_idx,
-            footer="↑/↓ to move, ✓ to select", hints=True
+            footer="UP/DOWN move, OK select", hints=True
         )
 
     def _render_wz(self):
         if self.state == self.WZ_INT:
             _draw_wizard_page("Interval (s)", f"{self.wz_interval}",
-                              tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
+                              tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
         elif self.state == self.WZ_HR:
             _draw_wizard_page("Duration hours", f"{self.wz_hours}",
-                              tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
+                              tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
         elif self.state == self.WZ_MIN:
             _draw_wizard_page("Duration mins", f"{self.wz_mins:02d}",
-                              tips=["↑/↓ ±1, ←/→ ±10", "✓ next"])
+                              tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
         elif self.state == self.WZ_ENC:
             _draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
-                              tips=["↑/↓ toggle", "✓ next"])
+                              tips=["UP/DOWN toggle", "OK next"])
 
     def render(self, force=False):
         if self.screen_off:
@@ -511,7 +535,7 @@ class UI:
                                    self.wz_encode, self.confirm_idx)
             elif self.state == self.SCHED_LIST:
                 sch = _read_schedules()
-                lines = ["➕ New Schedule"]
+                lines = ["+ New Schedule"]
                 now = int(time.time())
                 for sid, st in sch:
                     st_ts = int(st.get("start_ts",0)); en_ts = int(st.get("end_ts",0))
@@ -520,7 +544,7 @@ class UI:
                     lines.append(f"{tag} {name} {st.get('interval',10)}s")
                 hi = min(self.menu_idx, len(lines)-1) if lines else 0
                 _draw_lines(lines[:6], title="Schedules",
-                            footer="↑/↓, ✓ select",
+                            footer="UP/DOWN, OK select",
                             highlight=hi, hints=True)
             else:
                 _clear()
@@ -543,7 +567,6 @@ def main():
     while True:
         now = time.time()
 
-        # If asleep, don't poll or draw; wake logic is in _wrap_wake()
         if ui.screen_off:
             time.sleep(0.1)
             continue
