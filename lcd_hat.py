@@ -176,6 +176,28 @@ class UI:
         # first draw
         self.render(force=True)
 
+        self._need_hard_clear = True   # clear once before first Home
+
+        # add these methods anywhere in UI:
+        def _request_hard_clear(self):
+            self._need_hard_clear = True
+
+        def _maybe_hard_clear(self):
+            if self._need_hard_clear:
+                try:
+                    # OFF -> black -> black -> ON -> black (very thorough)
+                    try: self.device.command(0x28)  # Display OFF
+                    except Exception: pass
+                    img = Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
+                    self.device.display(img); time.sleep(0.02)
+                    self.device.display(img); time.sleep(0.02)
+                    try: self.device.command(0x29)  # Display ON
+                    except Exception: pass
+                    self.device.display(img); time.sleep(0.02)
+                except Exception:
+                    pass
+                self._need_hard_clear = False
+
     # ---------- low-level LCD helpers ----------
     def _hard_clear(self):
         with self._draw_lock:
@@ -395,32 +417,33 @@ class UI:
 
     # ---------- actions ----------
     def quick_start(self):
-        if self._busy: return
-        self._busy = True
-        self._draw_center("Starting...")
+        if self.busy: return
+        self.busy = True
+        _draw_center("Starting...")
         ok = _http_post_form(START_URL, {"interval": 10})
-        self._draw_center("Started" if ok else "Failed", "Quick Start")
+        _draw_center("Started" if ok else "Failed", "Quick Start")
         time.sleep(0.6)
-        self._busy = False
-        self._need_home_clear = True
+        self.busy = False
+        self._request_hard_clear()       # <— returning to Home
         self.render(force=True)
 
     def stop_capture(self):
-        if self._busy: return
-        self._busy = True
-        self._draw_center("Stopping...")
+        if self.busy: return
+        self.busy = True
+        _draw_center("Stopping...")
         ok = _http_post_form(STOP_URL, {})
-        self._draw_center("Stopped" if ok else "Failed")
+        _draw_center("Stopped" if ok else "Failed")
         time.sleep(0.6)
-        self._busy = False
+        self.busy = False
         self.state = self.HOME; self.menu_idx = 0
-        self._need_home_clear = True
+        self._request_hard_clear()       # <—
         self.render(force=True)
 
     def start_wizard(self):
         if self._busy: return
         self.wz_interval = 10; self.wz_hours = 0; self.wz_mins = 0
         self.wz_encode = True; self.confirm_idx = 0
+        self._request_hard_clear()
         self.state = self.WZ_INT
         self.render()
 
@@ -442,15 +465,17 @@ class UI:
         })
         self._draw_center("Scheduled" if ok else "Failed", "Starts now")
         time.sleep(0.8)
-        self._busy = False
+        self.busy = False
         self.state = self.HOME; self.menu_idx = 0
-        self._need_home_clear = True
+        self._request_hard_clear()       # <— back to Home
         self.render(force=True)
 
     def open_schedules(self):
-        if self._busy: return
-        self.state = self.SCHED_LIST; self.menu_idx = 0
-        self.render()
+        if self.busy: return
+        self._request_hard_clear()       # <—
+        self.state = self.SCHED_LIST
+        self.menu_idx = 0
+        self.render
 
     def toggle_rotation(self):
         if self._busy: return
@@ -477,8 +502,11 @@ class UI:
             self._bind_inputs()
 
             # show confirmation
-            self._draw_center("Rotation set", f"{self.rot_deg} degrees")
-            time.sleep(0.5)
+            self._request_hard_clear()       # make the next screen draw onto a clean panel
+            _draw_center("Rotation set", f"{ROT_DEG} degrees")
+            time.sleep(0.6)
+            self.state = self.HOME
+            self.render(force=True)
         finally:
             self._busy = False
 
@@ -503,6 +531,7 @@ class UI:
                          highlight=-1, hints=False)
 
     def _render_home(self):
+        self._maybe_hard_clear()
         if self._need_home_clear:
             self._hard_clear()
             self._need_home_clear = False
@@ -529,6 +558,7 @@ class UI:
                          footer="UP/DOWN move, OK select", hints=True)
 
     def _render_wz(self):
+        self._maybe_hard_clear()
         if self.state == self.WZ_INT:
             self._draw_wizard_page("Interval (s)", f"{self.wz_interval}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
@@ -555,6 +585,7 @@ class UI:
                 self._draw_confirm(self.wz_interval, self.wz_hours, self.wz_mins,
                                    self.wz_encode, self.confirm_idx)
             elif self.state == self.SCHED_LIST:
+                self._maybe_hard_clear()
                 sch = _read_schedules()
                 lines = ["+ New Schedule"]
                 now = int(time.time())
@@ -601,10 +632,12 @@ def main():
             if st.get("encoding"):
                 ui.state = UI.ENCODING
                 ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
-                ui._draw_encoding(ui._spin_idx)
+                _draw_encoding(ui._spin_idx)
             else:
                 if ui.state == UI.ENCODING:
-                    ui.state = UI.HOME; ui.menu_idx = 0
+                    ui.state = UI.HOME
+                    ui.menu_idx = 0
+                    ui._request_hard_clear()     # <—
                 if ui.state == UI.HOME:
                     ui._render_home()
             last_poll = now
