@@ -19,9 +19,9 @@ PIN_RST  = int(os.environ.get("LCD_PIN_RST",  "27"))
 PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))  # Backlight (PWM LED)
 
 # Waveshare 1.44" LCD HAT keys + joystick
-KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up
+KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up (side key)
 KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # OK
-KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down
+KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down (side key)
 JS_UP    = int(os.environ.get("LCD_JS_UP",    "6"))
 JS_DOWN  = int(os.environ.get("LCD_JS_DOWN",  "19"))
 JS_LEFT  = int(os.environ.get("LCD_JS_LEFT",  "5"))
@@ -126,22 +126,15 @@ WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120);  YELL=(255,210,80);  BLUE=(90,160,220)
 RED=(255,80,80)
 
+# ---- draw state ----
 _rot_pending_clear = False
-
-_home_needs_clear = False
-
-def _hard_clear():
-    """Blank the panel twice to purge any ghosted pixels."""
-    with _draw_lock:
-        img = Image.new("RGB", (device.width, device.height), (0,0,0))
-        device.display(img); time.sleep(0.03)
-        device.display(img); time.sleep(0.03)
+_home_needs_clear  = True  # one-shot hard blank on first Home render
 
 # ----------------- Drawing core (lock + auto-reinit) -----------------
 _draw_lock = threading.Lock()
 
 def _lcd_reinit():
-    """Recreate serial + device (togs reset line)"""
+    """Recreate serial + device (toggles reset line)"""
     global serial, device
     try:
         s = _mk_serial()
@@ -152,6 +145,13 @@ def _lcd_reinit():
     except Exception:
         return False
 
+def _hard_clear():
+    """Blank the panel twice to purge any ghosted pixels."""
+    with _draw_lock:
+        img = Image.new("RGB", (device.width, device.height), (0,0,0))
+        device.display(img); time.sleep(0.03)
+        device.display(img); time.sleep(0.03)
+
 def _present(img):
     """Rotate frame if needed, serialize display, and auto-reinit on failure."""
     global _rot_pending_clear
@@ -161,10 +161,7 @@ def _present(img):
         with _draw_lock:
             # ► If rotation just changed, hard clear twice to purge ghosting
             if _rot_pending_clear:
-                device.display(Image.new("RGB", (device.width, device.height), (0,0,0)))
-                time.sleep(0.03)
-                device.display(Image.new("RGB", (device.width, device.height), (0,0,0)))
-                time.sleep(0.03)
+                _hard_clear()
                 _rot_pending_clear = False
 
             device.display(frame)
@@ -232,8 +229,6 @@ def _draw_encoding(spin_idx=0):
     drw.text(((WIDTH-int(tw))//2, 40), msg, font=F_TITLE, fill=YELL)
     drw.text(((WIDTH-int(sw))//2, 62), sp,  font=F_TITLE, fill=YELL)
     _present(img)
-    
-
 
 # ----------------- HTTP helpers -----------------
 def _http_json(url, timeout=1.2):
@@ -332,12 +327,12 @@ class UI:
         elif self.state == self.WZ_CONFIRM:
             self.confirm_idx = 1 - self.confirm_idx; self.render()
 
-    # Map physical joystick pins to logical directions depending on ROT_DEG
     def _rebind_joystick(self):
         """
         Map physical joystick to on-screen directions.
-        - 0° : identity (up->up, down->down, left->left, right->right)
-        - 90°: rotate controls 90° (Up→Right, Right→Down, Down→Left, Left→Up)
+        The screen rotates 90° CCW; to keep controls intuitive,
+        rotate the controls 90° CW:
+          Up -> Left, Right -> Up, Down -> Right, Left -> Down
         """
         if ROT_DEG == 0:
             m = {
@@ -346,12 +341,12 @@ class UI:
                 'left':  self._logical_left,
                 'right': self._logical_right,
             }
-        else:  # 90° CCW screen: rotate controls so they feel natural
+        else:  # screen is 90° CCW → rotate controls 90° CW
             m = {
-                'up':    self._logical_right,
-                'right': self._logical_down,
-                'down':  self._logical_left,
-                'left':  self._logical_up,
+                'up':    self._logical_left,
+                'right': self._logical_up,
+                'down':  self._logical_right,
+                'left':  self._logical_down,
             }
 
         if js_up:    js_up.when_pressed    = self._wrap_wake(m['up'])
@@ -359,6 +354,7 @@ class UI:
         if js_left:  js_left.when_pressed  = self._wrap_wake(m['left'])
         if js_right: js_right.when_pressed = self._wrap_wake(m['right'])
         if js_push:  js_push.when_pressed  = self._wrap_wake(self.ok)
+
     # ---------- input bindings ----------
     def _bind_inputs(self):
         # side keys (not rotated)
@@ -378,6 +374,7 @@ class UI:
         _clear()
 
     def _wake_screen(self):
+        global _home_needs_clear
         try:
             if bl is not None: bl.value = 1.0
         except Exception:
@@ -385,7 +382,6 @@ class UI:
         self.screen_off = False
         self.state = self.HOME
         self.menu_idx = 0
-        from __main__ import _home_needs_clear
         _home_needs_clear = True
         self.render(force=True)
 
@@ -466,25 +462,27 @@ class UI:
     def quick_start(self):
         if self.busy: return
         self.busy = True
+        global _home_needs_clear
+        _hard_clear()
         _draw_center("Starting...")
         ok = _http_post_form(START_URL, {"interval": 10})
         _draw_center("Started" if ok else "Failed", "Quick Start")
         time.sleep(0.6)
         self.busy = False
-        from __main__ import _home_needs_clear
         _home_needs_clear = True
         self.render(force=True)
 
     def stop_capture(self):
         if self.busy: return
         self.busy = True
+        global _home_needs_clear
+        _hard_clear()
         _draw_center("Stopping...")
         ok = _http_post_form(STOP_URL, {})
         _draw_center("Stopped" if ok else "Failed")
         time.sleep(0.6)
         self.busy = False
         self.state = self.HOME; self.menu_idx = 0
-        from __main__ import _home_needs_clear
         _home_needs_clear = True
         self.render(force=True)
 
@@ -498,9 +496,11 @@ class UI:
     def start_now_via_schedule(self):
         if self.busy: return
         self.busy = True
+        global _home_needs_clear
         start_local = datetime.now().strftime("%Y-%m-%dT%H:%M")
         dur_hr, dur_min = self.wz_hours, self.wz_mins
         if dur_hr == 0 and dur_min == 0: dur_min = 1
+        _hard_clear()
         _draw_center("Arming...")
         ok = _http_post_form(SCHED_ARM_URL, {
             "start_local": start_local,
@@ -515,7 +515,6 @@ class UI:
         time.sleep(0.8)
         self.busy = False
         self.state = self.HOME; self.menu_idx = 0
-        from __main__ import _home_needs_clear
         _home_needs_clear = True
         self.render(force=True)
 
@@ -556,18 +555,23 @@ class UI:
         if _home_needs_clear:
             _hard_clear()
             _home_needs_clear = False
+
         st = self._status()
         if st.get("encoding"):
             self.state = self.ENCODING; _draw_encoding(self._spin_idx); return
+
         status = "Idle"
         if st.get("encoding"): status = "Encoding"
         elif st.get("active"): status = "Capturing"
+
         items = []
         if st.get("active"): items.append("Stop capture")
         items += ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
         items.append(f"Rotate display: {'90°' if ROT_DEG == 90 else '0°'}")
         self._home_items = items
+
         if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
+
         _draw_lines(items, title=status, highlight=self.menu_idx,
                     footer="UP/DOWN move, OK select", hints=True)
 
