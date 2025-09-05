@@ -82,7 +82,7 @@ def _mk_serial():
 def _mk_device(serial_obj):
     # Keep the device at rotation=0; we rotate frames in software.
     return st7735(serial_obj, width=WIDTH, height=HEIGHT,
-                  rotation=0, h_offset=0, v_offset=0, bgr=True)
+                  rotation=0, h_offset=1, v_offset=1, bgr=True)
 
 # ----------------- Fonts & colors -----------------
 def _load_font(size_px):
