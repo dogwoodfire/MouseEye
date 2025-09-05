@@ -173,7 +173,18 @@ class UI:
         self._last_status = {}
 
         # bind inputs and draw
+        # after creating device + inputs + state
         self._bind_inputs()
+
+        # Draw something *before* scheduling any heavy clear
+        self._draw_center("Booting…")
+        time.sleep(0.2)
+
+        # Now request the next screen to start from a clean panel
+        self._need_home_clear = True
+        self._need_hard_clear = True
+
+        # Go render normally
         self.render(force=True)
 
     # ---------- one-shot clears ----------
@@ -198,10 +209,19 @@ class UI:
         self._need_hard_clear = False
 
     def _present(self, img):
-        # rotate frame in software
         frame = img.rotate(90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
-        with self._draw_lock:
-            self.device.display(frame)
+        try:
+            with self._draw_lock:
+                self.device.display(frame)
+        except Exception:
+            # Recreate SPI+device and try once more
+            try:
+                self._lcd_reinit()
+                time.sleep(0.02)
+                with self._draw_lock:
+                    self.device.display(frame)
+            except Exception:
+                pass  # Last resort: swallow so the loop stays alive
 
     def _blank(self): return Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
     def _clear(self): self._present(self._blank())
@@ -347,10 +367,6 @@ class UI:
         self.state = self.HOME
         self.menu_idx = 0
         self._need_home_clear = True
-        self.render(force=True)
-        self._draw_center("Booting…")
-        time.sleep(0.3)
-        self._request_hard_clear()
         self.render(force=True)
 
     # ---------- state helpers ----------
