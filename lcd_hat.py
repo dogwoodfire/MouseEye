@@ -70,7 +70,7 @@ from luma.lcd.device import st7735
 # ---------- SPI + device helpers (8 MHz for stability) ----------
 def _mk_serial():
     return spi(port=SPI_PORT, device=SPI_DEVICE,
-               gpio_DC=PIN_DC, gpio_RST=None,
+               gpio_DC=PIN_DC, gpio_RST=PIN_RST,   # <— back to PIN_RST
                bus_speed_hz=8_000_000)
 
 def _mk_device(serial_obj):
@@ -670,7 +670,9 @@ def main():
             last_poll = now
 
         time.sleep(0.2)
-
+        # keep Home fresh even if status didn't change
+        if ui.state == ui.HOME:
+            ui.render()
 if __name__ == "__main__":
     try:
         main()
