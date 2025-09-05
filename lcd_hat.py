@@ -126,6 +126,8 @@ WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120);  YELL=(255,210,80);  BLUE=(90,160,220)
 RED=(255,80,80)
 
+_rot_pending_clear = False
+
 # ----------------- Drawing core (lock + auto-reinit) -----------------
 _draw_lock = threading.Lock()
 
@@ -143,9 +145,19 @@ def _lcd_reinit():
 
 def _present(img):
     """Rotate frame if needed, serialize display, and auto-reinit on failure."""
+    global _rot_pending_clear
     frame = img.rotate(90, expand=False, resample=Image.NEAREST) if ROT_DEG == 90 else img
+
     try:
         with _draw_lock:
+            # ► If rotation just changed, hard clear twice to purge ghosting
+            if _rot_pending_clear:
+                device.display(Image.new("RGB", (device.width, device.height), (0,0,0)))
+                time.sleep(0.03)
+                device.display(Image.new("RGB", (device.width, device.height), (0,0,0)))
+                time.sleep(0.03)
+                _rot_pending_clear = False
+
             device.display(frame)
         return True
     except Exception:
@@ -311,28 +323,31 @@ class UI:
 
     # Map physical joystick pins to logical directions depending on ROT_DEG
     def _rebind_joystick(self):
-        # orientation map: for 0° -> identity; for 90° CCW:
-        #   physical UP->logical LEFT, DOWN->RIGHT, LEFT->DOWN, RIGHT->UP
+        """
+        Map physical joystick to on-screen directions.
+        - 0° : identity (up->up, down->down, left->left, right->right)
+        - 90°: flip axes (up<->down, left<->right)
+        """
         if ROT_DEG == 0:
             m = {
-                'up':   self._logical_up,
-                'down': self._logical_down,
-                'left': self._logical_left,
-                'right':self._logical_right,
+                'up':    self._logical_up,
+                'down':  self._logical_down,
+                'left':  self._logical_left,
+                'right': self._logical_right,
             }
-        else:  # 90 CCW
+        else:  # 90° CCW: flip each axis
             m = {
-                'up':   self._logical_left,
-                'down': self._logical_right,
-                'left': self._logical_down,
-                'right':self._logical_up,
+                'up':    self._logical_down,
+                'down':  self._logical_up,
+                'left':  self._logical_right,
+                'right': self._logical_left,
             }
+
         if js_up:    js_up.when_pressed    = self._wrap_wake(m['up'])
         if js_down:  js_down.when_pressed  = self._wrap_wake(m['down'])
         if js_left:  js_left.when_pressed  = self._wrap_wake(m['left'])
         if js_right: js_right.when_pressed = self._wrap_wake(m['right'])
         if js_push:  js_push.when_pressed  = self._wrap_wake(self.ok)
-
     # ---------- input bindings ----------
     def _bind_inputs(self):
         # side keys (not rotated)
@@ -491,11 +506,16 @@ class UI:
         self.render()
 
     def toggle_rotation(self):
-        global ROT_DEG
+        global ROT_DEG, _rot_pending_clear
         ROT_DEG = 90 if ROT_DEG == 0 else 0
         _save_prefs({"rot_deg": ROT_DEG})
-        self._rebind_joystick()     # <- update mapping to match rotation
+
+        # Rebind joystick for the new orientation and request the hard clear
+        self._rebind_joystick()
+        _rot_pending_clear = True
+
         _draw_center("Rotation set", f"{ROT_DEG} degrees")
+        _clear()
         time.sleep(0.6)
         self.state = self.HOME
         self.render(force=True)
@@ -578,6 +598,7 @@ class UI:
     def _draw_center_sleep_then_off(self):
         prev_state = self.state
         self.state = None
+        _clear()
         _draw_center("Screen off", "Press any key\n to wake up")
         time.sleep(2.5)
         self._sleep_screen()
