@@ -132,13 +132,13 @@ _rot_pending_clear  = False
 _home_needs_clear   = True  # one-shot hard blank on first Home render
 
 def _lcd_reinit():
-    """Recreate serial + device (toggles reset line)."""
     global serial, device
     try:
         s = _mk_serial()
         d = _mk_device(s)
         serial = s
         device = d
+        _hard_clear()  # <— add this
         return True
     except Exception:
         return False
@@ -525,40 +525,72 @@ class UI:
         self.render()
 
     # ---- robust rotation (no freezes) ----
-    def toggle_rotation(self):
-        global ROT_DEG, _rot_pending_clear, _home_needs_clear
-        if self.busy: return
-        self.busy = True
+def toggle_rotation(self):
+    """
+    Robust rotation:
+      - unbind inputs so callbacks don't fire during reset
+      - hard-clear (old orientation)
+      - flip ROT_DEG + save
+      - re-init LCD (toggles reset) and give it a moment
+      - hard-clear again (new orientation)
+      - force backlight on
+      - rebind inputs with new joystick mapping
+      - draw confirmation, then Home
+    """
+    global ROT_DEG, _rot_pending_clear, _home_needs_clear
+    if self.busy:
+        return
+    self.busy = True
 
-        # stop callbacks firing during rotation/reinit
-        self._unbind_inputs()
+    # stop callbacks firing during rotation/reinit
+    self._unbind_inputs()
 
+    try:
+        # pre-clear to avoid tearing with the old orientation
+        _hard_clear()
+
+        # change rotation + persist
+        ROT_DEG = 90 if ROT_DEG == 0 else 0
+        _save_prefs({"rot_deg": ROT_DEG})
+
+        # mark that the next present should blank
+        _rot_pending_clear = True
+
+        # full hardware re-init (toggles reset)
+        ok = _lcd_reinit()
+        # small settle delay helps some ST7735 boards
+        time.sleep(0.05)
+
+        # extra safety: ensure backlight is ON after reset
         try:
-            # pre-clear to avoid tearing with the old orientation
-            _hard_clear()
+            if bl is not None:
+                bl.value = 1.0
+        except Exception:
+            pass
 
-            # change rotation + persist
-            ROT_DEG = 90 if ROT_DEG == 0 else 0
-            _save_prefs({"rot_deg": ROT_DEG})
+        # hard-clear in the *new* orientation so we know the device is alive
+        _hard_clear()
+        _clear()  # soft clear via present() with current ROT_DEG
 
-            # ensure next present blanks and reinit hardware now
-            _rot_pending_clear = True
-            _lcd_reinit()       # toggles reset line
-            _hard_clear()       # clear immediately after reset
+        # rebind with new orientation map
+        self._rebind_joystick()
+        # rebind side keys too
+        if btn_up:   btn_up.when_pressed   = self._wrap_wake(lambda: self.nav(-1))
+        if btn_down: btn_down.when_pressed = self._wrap_wake(lambda: self.nav(+1))
+        if btn_ok:   btn_ok.when_pressed   = self._wrap_wake(self.ok)
 
-            # rebind with new orientation map
-            self._rebind_joystick()
-            self._bind_inputs()
+        _home_needs_clear = True
 
-            _home_needs_clear = True
-        finally:
-            self.busy = False
-
-        # brief confirmation, then draw Home
+        # draw confirmation on the fresh device
         _draw_center("Rotation set", f"{ROT_DEG} degrees")
         time.sleep(0.5)
-        self.state = self.HOME
-        self.render(force=True)
+
+    finally:
+        self.busy = False
+
+    # back to Home
+    self.state = self.HOME
+    self.render(force=True)
 
     # ---------- render ----------
     def _draw_confirm(self, interval_s, h, m, auto_encode, hi):
