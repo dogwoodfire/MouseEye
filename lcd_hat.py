@@ -3,10 +3,15 @@
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-import os, sys, time, json, threading, traceback
+import os, sys, time, json, threading
 from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
+
+DEBUG = os.environ.get("DEBUG") == "1"
+def log(*a): 
+    if DEBUG: 
+        print(*a, file=sys.stderr, flush=True)
 
 # ---------- GPIO factory (prefer lgpio; fallback to RPi.GPIO) ----------
 try:
@@ -41,7 +46,6 @@ LOCAL = "http://127.0.0.1:5050"
 STATUS_URL      = f"{LOCAL}/lcd_status"
 START_URL       = f"{LOCAL}/start"
 STOP_URL        = f"{LOCAL}/stop"
-TEST_URL        = f"{LOCAL}/test_capture"
 SCHED_ARM_URL   = f"{LOCAL}/schedule/arm"
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"
 
@@ -71,7 +75,7 @@ from luma.lcd.device import st7735
 def _mk_serial():
     return spi(
         port=SPI_PORT, device=SPI_DEVICE,
-        gpio_DC=PIN_DC, gpio_RST=PIN_RST,   # <- restore this
+        gpio_DC=PIN_DC, gpio_RST=PIN_RST,
         bus_speed_hz=8_000_000
     )
 
@@ -142,9 +146,9 @@ class UI:
         # lcd
         self.serial = _mk_serial()
         self.device = _mk_device(self.serial)
-        self._draw_lock = threading.Lock()
-        self._need_home_clear = True       # per-home blank
-        self._need_hard_clear = True       # one-shot blank on next render
+        self._draw_lock = threading.RLock()   # <— re-entrant lock
+        self._need_home_clear = True
+        self._need_hard_clear = True
         self._busy = False
         self._screen_off = False
         self._spin_idx = 0
@@ -178,18 +182,14 @@ class UI:
         self._last_status = {}
 
         # bind inputs and draw
-        # bind inputs
         self._bind_inputs()
 
-        # draw something immediately so the panel isn’t left black
+        # draw something immediately so the panel isn’t left blank
         self._draw_center("Booting…")
         time.sleep(0.2)
 
-        # NOW schedule a clean first home draw
         self._need_home_clear = True
         self._need_hard_clear = True
-
-        # render home (this call will clear-then-draw in one go)
         self.render(force=True)
 
     # ---------- one-shot clears ----------
@@ -197,18 +197,18 @@ class UI:
         self._need_hard_clear = True
 
     def _hard_clear(self):
+        # DO NOT call _present() here (avoids nested lock). Draw directly.
+        img = Image.new("RGB", (self.device.width, self.device.height), (0, 0, 0))
+        frame = img.rotate(90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
         with self._draw_lock:
-            b = self._blank()
-            self._present(b); time.sleep(0.02)
-            self._present(b); time.sleep(0.02)
+            self.device.display(frame); time.sleep(0.02)
+            self.device.display(frame); time.sleep(0.02)
 
     def _maybe_hard_clear(self):
         if not self._need_hard_clear:
             return
         try:
-            # thorough double-black, rotation-aware
-            self._present(self._blank()); time.sleep(0.02)
-            self._present(self._blank()); time.sleep(0.02)
+            self._hard_clear()
         except Exception:
             pass
         self._need_hard_clear = False
@@ -216,28 +216,17 @@ class UI:
     def _present(self, img):
         # rotate frame in software
         frame = img.rotate(90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
-        try:
-            with self._draw_lock:
-                self.device.display(frame)
-        except Exception:
-            # Recreate SPI+device and try once more
-            try:
-                self._lcd_reinit()
-                time.sleep(0.02)
-                with self._draw_lock:
-                    self.device.display(frame)
-            except Exception:
-                # swallow so loop continues; at least we won't crash
-                pass
+        with self._draw_lock:
+            self.device.display(frame)
 
     def _blank(self): return Image.new("RGB", (self.device.width, self.device.height), (0,0,0))
     def _clear(self): self._present(self._blank())
 
     def _lcd_reinit(self):
+        log("LCD: reinit")
         self.serial = _mk_serial()
         self.device = _mk_device(self.serial)
         time.sleep(0.05)
-        # rotation-aware blank after reinit
         self._hard_clear()
 
     # ---------- fonts helpers ----------
@@ -319,11 +308,6 @@ class UI:
                 b.when_released = None
 
     def _rebind_joystick(self):
-        """
-        Rotate controls with the display.
-        0°  : Up→Up, Right→Right, Down→Down, Left→Left
-        90° : Up→Right, Right→Down, Down→Left, Left→Up   (screen turned CCW)
-        """
         if self.rot_deg == 0:
             m = dict(up=self._logical_up, right=self._logical_right,
                      down=self._logical_down, left=self._logical_left)
@@ -337,11 +321,9 @@ class UI:
         if self.js_push:  self.js_push.when_pressed  = self._wrap_wake(self.ok)
 
     def _bind_inputs(self):
-        # side keys (fixed orientation)
         if self.btn_up:   self.btn_up.when_pressed   = self._wrap_wake(lambda: self.nav(-1))
         if self.btn_down: self.btn_down.when_pressed = self._wrap_wake(lambda: self.nav(+1))
         if self.btn_ok:   self.btn_ok.when_pressed   = self._wrap_wake(self.ok)
-        # joystick (orientation aware)
         self._rebind_joystick()
 
     # ---------- logical joystick actions ----------
@@ -501,27 +483,14 @@ class UI:
         self._busy = True
         self._unbind_inputs()
         try:
-            # clear old orientation
             self._hard_clear()
-
-            # flip + persist
             self.rot_deg = 90 if self.rot_deg == 0 else 0
             _save_prefs({"rot_deg": self.rot_deg})
-
-            # re-init panel and BL
             self._lcd_reinit()
             try:
                 if self.bl is not None: self.bl.value = 1.0
             except Exception: pass
-
-            # clear in the **new** orientation (important)
-            self._present(self._blank()); time.sleep(0.02)
-            self._present(self._blank()); time.sleep(0.02)
-
-            # rebind inputs for new mapping
             self._bind_inputs()
-
-            # confirm + go home
             self._request_hard_clear()
             self._draw_center("Rotation set", f"{self.rot_deg} degrees")
             time.sleep(0.6)
@@ -551,7 +520,7 @@ class UI:
             self._hard_clear()
             self._need_home_clear = False
 
-        st = self._status()
+        st = self._status() or {}
         if st.get("encoding"):
             self.state = self.ENCODING
             self._draw_encoding(self._spin_idx)
@@ -587,51 +556,37 @@ class UI:
             self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
                                    tips=["UP/DOWN toggle", "OK next"])
 
-    import traceback, sys
     def render(self, force=False):
         if self._screen_off or self._busy:
             return
         try:
             if self.state == self.ENCODING:
-                self._draw_encoding(self._spin_idx)
-                return
-
+                self._draw_encoding(self._spin_idx); return
             if self.state == self.HOME:
                 self._render_home()
-
             elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
                 self._render_wz()
-
             elif self.state == self.WZ_CONFIRM:
-                self._draw_confirm(
-                    self.wz_interval, self.wz_hours, self.wz_mins,
-                    self.wz_encode, self.confirm_idx
-                )
-
+                self._draw_confirm(self.wz_interval, self.wz_hours, self.wz_mins,
+                                   self.wz_encode, self.confirm_idx)
             elif self.state == self.SCHED_LIST:
                 self._maybe_hard_clear()
                 sch = _read_schedules()
                 lines = ["+ New Schedule"]
                 now = int(time.time())
                 for sid, st in sch:
-                    st_ts = int(st.get("start_ts", 0))
-                    en_ts = int(st.get("end_ts", 0))
+                    st_ts = int(st.get("start_ts", 0)); en_ts = int(st.get("end_ts", 0))
                     tag = "now" if (st_ts <= now < en_ts) else "next"
                     name = (st.get("sess") or sid)[:10]
                     lines.append(f"{tag} {name} {st.get('interval', 10)}s")
-                hi = min(self.menu_idx, len(lines) - 1) if lines else 0
-                self._draw_lines(
-                    lines[:6], title="Schedules",
-                    footer="UP/DOWN, OK select",
-                    highlight=hi, hints=True
-                )
-
+                hi = min(self.menu_idx, len(lines)-1) if lines else 0
+                self._draw_lines(lines[:6], title="Schedules",
+                                 footer="UP/DOWN, OK select",
+                                 highlight=hi, hints=True)
             else:
                 self._clear()
-
-        except Exception:
-            # Don't leave a black frame silently—log the reason
-            traceback.print_exc(file=sys.stderr)
+        except Exception as e:
+            log("render error:", repr(e))
 
     # show "sleeping" for a beat, then turn panel off
     def _draw_center_sleep_then_off(self):
@@ -653,7 +608,7 @@ def main():
         if ui._screen_off or ui._busy:
             time.sleep(0.1); continue
 
-        # poll /lcd_status
+        # poll /lcd_status occasionally
         if now - last_poll > 0.5:
             st = _http_json(STATUS_URL) or {}
             ui._last_status = st
@@ -670,14 +625,16 @@ def main():
                 if ui.state == UI.HOME:
                     ui._render_home()
             last_poll = now
-        ui.render()
 
-        time.sleep(0.2)
         # keep Home fresh even if status didn't change
         if ui.state == ui.HOME:
             ui.render()
+
+        time.sleep(0.2)
+
 if __name__ == "__main__":
     try:
+        if DEBUG: print("DEBUG on", file=sys.stderr, flush=True)
         main()
     except KeyboardInterrupt:
         pass
