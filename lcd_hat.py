@@ -4,6 +4,8 @@ import os, sys, time, json
 from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
+import RPi.GPIO as GPIO
+GPIO.setwarnings(False)
 
 # ----------------- HAT wiring (BCM) -----------------
 PIN_DC   = int(os.environ.get("LCD_PIN_DC",   "25"))
@@ -592,3 +594,8 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+    finally:
+        try:
+            GPIO.cleanup()
+        except Exception:
+            pass
