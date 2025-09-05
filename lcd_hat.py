@@ -50,7 +50,7 @@ try:
                  bus_speed_hz=16000000)
     # tweak offsets/rotation if you still see edge noise
     device = st7735(serial, width=WIDTH, height=HEIGHT,
-                    rotation=0, h_offset=3, v_offset=2, bgr=True)
+                    rotation=0, h_offset=4, v_offset=2, bgr=True)
 except Exception:
     sys.exit(0)
 
