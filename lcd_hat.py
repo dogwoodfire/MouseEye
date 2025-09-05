@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
 import os, sys, time, json, threading, traceback
 from datetime import datetime
 from urllib.request import urlopen, Request
