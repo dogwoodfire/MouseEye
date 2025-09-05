@@ -582,37 +582,51 @@ class UI:
             self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
                                    tips=["UP/DOWN toggle", "OK next"])
 
+    import traceback, sys
     def render(self, force=False):
-        if self._screen_off or self._busy: return
+        if self._screen_off or self._busy:
+            return
         try:
             if self.state == self.ENCODING:
-                self._draw_encoding(self._spin_idx); return
+                self._draw_encoding(self._spin_idx)
+                return
+
             if self.state == self.HOME:
                 self._render_home()
+
             elif self.state in (self.WZ_INT, self.WZ_HR, self.WZ_MIN, self.WZ_ENC):
                 self._render_wz()
+
             elif self.state == self.WZ_CONFIRM:
-                self._draw_confirm(self.wz_interval, self.wz_hours, self.wz_mins,
-                                   self.wz_encode, self.confirm_idx)
+                self._draw_confirm(
+                    self.wz_interval, self.wz_hours, self.wz_mins,
+                    self.wz_encode, self.confirm_idx
+                )
+
             elif self.state == self.SCHED_LIST:
                 self._maybe_hard_clear()
                 sch = _read_schedules()
                 lines = ["+ New Schedule"]
                 now = int(time.time())
                 for sid, st in sch:
-                    st_ts = int(st.get("start_ts",0)); en_ts = int(st.get("end_ts",0))
+                    st_ts = int(st.get("start_ts", 0))
+                    en_ts = int(st.get("end_ts", 0))
                     tag = "now" if (st_ts <= now < en_ts) else "next"
                     name = (st.get("sess") or sid)[:10]
-                    lines.append(f"{tag} {name} {st.get('interval',10)}s")
-                hi = min(self.menu_idx, len(lines)-1) if lines else 0
-                self._draw_lines(lines[:6], title="Schedules",
-                                 footer="UP/DOWN, OK select",
-                                 highlight=hi, hints=True)
+                    lines.append(f"{tag} {name} {st.get('interval', 10)}s")
+                hi = min(self.menu_idx, len(lines) - 1) if lines else 0
+                self._draw_lines(
+                    lines[:6], title="Schedules",
+                    footer="UP/DOWN, OK select",
+                    highlight=hi, hints=True
+                )
+
             else:
                 self._clear()
+
         except Exception:
-            # draw errors should never crash the loop
-            pass
+            # Don't leave a black frame silently—log the reason
+            traceback.print_exc(file=sys.stderr)
 
     # show "sleeping" for a beat, then turn panel off
     def _draw_center_sleep_then_off(self):
