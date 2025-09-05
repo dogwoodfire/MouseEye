@@ -331,6 +331,7 @@ def _arm_timers_for(sid, st):
     fps        = int(st.get("fps",      24))
     sess_name  = st.get("sess", "") or ""
     auto_encode = bool(st.get("auto_encode", False))
+    created_ts  = int(st.get("created_ts", start_ts))
 
     # If already expired, drop it
     if end_ts <= now:
@@ -339,10 +340,10 @@ def _arm_timers_for(sid, st):
             _save_sched_state()
         return
 
+    # Helper wrappers
     def _fire_start():
-        # If camera is busy, retry shortly until window end
         if not _idle_now():
-            # retry in 30s if still within window
+            # retry while within window
             if int(time.time()) < end_ts:
                 tm = threading.Timer(30, _fire_start)
                 tm.daemon = True
@@ -353,12 +354,16 @@ def _arm_timers_for(sid, st):
 
     def _fire_stop():
         _sched_fire_stop(sess_name, fps, auto_encode)
-        # schedule finished; do not auto-delete – keep visible until user removes
         _cancel_timers_for(sid)
 
     if start_ts <= now < end_ts:
-        # start now, schedule stop
-        _fire_start()
+        # Only autostart immediately if this schedule was created recently
+        # (e.g., user just armed it). This prevents “old start-now” tasks
+        # from firing after a reboot.
+        GRACE = 90  # seconds
+        if (now - created_ts) <= GRACE:
+            _fire_start()
+        # Always ensure we stop at end_ts
         delay_stop = max(0, end_ts - now)
         tm_stop = threading.Timer(delay_stop, _fire_stop)
         tm_stop.daemon = True
@@ -1973,16 +1978,16 @@ def schedule_arm():
     end_ts = start_ts + duration_min * 60
 
     sid = uuid.uuid4().hex[:8]  # short id
-
+    now_ts = int(time.time())
     with _sched_lock:
         _schedules[sid] = dict(
             start_ts=start_ts, end_ts=end_ts,
             interval=interval, fps=fps,
-            sess=sess_name, auto_encode=auto_encode
+            sess=sess_name, auto_encode=auto_encode,
+            created_ts=now_ts,          # <-- add this line
         )
         _save_sched_state()
         _arm_timers_for(sid, _schedules[sid])
-
     return redirect(url_for("schedule_page"))
 
 @app.post("/schedule/cancel/<sid>")

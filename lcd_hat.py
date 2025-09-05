@@ -79,23 +79,21 @@ js_push   = _mk_button(JS_PUSH)
 # ----------------- Fonts & colors -----------------
 def _load_font_prefer_bitmap(size_ttf: int, fallback_default=True):
     """
-    Try crisp bitmap fonts first; fall back to DejaVu TTF or PIL default.
+    Prefer bitmap PCF/TTF that FreeType can load; fall back to DejaVu or PIL default.
     """
     candidates = [
-        # Terminus BDF (install: sudo apt-get install fonts-terminus)
-        ("/usr/share/fonts/X11/misc/ter-u12n.bdf", None),
-        ("/usr/share/fonts/X11/misc/ter-u14n.bdf", None),
-        # unscii (install: sudo apt-get install fonts-unscii)
+        # Terminus PCF (bitmap). These paths exist after: sudo apt-get install fonts-terminus
+        ("/usr/share/fonts/X11/misc/ter-u12n.pcf.gz", 12),
+        ("/usr/share/fonts/X11/misc/ter-u14n.pcf.gz", 14),
+        ("/usr/share/fonts/X11/misc/ter-u16n.pcf.gz", 16),
+        # Unscii (optional): sudo apt-get install fonts-unscii
         ("/usr/share/fonts/truetype/unscii/unscii-8.ttf", size_ttf),
-        # DejaVu mono (fallback TTF)
+        # DejaVu mono fallback
         ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", size_ttf),
     ]
     for path, sz in candidates:
         try:
-            if path.endswith((".bdf", ".pcf")):
-                return ImageFont.load(path)
-            else:
-                return ImageFont.truetype(path, sz)
+            return ImageFont.truetype(path, sz)
         except Exception:
             continue
     return ImageFont.load_default() if fallback_default else None
