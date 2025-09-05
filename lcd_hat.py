@@ -40,8 +40,10 @@ try:
     from luma.core.interface.serial import spi
     from luma.lcd.device import st7735
     from gpiozero import Button, PWMLED
-except Exception:
-    sys.exit(0)  # headless/no libs → silently exit
+import traceback
+print("LCD init/import failed:", file=sys.stderr)
+traceback.print_exc()
+sys.exit(1)
 
 # ----------------- LCD init -----------------
 try:
@@ -77,31 +79,20 @@ js_right  = _mk_button(JS_RIGHT)
 js_push   = _mk_button(JS_PUSH)
 
 # ----------------- Fonts & colors -----------------
-def _load_font_prefer_bitmap(size_ttf: int, fallback_default=True):
-    """
-    Prefer bitmap PCF/TTF that FreeType can load; fall back to DejaVu or PIL default.
-    """
-    candidates = [
-        # Terminus PCF (bitmap). These paths exist after: sudo apt-get install fonts-terminus
-        ("/usr/share/fonts/X11/misc/ter-u12n.pcf.gz", 12),
-        ("/usr/share/fonts/X11/misc/ter-u14n.pcf.gz", 14),
-        ("/usr/share/fonts/X11/misc/ter-u16n.pcf.gz", 16),
-        # Unscii (optional): sudo apt-get install fonts-unscii
-        ("/usr/share/fonts/truetype/unscii/unscii-8.ttf", size_ttf),
-        # DejaVu mono fallback
-        ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", size_ttf),
-    ]
-    for path, sz in candidates:
-        try:
-            return ImageFont.truetype(path, sz)
-        except Exception:
-            continue
-    return ImageFont.load_default() if fallback_default else None
+from PIL import ImageFont
 
-F_TITLE = _load_font_prefer_bitmap(14)
-F_TEXT  = _load_font_prefer_bitmap(12)
-F_SMALL = _load_font_prefer_bitmap(10)
-F_VALUE = _load_font_prefer_bitmap(18)
+def _load_font(size_px):
+    try:
+        return ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", size_px
+        )
+    except Exception:
+        return ImageFont.load_default()
+
+F_TITLE = _load_font(14)
+F_TEXT  = _load_font(12)
+F_SMALL = _load_font(10)
+F_VALUE = _load_font(18)
 
 WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120);  YELL=(255,210,80);  BLUE=(90,160,220)
