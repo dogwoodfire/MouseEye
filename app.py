@@ -49,27 +49,6 @@ def ap_disable():
     txt = (out or "").lower()
     return ("not active" in txt) or ("unknown connection" in txt)
 
-@app.get("/ap_status")
-def ap_status():
-    active = _ap_is_active()
-    return jsonify({"hotspot": active, "name": HOTSPOT_NAME})
-
-@app.post("/ap/on")
-def ap_on():
-    # ensure Wi-Fi radio is on, then bring up the AP connection
-    _nmcli("radio", "wifi", "on")
-    ok, out = _nmcli("con", "up", HOTSPOT_NAME)
-    if not ok:
-        return (out or "failed"), 500
-    return ("", 204)
-
-@app.post("/ap/off")
-def ap_off():
-    # bring down only the AP connection (normal Wi-Fi will reconnect if autoconnected)
-    ok, out = _nmcli("con", "down", HOTSPOT_NAME)
-    if not ok and "is not active" not in (out or "").lower():
-        return (out or "failed"), 500
-    return ("", 204)
 
 # ---------- Paths & config ----------
 BASE         = "/home/pi/timelapse"
@@ -615,6 +594,10 @@ def ap_off():
 def ap_toggle():
     ok = (ap_disable() if ap_is_on() else ap_enable())
     return (jsonify({"on": ap_is_on()}) if ok else (jsonify({"on": ap_is_on(), "error":"toggle_failed"}), 500))
+
+@app.get("/ap/status")
+def ap_status_json():
+    return jsonify({"on": ap_is_on()})
 
 @app.route("/", methods=["GET"])
 def index():
