@@ -52,6 +52,11 @@ SCHED_DEL_URLS  = [
     f"{LOCAL}/schedule/remove",
     f"{LOCAL}/schedule/cancel",
 ]
+BACKEND_LIST_URLS = [
+    f"{LOCAL}/schedule/list",
+    f"{LOCAL}/schedules",
+    f"{LOCAL}/schedule",
+]
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"
 
 # ----------------- Preferences (rotation) -----------------
@@ -134,9 +139,45 @@ def _http_post_form(url, data: dict, timeout=2.5):
 # ----------------- Schedules (local read/write) -----------------
 def _read_schedules():
     """
-    Returns a list of (id, dict) sorted by start_ts.
-    Supports either {id: obj, ...} or [obj, ...] with obj['id'].
+    Return list of (id, dict) sorted by start_ts.
+    Prefer backend API if present; fall back to local JSON file.
     """
+    # --- Try backend endpoints first ---
+    def _normalize_to_rows(obj):
+        # Accept {"schedules":[...]} or dict-of-ids or list
+        if isinstance(obj, dict) and "schedules" in obj:
+            obj = obj["schedules"]
+
+        rows = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if isinstance(v, dict):
+                    rows.append((str(k), v))
+        elif isinstance(obj, list):
+            for d in obj:
+                if isinstance(d, dict):
+                    sid = str(
+                        d.get("id")
+                        or d.get("_id")
+                        or d.get("sid")
+                        or f"{int(d.get('start_ts',0))}-{int(d.get('end_ts',0))}"
+                    )
+                    rows.append((sid, d))
+        return rows
+
+    for url in BACKEND_LIST_URLS:
+        try:
+            data = _http_json(url, timeout=1.5)
+            if not data:
+                continue
+            rows = _normalize_to_rows(data)
+            if rows:
+                rows.sort(key=lambda kv: int(kv[1].get("start_ts", 0)))
+                return rows
+        except Exception:
+            pass
+
+    # --- Fallback to local file format(s) ---
     try:
         with open(SCHED_FILE, "r") as f:
             data = json.load(f)
@@ -146,9 +187,7 @@ def _read_schedules():
             items = []
             for d in data:
                 if isinstance(d, dict):
-                    sid = str(d.get("id", ""))
-                    if not sid:
-                        sid = f"{int(d.get('start_ts',0))}-{int(d.get('end_ts',0))}"
+                    sid = str(d.get("id", "")) or f"{int(d.get('start_ts',0))}-{int(d.get('end_ts',0))}"
                     items.append((sid, d))
         else:
             items = []
