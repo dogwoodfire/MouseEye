@@ -27,9 +27,9 @@ PIN_RST  = int(os.environ.get("LCD_PIN_RST",  "27"))
 PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))  # Backlight (PWM LED)
 
 # Waveshare 1.44" LCD HAT keys + joystick
-KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up (free for future)
-KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # OK (free for future)
-KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down (free for future)
+KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # AP Activation Key
+KEY2     = int(os.environ.get("LCD_KEY2",     "20"))
+KEY3     = int(os.environ.get("LCD_KEY3",     "16"))
 JS_UP    = int(os.environ.get("LCD_JS_UP",    "6"))
 JS_DOWN  = int(os.environ.get("LCD_JS_DOWN",  "19"))
 JS_LEFT  = int(os.environ.get("LCD_JS_LEFT",  "5"))
@@ -54,6 +54,10 @@ SCHED_DEL_URLS  = [
 ]
 SCHED_LIST_URL  = f"{LOCAL}/schedule/list"   # preferred if available
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"  # legacy fallback
+AP_STATUS_URL = f"{LOCAL}/ap/status"
+AP_TOGGLE_URL = f"{LOCAL}/ap/toggle"
+AP_ON_URL     = f"{LOCAL}/ap/on"
+AP_OFF_URL    = f"{LOCAL}/ap/off"
 
 # ----------------- Preferences (rotation) -----------------
 PREFS_FILE = "/home/pi/timelapse/lcd_prefs.json"
@@ -114,6 +118,14 @@ RED=(255,80,80);     DIM=(90,90,90)
 SPINNER = ["-", "\\", "|", "/"]
 
 # ----------------- HTTP helpers -----------------
+def _ap_status():
+    j = _http_json(AP_STATUS_URL)
+    return bool(j and j.get("on"))
+
+def _ap_toggle():
+    # We don’t care about response body; UI will repoll status
+    return _http_post_form(AP_TOGGLE_URL, {})
+
 def _http_json(url, timeout=1.2):
     try:
         with urlopen(Request(url, headers={"Cache-Control":"no-store"}), timeout=timeout) as r:
@@ -215,14 +227,22 @@ class UI:
             self.bl = None
 
         # inputs (top 3 keys left unbound from menu)
-        self.btn_up   = self._mk_button(KEY1)
-        self.btn_ok   = self._mk_button(KEY2)
-        self.btn_down = self._mk_button(KEY3)
+        # inputs (top 3 keys are free for custom actions)
+        self.btn_key1 = self._mk_button(KEY1)  # top
+        self.btn_key2 = self._mk_button(KEY2)  # middle (unused for now)
+        self.btn_key3 = self._mk_button(KEY3)  # bottom (unused for now)
+
+        # joystick (kept for menus)
         self.js_up    = self._mk_button(JS_UP)
         self.js_down  = self._mk_button(JS_DOWN)
         self.js_left  = self._mk_button(JS_LEFT)
         self.js_right = self._mk_button(JS_RIGHT)
         self.js_push  = self._mk_button(JS_PUSH)
+        def _bind_inputs(self):
+            # Top buttons: KEY1 toggles hotspot; KEY2/KEY3 still free
+            if self.btn_up:   self.btn_up.when_pressed   = self._wrap_wake(self.toggle_hotspot)
+            # Leave btn_ok / btn_down unbound for now (you said you'll use later)
+            self._rebind_joystick()
 
         # defaults for both wizards
         now = datetime.now()
@@ -248,7 +268,6 @@ class UI:
         self._home_items = self.menu_items[:]
 
         # bind inputs and draw
-        self._bind_inputs()
         self._draw_center("Booting…")
         time.sleep(0.2)
         self._need_home_clear = True
@@ -397,10 +416,11 @@ class UI:
             return None
 
     def _unbind_inputs(self):
-        for b in (self.btn_up, self.btn_down, self.btn_ok, self.js_up, self.js_down, self.js_left, self.js_right, self.js_push):
+        for b in (self.btn_key1, self.btn_key2, self.btn_key3,
+                self.js_up, self.js_down, self.js_left, self.js_right, self.js_push):
             if b:
                 b.when_pressed = None
-                b.when_released = None
+            b.when_released = None
 
     def _rebind_joystick(self):
         # Keep joystick as the navigator; the three top keys are free.
@@ -762,6 +782,37 @@ class UI:
             self._draw_center("Rotation set", "Lasndscape" if self.rot_deg == 90 else "Portrait")
             time.sleep(0.6)
             self.state = self.HOME
+            self.render(force=True)
+        finally:
+            self._busy = False
+
+    def toggle_hotspot(self):
+        """Toggle the Wi-Fi AP via Flask and show a quick banner."""
+        if self._busy: 
+            return
+        self._busy = True
+        try:
+            # quick visual feedback
+            self._draw_center("Toggling AP…")
+            ok = _http_post_form(AP_TOGGLE_URL, {})
+            if not ok:
+                self._draw_center("AP toggle failed")
+                time.sleep(0.7)
+                return
+
+            # brief poll to show final state
+            st = _http_json(AP_STATUS_URL) or {}
+            mode = (st.get("mode") or "").lower()
+            # known values from our Flask endpoint: "ap", "client", "unknown"
+            if mode == "ap":
+                self._draw_center("Hotspot ON", "SSID: cyclopi_camera")
+            elif mode == "client":
+                self._draw_center("Hotspot OFF", "Client mode")
+            else:
+                self._draw_center("AP state updated")
+            time.sleep(0.7)
+
+            # return to whatever screen you were on; don’t hard clear UI state
             self.render(force=True)
         finally:
             self._busy = False
