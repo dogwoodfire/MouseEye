@@ -22,6 +22,58 @@ def _nmcli(*args, timeout=6):
         return False, str(e)
 import re
 
+# ---------- AP status with IP discovery ----------
+def _ap_active_info():
+    """
+    Return dict: {'on':bool, 'name':HOTSPOT_NAME, 'device':str|None,
+                  'ip':str|None, 'ips':[str,...]}
+    """
+    on = _ap_is_active()
+    dev = None
+    ips = []
+
+    # Find which DEVICE the hotspot connection is bound to
+    ok, out = _nmcli("con", "show", "--active")
+    if ok:
+        # nmcli prints a table; last column is DEVICE
+        # We look for the row that contains our HOTSPOT_NAME
+        for ln in out.splitlines():
+            if HOTSPOT_NAME in ln:
+                parts = ln.split()
+                if parts:
+                    dev = parts[-1]          # DEVICE is last column
+                break
+
+    # If we found a device, ask NM for its IPv4 addresses
+    if dev:
+        ok2, out2 = _nmcli("device", "show", dev)
+        if ok2:
+            for ln in out2.splitlines():
+                ln = ln.strip()
+                if ln.startswith("IP4.ADDRESS"):
+                    # Format is like: IP4.ADDRESS[1]: 10.42.0.1/24
+                    ip = ln.split(":", 1)[-1].strip().split("/", 1)[0]
+                    if ip:
+                        ips.append(ip)
+
+    return {
+        "on": on,
+        "name": HOTSPOT_NAME,
+        "device": dev,
+        "ip": (ips[0] if ips else None),
+        "ips": ips,
+    }
+
+@app.get("/ap/status")
+def ap_status_new():
+    """Rich status used by the LCD: on/off, name, device, IPs."""
+    return jsonify(_ap_active_info())
+
+# Back-compat: keep the old /ap_status path but return the richer JSON too.
+@app.get("/ap_status")
+def ap_status_compat():
+    return jsonify(_ap_active_info())
+
 def _ap_active_device():
     """Return the device name (e.g. wlan0) for the active AP, or ''."""
     ok, out = _nmcli("con", "show", "--active")
@@ -638,19 +690,6 @@ def ap_off():
 def ap_toggle():
     ok = (ap_disable() if ap_is_on() else ap_enable())
     return (jsonify({"on": ap_is_on()}) if ok else (jsonify({"on": ap_is_on(), "error":"toggle_failed"}), 500))
-
-@app.get("/ap/status")
-def ap_status_json():
-    on = ap_is_on()
-    dev = _ap_active_device() if on else ""
-    ip  = _ipv4_for_device(dev) if dev else ""
-    return jsonify({
-        "on": on,
-        "name": HOTSPOT_NAME,
-        "device": dev,
-        "ip": ip,                # single best IP for the AP interface
-        "ips": _all_ipv4_local() # all local IPv4s (fallback/diagnostic)
-    })
 
 @app.route("/", methods=["GET"])
 def index():
