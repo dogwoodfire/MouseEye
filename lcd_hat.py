@@ -27,9 +27,9 @@ PIN_RST  = int(os.environ.get("LCD_PIN_RST",  "27"))
 PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))  # Backlight (PWM LED)
 
 # Waveshare 1.44" LCD HAT keys + joystick
-KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up (not used for menu now)
-KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # OK (not used for menu now)
-KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down (not used for menu now)
+KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up (free for future)
+KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # OK (free for future)
+KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down (free for future)
 JS_UP    = int(os.environ.get("LCD_JS_UP",    "6"))
 JS_DOWN  = int(os.environ.get("LCD_JS_DOWN",  "19"))
 JS_LEFT  = int(os.environ.get("LCD_JS_LEFT",  "5"))
@@ -52,7 +52,7 @@ SCHED_DEL_URLS  = [
     f"{LOCAL}/schedule/remove",
     f"{LOCAL}/schedule/cancel",
 ]
-SCHED_LIST_URL  = f"{LOCAL}/schedule/list"   # preferred
+SCHED_LIST_URL  = f"{LOCAL}/schedule/list"   # preferred if available
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"  # legacy fallback
 
 # ----------------- Preferences (rotation) -----------------
@@ -178,7 +178,7 @@ def _post_schedule_arm(start_dt, duration_hr, duration_min, interval_s, auto_enc
     return _http_post_form(SCHED_ARM_URL, payload)
 
 def _delete_schedule_backend(sched_id: str):
-    # Try a few common endpoints; if all fail, it's okay (backend is source of truth).
+    # Try common endpoints; if all fail, backend will still be source of truth.
     for url in SCHED_DEL_URLS:
         if _http_post_form(url, {"id": sched_id}):
             return True
@@ -214,8 +214,7 @@ class UI:
         except Exception:
             self.bl = None
 
-        # input (constructed before binding)
-        # NOTE: we still create them, but we DO NOT bind KEY1/KEY2/KEY3 to menu actions anymore.
+        # inputs (top 3 keys left unbound from menu)
         self.btn_up   = self._mk_button(KEY1)
         self.btn_ok   = self._mk_button(KEY2)
         self.btn_down = self._mk_button(KEY3)
@@ -245,7 +244,7 @@ class UI:
         # state
         self.state = self.HOME
         self.menu_idx = 0
-        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
+        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display"]
         self._home_items = self.menu_items[:]
 
         # bind inputs and draw
@@ -256,43 +255,23 @@ class UI:
         self._need_hard_clear = True
         self.render(force=True)
 
-    # ---------- panel power helpers (hide rotate flash) ----------
+    # ---------- panel power helpers ----------
     def _panel_off(self):
         try:
-            self.device.command(0x28)  # Display OFF
-            self.device.command(0x10)  # Sleep IN
+            self.device.command(0x28)
+            self.device.command(0x10)
         except Exception:
             pass
 
     def _panel_on(self):
         try:
-            self.device.command(0x11)  # Sleep OUT
+            self.device.command(0x11)
             time.sleep(0.12)
-            self.device.command(0x29)  # Display ON
+            self.device.command(0x29)
         except Exception:
             pass
 
-    # ---------- one-shot clears ----------
-    def _reload_schedules_view(self, gone_id=None):
-        """
-        Ensure the schedules list reflects the latest backend state.
-        Optionally wait until `gone_id` disappears.
-        """
-        deadline = time.time() + (1.2 if gone_id is not None else 0.0)
-        while time.time() <= deadline:
-            rows = _read_schedules()
-            if gone_id is None or not any(str(rid) == str(gone_id) for rid, _ in rows):
-                break
-            time.sleep(0.1)
-
-        self._request_hard_clear()
-        self._hard_clear()
-
-        rows = _read_schedules()
-        self.menu_idx = min(self.menu_idx, max(0, 2 + len(rows) - 1))
-        self.state = self.SCHED_LIST
-        self.render(force=True)
-
+    # ---------- clears / present ----------
     def _request_hard_clear(self):
         self._need_hard_clear = True
 
@@ -335,12 +314,18 @@ class UI:
             except Exception: return len(txt) * 6
 
     # ---------- drawing ----------
-    def _draw_lines(self, lines, title=None, footer=None, highlight_idxes=None, dividers=False):
+    def _draw_lines(self, lines, title=None, footer=None,
+                    highlight_idxes=None, dividers=False, divider_after=None):
         """
-        highlight_idxes: a set/list of line indexes to draw in CYAN (supports multi-line highlight)
+        - highlight_idxes: set of line indexes to draw in CYAN (multi-line highlight)
+        - dividers: if True, draw horizontal rules
+        - divider_after: optional set of indexes after which to draw a divider.
+                         If provided, overrides the default "divider under every line".
         """
         if highlight_idxes is None: highlight_idxes = set()
         else: highlight_idxes = set(highlight_idxes)
+        if divider_after is None: divider_after = set()
+        else: divider_after = set(divider_after)
 
         img = self._blank(); drw = ImageDraw.Draw(img); y = 2
         if title:
@@ -348,11 +333,17 @@ class UI:
         for i, txt in enumerate(lines):
             fill = CYAN if i in highlight_idxes else WHITE
             drw.text((2,y), txt, font=F_TEXT, fill=fill); y += 14
-            if dividers and i < len(lines)-1:
-                drw.line((2, y-2, WIDTH-2, y-2), fill=DIM)
+            if dividers:
+                # If divider_after is given, only draw after those indexes.
+                # Otherwise (legacy behaviour), draw under every line except the last.
+                if divider_after:
+                    if i in divider_after:
+                        drw.line((2, y-2, WIDTH-2, y-2), fill=DIM)
+                else:
+                    if i < len(lines) - 1:
+                        drw.line((2, y-2, WIDTH-2, y-2), fill=DIM)
         if footer:
             drw.text((2, HEIGHT-12), footer, font=F_SMALL, fill=GRAY)
-        # (No right-side "UP/OK/DOWN" hints anymore)
         self._present(img)
 
     def _draw_center(self, msg, sub=None):
@@ -412,7 +403,7 @@ class UI:
                 b.when_released = None
 
     def _rebind_joystick(self):
-        # Keep joystick as the navigator; the three top keys are no longer bound to menu.
+        # Keep joystick as the navigator; the three top keys are free.
         if self.rot_deg == 0:
             m = dict(up=self._logical_up, right=self._logical_right,
                      down=self._logical_down, left=self._logical_left)
@@ -426,10 +417,7 @@ class UI:
         if self.js_push:  self.js_push.when_pressed  = self._wrap_wake(self.ok)
 
     def _bind_inputs(self):
-        # DO NOT bind KEY1/KEY2/KEY3 to menu anymore; they’re free for future features.
-        # if self.btn_up:   self.btn_up.when_pressed   = self._wrap_wake(lambda: self.nav(-1))
-        # if self.btn_down: self.btn_down.when_pressed = self._wrap_wake(lambda: self.nav(+1))
-        # if self.btn_ok:   self.btn_ok.when_pressed   = self._wrap_wake(self.ok)
+        # Top buttons intentionally not bound to menu
         self._rebind_joystick()
 
     # ---------- logical joystick actions ----------
@@ -440,7 +428,6 @@ class UI:
             self.sch_date = self.sch_date + timedelta(days=1); self.render()
         else:
             self.adjust(+1)
-
     def _logical_down(self):
         if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.nav(+1)
@@ -448,7 +435,6 @@ class UI:
             self.sch_date = self.sch_date - timedelta(days=1); self.render()
         else:
             self.adjust(-1)
-
     def _logical_left(self):
         if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
             self.adjust(-10)
@@ -458,7 +444,6 @@ class UI:
             self.sch_date = self.sch_date - timedelta(days=10); self.render()
         elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
-
     def _logical_right(self):
         if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
             self.adjust(+10)
@@ -495,8 +480,7 @@ class UI:
             self.menu_idx = (self.menu_idx + delta) % max(1, len(items))
             self.render()
         elif self.state == self.SCHED_LIST:
-            # menu_idx: 0=Back, 1=New Schedule, 2..(2+N-1)=N schedules
-            n_items = 2 + len(self._sch_rows)
+            n_items = 2 + len(self._sch_rows)  # 0=Back, 1=New, 2.. schedules
             self.menu_idx = (self.menu_idx + delta) % max(1, n_items)
             self.render()
         elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
@@ -575,7 +559,6 @@ class UI:
             return
 
         if self.state == self.SCHED_LIST:
-            # index mapping: 0 ← Back, 1 ← New Schedule, 2.. ← actual schedules
             if self.menu_idx == 0:
                 self.state = self.HOME; self.menu_idx = 0; self.render()
             elif self.menu_idx == 1:
@@ -790,7 +773,6 @@ class UI:
                          highlight_idxes=set(), dividers=False)
 
     def _draw_confirm_sch(self, interval_s, sch_date, sh, sm, eh, em, auto_encode, hi):
-        # Two-digit year so it fits
         lines = [
             f"Interval:  {interval_s}s",
             f"Date:      {sch_date.strftime('%y-%m-%d')}",
@@ -808,7 +790,7 @@ class UI:
 
     def _format_sched_lines(self, st: dict):
         """
-        Return two text lines for a schedule, compact enough for 128px:
+        Return two text lines for a schedule:
         line1: "10s • 25-09-06"
         line2: "08:30–09:15 • fps24 • enc:on"
         """
@@ -842,8 +824,7 @@ class UI:
 
         items = []
         if st.get("active"): items.append("Stop capture")
-        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off"]
-        items.append(f"Rotate display: {'90°' if self.rot_deg == 90 else '0°'}")
+        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display"]
         self._home_items = items
 
         if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
@@ -922,38 +903,39 @@ class UI:
                 rows = _read_schedules()
                 self._sch_rows = rows[:]  # keep same order
 
-                # Build two-line-per-schedule view
                 lines = ["‹ Back", "+ New Schedule"]
-                # we will compute highlight indexes (both lines for the selected schedule)
                 highlight = set()
                 now_ts = int(time.time())
 
-                # We can fit: title + (max ~7-8 lines). With two headers, we’ll show up to 3 schedules (2 lines each) comfortably.
                 max_sched_to_show = 3
+                # We'll draw a divider only after each schedule's 2nd line.
+                divider_after = set()
 
                 for idx, (_, st) in enumerate(rows[:max_sched_to_show]):
                     l1, l2 = self._format_sched_lines(st)
-                    # tag active/next at end of line2 (compact)
                     st_ts = int(st.get("start_ts",0)); en_ts = int(st.get("end_ts",0))
                     tag = "now" if (st_ts <= now_ts < en_ts) else "next"
                     l2 = f"{l2}  [{tag}]"
-                    lines.append(l1)
-                    lines.append(l2)
 
-                # figure which **line indexes** to highlight
-                # menu_idx: 0 (Back), 1 (New), 2.. schedules (one per schedule)
+                    lines.append(l1)  # index a
+                    lines.append(l2)  # index b
+                    # mark divider after this block's second line
+                    divider_after.add(len(lines)-1)
+
                 if self.menu_idx >= 2:
-                    sched_i = self.menu_idx - 2  # which schedule is selected
-                    # its top line index in `lines` is 2 + sched_i*2
+                    sched_i = self.menu_idx - 2
                     top = 2 + sched_i*2
                     if top < len(lines):
                         highlight.update({top, top+1})
-
                 hi_ok = {0} if self.menu_idx == 0 else ({1} if self.menu_idx == 1 else highlight)
 
-                self._draw_lines(lines, title="Schedules",
-                                 footer="OK select • Back=first item",
-                                 highlight_idxes=hi_ok, dividers=True)
+                self._draw_lines(
+                    lines, title="Schedules",
+                    footer="OK select • Back=first item",
+                    highlight_idxes=hi_ok,
+                    dividers=True,
+                    divider_after=divider_after
+                )
                 return
 
             if self.state == self.SCHED_DEL_CONFIRM:
@@ -965,9 +947,7 @@ class UI:
                                  highlight_idxes=set(), dividers=False)
                 return
 
-            # fallback
             self._clear()
-
         except Exception as e:
             log("render error:", repr(e))
 
