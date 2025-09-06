@@ -482,7 +482,7 @@ class UI:
             if self.bl is not None: self.bl.value = 1.0
         except Exception: pass
         self._screen_off = False
-               self.state = self.HOME
+        self.state = self.HOME
         self.menu_idx = 0
         self._need_home_clear = True
         self.render(force=True)
