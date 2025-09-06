@@ -38,6 +38,22 @@ atexit.register(_cleanup_all)
 
 # ---------- Globals ----------
 
+# camera orientation (degrees). Set to 0, 90, 180, or 270
+CAM_ROTATE_DEG = int(os.environ.get("CAM_ROTATE_DEG", "180"))
+
+def _rot_flags_for(bin_path: str):
+    """
+    Return CLI flags to rotate frames for rpicam-* or libcamera-*.
+    Uses --rotation <deg>, which is supported by both families.
+    """
+    try:
+        deg = int(CAM_ROTATE_DEG)
+    except Exception:
+        deg = 0
+    if deg not in (0, 90, 180, 270):
+        deg = 0
+    return ["--rotation", str(deg)] if deg else []
+
 app = Flask(__name__)
 app.jinja_env.globals.update(datetime=datetime)
 
@@ -453,7 +469,7 @@ def _capture_loop(sess_dir, interval):
         target_idx = i + 1
         jpg = os.path.join(sess_dir, f"{target_idx:06d}.jpg")
         cmd = [
-            CAMERA_STILL, "-o", jpg,
+            CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", jpg,
             "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
             "--quality", CAPTURE_QUALITY,
             "--immediate", "--nopreview"
@@ -829,7 +845,7 @@ def test_capture():
     fd, path = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
     cmd = [
-        CAMERA_STILL, "-o", path,
+        CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", path,
         "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
         "--quality", CAPTURE_QUALITY,
         "--immediate", "--nopreview"
@@ -893,12 +909,14 @@ def live_mjpg():
 
     def build_cmd(w, h):
         base = os.path.basename(vid_bin)
+        rot = _rot_flags_for(vid_bin)
         if base.startswith("libcamera-"):
             return [
                 vid_bin, "-n",
                 "--codec", "mjpeg",
                 "--width", str(w), "--height", str(h),
                 "--framerate", "30",
+                *rot,
                 "-t", "0",
                 "-o", "-",
             ]
@@ -908,6 +926,7 @@ def live_mjpg():
                 "--codec", "mjpeg",
                 "--width", str(w), "--height", str(h),
                 "--framerate", "30",
+                *rot,
                 "-t", "0",
                 "-o", "-",
             ]
