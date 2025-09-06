@@ -238,11 +238,7 @@ class UI:
         self.js_left  = self._mk_button(JS_LEFT)
         self.js_right = self._mk_button(JS_RIGHT)
         self.js_push  = self._mk_button(JS_PUSH)
-        def _bind_inputs(self):
-            # Top buttons: KEY1 toggles hotspot; KEY2/KEY3 still free
-            if self.btn_up:   self.btn_up.when_pressed   = self._wrap_wake(self.toggle_hotspot)
-            # Leave btn_ok / btn_down unbound for now (you said you'll use later)
-            self._rebind_joystick()
+        self._bind_inputs()
 
         # defaults for both wizards
         now = datetime.now()
@@ -420,7 +416,7 @@ class UI:
                 self.js_up, self.js_down, self.js_left, self.js_right, self.js_push):
             if b:
                 b.when_pressed = None
-            b.when_released = None
+                b.when_released = None
 
     def _rebind_joystick(self):
         # Keep joystick as the navigator; the three top keys are free.
@@ -441,7 +437,11 @@ class UI:
         if self.js_push:  self.js_push.when_pressed  = self._wrap_wake(self.ok)
 
     def _bind_inputs(self):
-        # Top buttons intentionally not bound to menu
+        # KEY1 toggles hotspot (wake screen if off)
+        if self.btn_key1:
+            self.btn_key1.when_pressed = self._wrap_wake(self.toggle_hotspot)
+
+        # keep joystick driving menus (rotation-aware)
         self._rebind_joystick()
 
     # ---------- logical joystick actions ----------
@@ -787,35 +787,32 @@ class UI:
             self._busy = False
 
     def toggle_hotspot(self):
-        """Toggle the Wi-Fi AP via Flask and show a quick banner."""
-        if self._busy: 
+        if self._busy:
             return
         self._busy = True
-        try:
-            # quick visual feedback
-            self._draw_center("Toggling AP…")
-            ok = _http_post_form(AP_TOGGLE_URL, {})
-            if not ok:
-                self._draw_center("AP toggle failed")
-                time.sleep(0.7)
-                return
+        self._draw_center("Toggling AP…")
 
-            # brief poll to show final state
-            st = _http_json(AP_STATUS_URL) or {}
-            mode = (st.get("mode") or "").lower()
-            # known values from our Flask endpoint: "ap", "client", "unknown"
-            if mode == "ap":
-                self._draw_center("Hotspot ON", "SSID: cyclopi_camera")
-            elif mode == "client":
-                self._draw_center("Hotspot OFF", "Client mode")
-            else:
-                self._draw_center("AP state updated")
-            time.sleep(0.7)
+        def worker():
+            try:
+                ok = _http_post_form(AP_TOGGLE_URL, {}, timeout=1.0)  # short timeout
+                if not ok:
+                    self._draw_center("AP toggle failed")
+                    time.sleep(0.6)
+                    return
+                st = _http_json(AP_STATUS_URL) or {}
+                mode = (st.get("mode") or "").lower()
+                if mode == "ap":
+                    self._draw_center("Hotspot ON", "SSID: cyclopi_camera")
+                elif mode == "client":
+                    self._draw_center("Hotspot OFF", "Client mode")
+                else:
+                    self._draw_center("AP state updated")
+                time.sleep(0.6)
+            finally:
+                self._busy = False
+                self.render(force=True)
 
-            # return to whatever screen you were on; don’t hard clear UI state
-            self.render(force=True)
-        finally:
-            self._busy = False
+        threading.Thread(target=worker, daemon=True).start()
 
     # ---------- render ----------
     def _draw_confirm_tl(self, interval_s, h, m, auto_encode, hi):
