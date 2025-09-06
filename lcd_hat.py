@@ -24,7 +24,7 @@ except Exception:
 # ----------------- HAT wiring (BCM) -----------------
 PIN_DC   = int(os.environ.get("LCD_PIN_DC",   "25"))
 PIN_RST  = int(os.environ.get("LCD_PIN_RST",  "27"))
-PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))  # Backlight (PWM LED)
+PIN_BL   = int(os.environ.get("LCD_PIN_BL",  "24"))  # Backlight (PWM LED)
 
 # Waveshare 1.44" LCD HAT keys + joystick
 KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up
@@ -47,7 +47,11 @@ STATUS_URL      = f"{LOCAL}/lcd_status"
 START_URL       = f"{LOCAL}/start"
 STOP_URL        = f"{LOCAL}/stop"
 SCHED_ARM_URL   = f"{LOCAL}/schedule/arm"
-SCHED_DEL_URL   = f"{LOCAL}/schedule/delete"     # used if backend supports delete
+SCHED_DEL_URLS  = [
+    f"{LOCAL}/schedule/delete",
+    f"{LOCAL}/schedule/remove",
+    f"{LOCAL}/schedule/cancel",
+]
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"
 
 # ----------------- Preferences (rotation) -----------------
@@ -129,22 +133,64 @@ def _http_post_form(url, data: dict, timeout=2.5):
 
 # ----------------- Schedules (local read/write) -----------------
 def _read_schedules():
+    """
+    Returns a list of (id, dict) sorted by start_ts.
+    Supports either {id: obj, ...} or [obj, ...] with obj['id'].
+    """
     try:
         with open(SCHED_FILE, "r") as f:
             data = json.load(f)
         if isinstance(data, dict):
-            return sorted(data.items(), key=lambda kv: kv[1].get("start_ts", 0))
+            items = [(k, v) for k, v in data.items() if isinstance(v, dict)]
+        elif isinstance(data, list):
+            items = []
+            for d in data:
+                if isinstance(d, dict):
+                    sid = str(d.get("id", ""))
+                    if not sid:
+                        # synthesize id from timestamps to keep selectable
+                        sid = f"{int(d.get('start_ts',0))}-{int(d.get('end_ts',0))}"
+                    items.append((sid, d))
+        else:
+            items = []
+        items.sort(key=lambda kv: int(kv[1].get("start_ts", 0)))
+        return items
     except Exception:
-        pass
-    return []
+        return []
 
-def _write_schedules(dct):
+def _write_schedules_generic(remove_id: str):
+    """
+    Delete schedule with id from file, handling dict or list layout.
+    """
     try:
-        with open(SCHED_FILE, "w") as f:
-            json.dump(dct, f)
-        return True
+        with open(SCHED_FILE, "r") as f:
+            data = json.load(f)
     except Exception:
         return False
+
+    changed = False
+    if isinstance(data, dict):
+        if remove_id in data:
+            data.pop(remove_id, None)
+            changed = True
+    elif isinstance(data, list):
+        new_list = []
+        for d in data:
+            if isinstance(d, dict) and str(d.get("id","")) == remove_id:
+                changed = True
+                continue
+            new_list.append(d)
+        if changed:
+            data = new_list
+
+    if changed:
+        try:
+            with open(SCHED_FILE, "w") as f:
+                json.dump(data, f)
+            return True
+        except Exception:
+            return False
+    return False
 
 def _post_schedule_arm(start_dt, duration_hr, duration_min, interval_s, auto_encode=True, fps=24, sess_name=""):
     start_local = start_dt.strftime("%Y-%m-%dT%H:%M")
@@ -160,20 +206,12 @@ def _post_schedule_arm(start_dt, duration_hr, duration_min, interval_s, auto_enc
     return _http_post_form(SCHED_ARM_URL, payload)
 
 def _delete_schedule_backend(sched_id: str):
-    # Try backend first; if fails, fall back to local file edit.
-    if SCHED_DEL_URL and _http_post_form(SCHED_DEL_URL, {"id": sched_id}):
-        return True
-    # fallback: remove from schedule.json
-    try:
-        with open(SCHED_FILE, "r") as f:
-            data = json.load(f)
-        if sched_id in data:
-            data.pop(sched_id, None)
-            with open(SCHED_FILE, "w") as f:
-                json.dump(data, f)
-        return True
-    except Exception:
-        return False
+    # Try a few common endpoints; if all fail, edit the file.
+    for url in SCHED_DEL_URLS:
+        if _http_post_form(url, {"id": sched_id}):
+            return True
+    # fallback: modify schedule.json directly
+    return _write_schedules_generic(sched_id)
 
 # =====================================================================
 #                              UI CONTROLLER
@@ -182,7 +220,7 @@ class UI:
     # Timelapse wizard (start now): interval, duration hr, duration min, enc, confirm
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
     SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
-    SCHED_LIST, SCHED_VIEW, SCHED_DEL_CONFIRM, ENCODING = range(18)
+    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING = range(17)
 
     def __init__(self):
         # prefs
@@ -220,7 +258,7 @@ class UI:
         self.wz_interval = 10
         self.tl_hours = 0
         self.tl_mins  = 0
-        self.sch_date = now.date()           # NEW: schedule date
+        self.sch_date = now.date()
         self.sch_start_h  = now.hour
         self.sch_start_m  = (now.minute + 1) % 60
         self.sch_end_h    = (now.hour + 1) % 24
@@ -398,24 +436,25 @@ class UI:
 
     # ---------- logical joystick actions ----------
     def _logical_up(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_VIEW, self.SCHED_DEL_CONFIRM):
+        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.nav(-1)
+        elif self.state == self.SCH_DATE:
+            self.sch_date = self.sch_date + timedelta(days=1); self.render()
         else:
             self.adjust(+1)
     def _logical_down(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_VIEW, self.SCHED_DEL_CONFIRM):
+        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.nav(+1)
+        elif self.state == self.SCH_DATE:
+            self.sch_date = self.sch_date - timedelta(days=1); self.render()
         else:
             self.adjust(-1)
     def _logical_left(self):
-        # Timelapse wizard pages use ±10 on LEFT/RIGHT
         if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
             self.adjust(-10)
-        # Schedule wizard pages use ±10 on LEFT/RIGHT
         elif self.state in (self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
             self.adjust(-10)
         elif self.state == self.SCH_DATE:
-            # date page: ±10 days on left/right
             self.sch_date = self.sch_date - timedelta(days=10); self.render()
         elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
@@ -457,7 +496,7 @@ class UI:
             self.render()
         elif self.state == self.SCHED_LIST:
             self.menu_idx = max(0, self.menu_idx + delta); self.render()
-        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_VIEW, self.SCHED_DEL_CONFIRM):
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
         else:
             self.adjust(-1 if delta > 0 else +1)
@@ -478,6 +517,8 @@ class UI:
         elif self.state == self.SCH_INT:
             step = 10 if abs(delta) >= 10 else 1
             self.wz_interval = max(1, self.wz_interval + (step if delta>0 else -step))
+        elif self.state == self.SCH_DATE:
+            self.sch_date = self.sch_date + (timedelta(days=1) if delta>0 else timedelta(days=-1))
         elif self.state == self.SCH_SH:
             step = 10 if abs(delta) >= 10 else 1
             self.sch_start_h = (self.sch_start_h + (step if delta>0 else -step)) % 24
@@ -531,23 +572,18 @@ class UI:
             return
 
         if self.state == self.SCHED_LIST:
+            # index mapping: 0 ← Back, 1 ← New Schedule, 2.. ← actual schedules
             if self.menu_idx == 0:
+                self.state = self.HOME; self.menu_idx = 0; self.render()
+            elif self.menu_idx == 1:
                 self.start_schedule_wizard()
             else:
-                # open selected schedule view/delete
-                idx = self.menu_idx - 1
+                idx = self.menu_idx - 2
                 if 0 <= idx < len(self._sch_rows):
-                    self._selected_sched = self._sch_rows[idx][0]  # id
-                    self.confirm_idx = 0
-                    self.state = self.SCHED_VIEW
+                    self._selected_sched = self._sch_rows[idx][0]  # schedule id
+                    self.state = self.SCHED_DEL_CONFIRM
+                    self.confirm_idx = 1  # default to "No"
                     self.render()
-            return
-
-        if self.state == self.SCHED_VIEW:
-            # only one actionable item: Delete →
-            self.state = self.SCHED_DEL_CONFIRM
-            self.confirm_idx = 1  # default to "No"
-            self.render()
             return
 
         if self.state == self.SCHED_DEL_CONFIRM:
@@ -559,6 +595,7 @@ class UI:
                 self._busy = False
                 self._draw_center("Deleted" if ok else "Failed")
                 time.sleep(0.6)
+            # Always reload the list from disk after deletion attempt
             self.open_schedules()
             return
 
@@ -648,7 +685,6 @@ class UI:
         if self._busy: return
         self._busy = True
         try:
-            # Use chosen date
             start = datetime(
                 self.sch_date.year, self.sch_date.month, self.sch_date.day,
                 self.sch_start_h, self.sch_start_m, 0
@@ -674,7 +710,7 @@ class UI:
                 sess_name=""
             )
             self._draw_center("Scheduled" if ok else "Failed",
-                              f"{start.strftime('%Y-%m-%d %H:%M')}")
+                              f"{start.strftime('%y-%m-%d %H:%M')}")
             time.sleep(0.8)
         finally:
             self._busy = False
@@ -732,9 +768,10 @@ class UI:
                          highlight=-1, hints=False)
 
     def _draw_confirm_sch(self, interval_s, sch_date, sh, sm, eh, em, auto_encode, hi):
+        # Two-digit year so it fits
         lines = [
             f"Interval:  {interval_s}s",
-            f"Date:      {sch_date.strftime('%Y-%m-%d')}",
+            f"Date:      {sch_date.strftime('%y-%m-%d')}",
             f"Start:     {sh:02d}:{sm:02d}",
             f"End:       {eh:02d}:{em:02d}",
             f"Auto-enc.: {'Yes' if auto_encode else 'No'}",
@@ -748,12 +785,12 @@ class UI:
                          highlight=-1, hints=False)
 
     def _format_sched_row(self, st: dict):
-        # Build a row like: "10s  08:30–09:15, 2025-03-12"
+        # Row like: "10s  08:30–09:15, 25-03-12"
         interval = int(st.get("interval", 10))
         st_ts = int(st.get("start_ts", 0)); en_ts = int(st.get("end_ts", 0))
         if st_ts and en_ts:
             sd = datetime.fromtimestamp(st_ts); ed = datetime.fromtimestamp(en_ts)
-            times = f"{sd.strftime('%H:%M')}–{ed.strftime('%H:%M')}, {sd.strftime('%Y-%m-%d')}"
+            times = f"{sd.strftime('%H:%M')}–{ed.strftime('%H:%M')}, {sd.strftime('%y-%m-%d')}"
         else:
             times = "(unscheduled)"
         return f"{interval}s  {times}"
@@ -805,7 +842,7 @@ class UI:
             self._draw_wizard_page("Interval (s)", f"{self.wz_interval}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
         elif self.state == self.SCH_DATE:
-            self._draw_wizard_page("Date", self.sch_date.strftime("%Y-%m-%d"),
+            self._draw_wizard_page("Date", self.sch_date.strftime("%y-%m-%d"),
                                    tips=["UP/DOWN ±1 day, LEFT/RIGHT ±10 days", "OK next"])
         elif self.state == self.SCH_SH:
             self._draw_wizard_page("Start hour", f"{self.sch_start_h:02d}",
@@ -853,31 +890,19 @@ class UI:
                 self._maybe_hard_clear()
                 rows = _read_schedules()
                 self._sch_rows = rows[:]  # keep same order
-                lines = ["+ New Schedule"]
+                # index 0 ← Back, 1 ← New Schedule, 2.. ← schedules
+                lines = ["‹ Back", "+ New Schedule"]
                 now_ts = int(time.time())
-                for _, st in rows[:5]:  # show up to 5 rows on the small screen
+                for _, st in rows[:4]:  # show up to 4 rows after the two headers
                     line = self._format_sched_row(st)
-                    # add small status tag at the end (now/next) if useful
                     st_ts = int(st.get("start_ts",0)); en_ts = int(st.get("end_ts",0))
                     tag = "now" if (st_ts <= now_ts < en_ts) else "next"
                     line = f"{line}  [{tag}]"
                     lines.append(line)
                 hi = min(self.menu_idx, len(lines)-1) if lines else 0
                 self._draw_lines(lines, title="Schedules",
-                                 footer="UP/DOWN, OK select",
+                                 footer="UP/DOWN/OK • Back=first item",
                                  highlight=hi, hints=True, dividers=True)
-                return
-
-            if self.state == self.SCHED_VIEW:
-                # Minimal “details” with a Delete action
-                sid = getattr(self, "_selected_sched", None)
-                st = None
-                for _id, _st in self._sch_rows:
-                    if _id == sid: st = _st; break
-                info = "(not found)" if not st else self._format_sched_row(st)
-                lines = [info, "", "[Delete]"]
-                self._draw_lines(lines, title="Schedule", footer="OK=select, UP/DOWN toggle",
-                                 highlight=self.confirm_idx, hints=True)
                 return
 
             if self.state == self.SCHED_DEL_CONFIRM:
@@ -926,14 +951,13 @@ def main():
                 ui._draw_encoding(ui._spin_idx)
             else:
                 if ui.state == UI.ENCODING:
-                    ui.state = UI.HOME
+                    ui.state = ui.HOME
                     ui.menu_idx = 0
                     ui._request_hard_clear()
-                if ui.state == UI.HOME:
+                if ui.state == ui.HOME:
                     ui._render_home()
             last_poll = now
 
-        # keep Home fresh even if status didn't change
         if ui.state == ui.HOME:
             ui.render()
 
