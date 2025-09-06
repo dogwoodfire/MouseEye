@@ -138,46 +138,24 @@ def _http_post_form(url, data: dict, timeout=2.5):
 
 # ----------------- Schedules (local read/write) -----------------
 def _read_schedules():
-    """
-    Return list of (id, dict) sorted by start_ts.
-    Prefer backend API if present; fall back to local JSON file.
-    """
-    # --- Try backend endpoints first ---
-    def _normalize_to_rows(obj):
-        # Accept {"schedules":[...]} or dict-of-ids or list
-        if isinstance(obj, dict) and "schedules" in obj:
-            obj = obj["schedules"]
-
-        rows = []
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if isinstance(v, dict):
-                    rows.append((str(k), v))
-        elif isinstance(obj, list):
-            for d in obj:
-                if isinstance(d, dict):
-                    sid = str(
-                        d.get("id")
-                        or d.get("_id")
-                        or d.get("sid")
-                        or f"{int(d.get('start_ts',0))}-{int(d.get('end_ts',0))}"
-                    )
-                    rows.append((sid, d))
-        return rows
-
-    for url in BACKEND_LIST_URLS:
+    # 1) Try backend JSON
+    for url in (f"{LOCAL}/schedule/list",):
         try:
-            data = _http_json(url, timeout=1.5)
-            if not data:
-                continue
-            rows = _normalize_to_rows(data)
-            if rows:
-                rows.sort(key=lambda kv: int(kv[1].get("start_ts", 0)))
-                return rows
+            arr = _http_json(url, timeout=1.2)
+            if isinstance(arr, list):
+                # return as [(id, dict), ...]
+                out = []
+                for d in arr:
+                    if isinstance(d, dict) and d.get("id"):
+                        sid = str(d["id"])
+                        d2 = dict(d); d2.pop("id", None)
+                        out.append((sid, d2))
+                out.sort(key=lambda kv: int(kv[1].get("start_ts", 0)))
+                return out
         except Exception:
             pass
 
-    # --- Fallback to local file format(s) ---
+    # 2) Fallback to file (legacy)
     try:
         with open(SCHED_FILE, "r") as f:
             data = json.load(f)

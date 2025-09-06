@@ -293,7 +293,9 @@ def _save_sched_state():
         tmp = SCHED_FILE + ".tmp"
         with open(tmp, "w") as f:
             json.dump(_schedules, f)
-        os.replace(tmp, SCHED_FILE)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, SCHED_FILE)  # atomic swap
     except Exception:
         pass
 
@@ -1997,6 +1999,56 @@ def schedule_cancel_id(sid):
         _schedules.pop(sid, None)
         _save_sched_state()
     return redirect(url_for("schedule_page"))
+
+@app.get("/schedule/list")
+def schedule_list_json():
+    """
+    Compact JSON for the LCD:
+    [
+      {"id": "abcd1234", "start_ts": 123, "end_ts": 456, "interval": 10, "fps": 24,
+       "sess": "", "auto_encode": true, "created_ts": 123}
+    ]
+    """
+    now = int(time.time())
+    items = []
+    for sid, st in _schedules.items():
+        try:
+            d = dict(st)
+            d["id"] = sid
+            # normalize types
+            d["start_ts"] = int(d.get("start_ts", 0))
+            d["end_ts"]   = int(d.get("end_ts", 0))
+            d["interval"] = int(d.get("interval", 10))
+            d["fps"]      = int(d.get("fps", 24))
+            d["auto_encode"] = bool(d.get("auto_encode", False))
+            d["created_ts"]  = int(d.get("created_ts", d["start_ts"]))
+        except Exception:
+            continue
+        items.append(d)
+
+    items.sort(key=lambda d: d.get("start_ts", 0))
+    resp = jsonify(items)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.post("/schedule/delete")
+def schedule_delete_json():
+    """
+    Delete a schedule by id. Accepts form or JSON:
+      - form: id=<sid>
+      - json: {"id": "<sid>"}
+    Returns 204 on success (even if id didn’t exist), 400 if no id supplied.
+    """
+    sid = request.form.get("id") or (request.json or {}).get("id")
+    if not sid:
+        return ("missing id", 400)
+
+    with _sched_lock:
+        # stop timers and remove
+        _cancel_timers_for(sid)
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return ("", 204)
 
 # ================== /Simple Scheduler ==================
 # Load persisted schedule and re-arm timers on process start
