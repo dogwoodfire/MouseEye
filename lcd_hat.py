@@ -596,7 +596,12 @@ class UI:
                 time.sleep(0.4)
 
                 self._selected_sched = None
-                self._reload_schedules_view(gone_id=sid)
+                # Hard refresh straight into the list view
+                self._request_hard_clear()
+                self.state = self.SCHED_LIST
+                # keep cursor sane (0=Back, 1=New, schedules start at 2)
+                self.menu_idx = min(max(self.menu_idx, 0), 1 + len(self._sch_rows))
+                self.render(force=True)
                 return
 
             # chose "No"
