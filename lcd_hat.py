@@ -301,6 +301,31 @@ class UI:
             pass
 
     # ---------- one-shot clears ----------
+
+    def _reload_schedules_view(self, gone_id=None):
+        """
+        Ensure the schedules list reflects the latest file contents.
+        Optionally wait until `gone_id` is no longer present.
+        """
+        deadline = time.time() + 1.2 if gone_id is not None else time.time()
+        while time.time() <= deadline:
+            rows = _read_schedules()
+            if gone_id is None or not any(str(rid) == str(gone_id) for rid, _ in rows):
+                break
+            time.sleep(0.1)
+
+        # Clear then draw a fresh list
+        self._request_hard_clear()
+        self._hard_clear()
+
+        # Keep cursor valid (+1 because "+ New Schedule" is index 0)
+        rows = _read_schedules()
+        self.menu_idx = min(self.menu_idx, max(0, len(rows)))
+
+        # Render immediately
+        self.state = self.SCHED_LIST
+        self.render(force=True)
+
     def _request_hard_clear(self):
         self._need_hard_clear = True
 
@@ -593,10 +618,10 @@ class UI:
                 self._busy = True
                 self._draw_center("Deleting…")
 
-                ok_flag = _delete_schedule_backend(sid)  # may return False even if it actually deletes
-                time.sleep(0.12)  # small tick for the writer
+                ok_flag = _delete_schedule_backend(sid)  # may be False even if the backend deletes it
+                time.sleep(0.12)  # brief tick for writer
 
-                # Consider it success if the id disappears from the list within ~1.2s
+                # Treat success if the id disappears
                 success = False
                 deadline = time.time() + 1.2
                 while time.time() < deadline:
@@ -608,16 +633,16 @@ class UI:
 
                 self._busy = False
                 self._draw_center("Deleted" if (success or ok_flag) else "Failed")
-                time.sleep(0.45)
+                time.sleep(0.4)
 
-            # Always reload the list fresh and show it immediately
+                # Hard refresh the Schedules view and wait until `sid` is gone
+                self._selected_sched = None
+                self._reload_schedules_view(gone_id=sid)
+                return
+
+            # If they chose "No", just go back to the list and fully refresh it
             self._selected_sched = None
-            self.state = self.SCHED_LIST
-            # After deletion, keep the cursor at a valid index
-            sch = _read_schedules()
-            self.menu_idx = min(self.menu_idx, max(0, len(sch)))  # +1 slot for "+ New Schedule"
-            self._request_hard_clear()
-            self.render(force=True)
+            self._reload_schedules_view()
             return
 
     def _abort_to_home(self):
