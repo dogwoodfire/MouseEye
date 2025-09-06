@@ -4,7 +4,7 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 import os, sys, time, json, threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 
@@ -47,6 +47,7 @@ STATUS_URL      = f"{LOCAL}/lcd_status"
 START_URL       = f"{LOCAL}/start"
 STOP_URL        = f"{LOCAL}/stop"
 SCHED_ARM_URL   = f"{LOCAL}/schedule/arm"
+SCHED_DEL_URL   = f"{LOCAL}/schedule/delete"     # used if backend supports delete
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"
 
 # ----------------- Preferences (rotation) -----------------
@@ -103,7 +104,7 @@ F_VALUE = _load_font(17)
 
 WHITE=(255,255,255); GRAY=(140,140,140); CYAN=(120,200,255)
 GREEN=(80,220,120);  YELL=(255,210,80);  BLUE=(90,160,220)
-RED=(255,80,80)
+RED=(255,80,80);     DIM=(90,90,90)
 
 SPINNER = ["-", "\\", "|", "/"]
 
@@ -126,7 +127,7 @@ def _http_post_form(url, data: dict, timeout=2.5):
     except Exception:
         return False
 
-# ----------------- Schedules (local read) -----------------
+# ----------------- Schedules (local read/write) -----------------
 def _read_schedules():
     try:
         with open(SCHED_FILE, "r") as f:
@@ -137,14 +138,51 @@ def _read_schedules():
         pass
     return []
 
+def _write_schedules(dct):
+    try:
+        with open(SCHED_FILE, "w") as f:
+            json.dump(dct, f)
+        return True
+    except Exception:
+        return False
+
+def _post_schedule_arm(start_dt, duration_hr, duration_min, interval_s, auto_encode=True, fps=24, sess_name=""):
+    start_local = start_dt.strftime("%Y-%m-%dT%H:%M")
+    payload = {
+        "start_local": start_local,
+        "duration_hr":  str(int(duration_hr)),
+        "duration_min": str(int(duration_min)),
+        "interval":     str(int(interval_s)),
+        "fps":          str(int(fps)),
+        "auto_encode":  "on" if auto_encode else "",
+        "sess_name":    sess_name or "",
+    }
+    return _http_post_form(SCHED_ARM_URL, payload)
+
+def _delete_schedule_backend(sched_id: str):
+    # Try backend first; if fails, fall back to local file edit.
+    if SCHED_DEL_URL and _http_post_form(SCHED_DEL_URL, {"id": sched_id}):
+        return True
+    # fallback: remove from schedule.json
+    try:
+        with open(SCHED_FILE, "r") as f:
+            data = json.load(f)
+        if sched_id in data:
+            data.pop(sched_id, None)
+            with open(SCHED_FILE, "w") as f:
+                json.dump(data, f)
+        return True
+    except Exception:
+        return False
+
 # =====================================================================
 #                              UI CONTROLLER
 # =====================================================================
 class UI:
     # Timelapse wizard (start now): interval, duration hr, duration min, enc, confirm
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
-    SCH_INT, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
-    SCHED_LIST, ENCODING = range(15)
+    SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
+    SCHED_LIST, SCHED_VIEW, SCHED_DEL_CONFIRM, ENCODING = range(18)
 
     def __init__(self):
         # prefs
@@ -182,6 +220,7 @@ class UI:
         self.wz_interval = 10
         self.tl_hours = 0
         self.tl_mins  = 0
+        self.sch_date = now.date()           # NEW: schedule date
         self.sch_start_h  = now.hour
         self.sch_start_m  = (now.minute + 1) % 60
         self.sch_end_h    = (now.hour + 1) % 24
@@ -189,6 +228,9 @@ class UI:
         self.wz_encode   = True
         self.confirm_idx = 0
         self._last_status = {}
+
+        # schedule list bookkeeping
+        self._sch_rows = []   # [(id, dict), ...] in listing order
 
         # state
         self.state = self.HOME
@@ -263,12 +305,14 @@ class UI:
             except Exception: return len(txt) * 6
 
     # ---------- drawing ----------
-    def _draw_lines(self, lines, title=None, footer=None, highlight=-1, hints=True):
+    def _draw_lines(self, lines, title=None, footer=None, highlight=-1, hints=True, dividers=False):
         img = self._blank(); drw = ImageDraw.Draw(img); y = 2
         if title:
             drw.text((2,y), title, font=F_TITLE, fill=WHITE); y += 18
         for i, txt in enumerate(lines):
             drw.text((2,y), txt, font=F_TEXT, fill=(CYAN if i==highlight else WHITE)); y += 14
+            if dividers and i < len(lines)-1:
+                drw.line((2, y-2, WIDTH-2, y-2), fill=DIM)
         if footer:
             drw.text((2, HEIGHT-12), footer, font=F_SMALL, fill=GRAY)
         if hints:
@@ -354,25 +398,36 @@ class UI:
 
     # ---------- logical joystick actions ----------
     def _logical_up(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM): self.nav(-1)
-        else: self.adjust(+1)
+        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_VIEW, self.SCHED_DEL_CONFIRM):
+            self.nav(-1)
+        else:
+            self.adjust(+1)
     def _logical_down(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM): self.nav(+1)
-        else: self.adjust(-1)
+        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_VIEW, self.SCHED_DEL_CONFIRM):
+            self.nav(+1)
+        else:
+            self.adjust(-1)
     def _logical_left(self):
-        # left/right = fast step (±10) for interval AND all schedule fields
-        if self.state in (self.TL_INT, self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
+        # Timelapse wizard pages use ±10 on LEFT/RIGHT
+        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
             self.adjust(-10)
-        elif self.state in (self.TL_HR, self.TL_MIN):  # timelapse duration: fast step too
+        # Schedule wizard pages use ±10 on LEFT/RIGHT
+        elif self.state in (self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
             self.adjust(-10)
-        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM):
+        elif self.state == self.SCH_DATE:
+            # date page: ±10 days on left/right
+            self.sch_date = self.sch_date - timedelta(days=10); self.render()
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
+
     def _logical_right(self):
-        if self.state in (self.TL_INT, self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
+        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
             self.adjust(+10)
-        elif self.state in (self.TL_HR, self.TL_MIN):
+        elif self.state in (self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
             self.adjust(+10)
-        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM):
+        elif self.state == self.SCH_DATE:
+            self.sch_date = self.sch_date + timedelta(days=10); self.render()
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
 
     # ---------- screen power ----------
@@ -402,7 +457,7 @@ class UI:
             self.render()
         elif self.state == self.SCHED_LIST:
             self.menu_idx = max(0, self.menu_idx + delta); self.render()
-        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM):
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_VIEW, self.SCHED_DEL_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
         else:
             self.adjust(-1 if delta > 0 else +1)
@@ -460,7 +515,7 @@ class UI:
             if self.state == self.TL_CONFIRM: self.confirm_idx = 0
             self.render(); return
 
-        if self.state in (self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM, self.SCH_ENC):
+        if self.state in (self.SCH_INT, self.SCH_DATE, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM, self.SCH_ENC):
             self.state += 1
             if self.state == self.SCH_CONFIRM: self.confirm_idx = 0
             self.render(); return
@@ -476,8 +531,35 @@ class UI:
             return
 
         if self.state == self.SCHED_LIST:
-            if self.menu_idx == 0: self.start_schedule_wizard()
-            else: self.render()
+            if self.menu_idx == 0:
+                self.start_schedule_wizard()
+            else:
+                # open selected schedule view/delete
+                idx = self.menu_idx - 1
+                if 0 <= idx < len(self._sch_rows):
+                    self._selected_sched = self._sch_rows[idx][0]  # id
+                    self.confirm_idx = 0
+                    self.state = self.SCHED_VIEW
+                    self.render()
+            return
+
+        if self.state == self.SCHED_VIEW:
+            # only one actionable item: Delete →
+            self.state = self.SCHED_DEL_CONFIRM
+            self.confirm_idx = 1  # default to "No"
+            self.render()
+            return
+
+        if self.state == self.SCHED_DEL_CONFIRM:
+            if self.confirm_idx == 0 and getattr(self, "_selected_sched", None):
+                self._busy = True
+                self._draw_center("Deleting…")
+                ok = _delete_schedule_backend(self._selected_sched)
+                time.sleep(0.3)
+                self._busy = False
+                self._draw_center("Deleted" if ok else "Failed")
+                time.sleep(0.6)
+            self.open_schedules()
             return
 
     def _abort_to_home(self):
@@ -546,11 +628,12 @@ class UI:
             self._request_hard_clear()
             self.render(force=True)
 
-    # --- New Schedule (start/end clock times) ---
+    # --- New Schedule (date + start/end clock times) ---
     def start_schedule_wizard(self):
         if self._busy: return
         now = datetime.now()
         self.wz_interval = 10
+        self.sch_date = now.date()
         self.sch_start_h  = now.hour
         self.sch_start_m  = (now.minute + 1) % 60
         self.sch_end_h    = (now.hour + 1) % 24
@@ -565,27 +648,33 @@ class UI:
         if self._busy: return
         self._busy = True
         try:
-            now = datetime.now()
-            start = now.replace(hour=self.sch_start_h, minute=self.sch_start_m, second=0, microsecond=0)
-            end   = now.replace(hour=self.sch_end_h, minute=self.sch_end_m, second=0, microsecond=0)
+            # Use chosen date
+            start = datetime(
+                self.sch_date.year, self.sch_date.month, self.sch_date.day,
+                self.sch_start_h, self.sch_start_m, 0
+            )
+            end   = datetime(
+                self.sch_date.year, self.sch_date.month, self.sch_date.day,
+                self.sch_end_h, self.sch_end_m, 0
+            )
             if end <= start:
                 end += timedelta(days=1)
             dur = end - start
             mins = max(1, int(dur.total_seconds() // 60))
             dur_hr, dur_min = divmod(mins, 60)
 
-            start_local = start.strftime("%Y-%m-%dT%H:%M")
             self._draw_center("Arming…")
-            ok = _http_post_form(SCHED_ARM_URL, {
-                "start_local": start_local,
-                "duration_hr":  str(dur_hr),
-                "duration_min": str(dur_min),
-                "interval":     str(self.wz_interval),
-                "fps":          "24",
-                "auto_encode":  "on" if self.wz_encode else "",
-                "sess_name":    "",
-            })
-            self._draw_center("Scheduled" if ok else "Failed", "Using start/stop")
+            ok = _post_schedule_arm(
+                start_dt=start,
+                duration_hr=dur_hr,
+                duration_min=dur_min,
+                interval_s=int(self.wz_interval),
+                auto_encode=bool(self.wz_encode),
+                fps=24,
+                sess_name=""
+            )
+            self._draw_center("Scheduled" if ok else "Failed",
+                              f"{start.strftime('%Y-%m-%d %H:%M')}")
             time.sleep(0.8)
         finally:
             self._busy = False
@@ -642,9 +731,10 @@ class UI:
                          footer="UP/DOWN choose, OK select",
                          highlight=-1, hints=False)
 
-    def _draw_confirm_sch(self, interval_s, sh, sm, eh, em, auto_encode, hi):
+    def _draw_confirm_sch(self, interval_s, sch_date, sh, sm, eh, em, auto_encode, hi):
         lines = [
             f"Interval:  {interval_s}s",
+            f"Date:      {sch_date.strftime('%Y-%m-%d')}",
             f"Start:     {sh:02d}:{sm:02d}",
             f"End:       {eh:02d}:{em:02d}",
             f"Auto-enc.: {'Yes' if auto_encode else 'No'}",
@@ -656,6 +746,17 @@ class UI:
         self._draw_lines(lines, title="Confirm",
                          footer="UP/DOWN choose, OK select",
                          highlight=-1, hints=False)
+
+    def _format_sched_row(self, st: dict):
+        # Build a row like: "10s  08:30–09:15, 2025-03-12"
+        interval = int(st.get("interval", 10))
+        st_ts = int(st.get("start_ts", 0)); en_ts = int(st.get("end_ts", 0))
+        if st_ts and en_ts:
+            sd = datetime.fromtimestamp(st_ts); ed = datetime.fromtimestamp(en_ts)
+            times = f"{sd.strftime('%H:%M')}–{ed.strftime('%H:%M')}, {sd.strftime('%Y-%m-%d')}"
+        else:
+            times = "(unscheduled)"
+        return f"{interval}s  {times}"
 
     def _render_home(self):
         self._maybe_hard_clear()
@@ -703,6 +804,9 @@ class UI:
         elif self.state == self.SCH_INT:
             self._draw_wizard_page("Interval (s)", f"{self.wz_interval}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.SCH_DATE:
+            self._draw_wizard_page("Date", self.sch_date.strftime("%Y-%m-%d"),
+                                   tips=["UP/DOWN ±1 day, LEFT/RIGHT ±10 days", "OK next"])
         elif self.state == self.SCH_SH:
             self._draw_wizard_page("Start hour", f"{self.sch_start_h:02d}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
@@ -725,35 +829,69 @@ class UI:
         try:
             if self.state == self.ENCODING:
                 self._draw_encoding(self._spin_idx); return
+
             if self.state == self.HOME:
-                self._render_home()
-            elif self.state in (
+                self._render_home(); return
+
+            if self.state in (
                 self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_ENC,
-                self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM, self.SCH_ENC,
+                self.SCH_INT, self.SCH_DATE, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM, self.SCH_ENC,
             ):
-                self._render_wz()
-            elif self.state == self.TL_CONFIRM:
+                self._render_wz(); return
+
+            if self.state == self.TL_CONFIRM:
                 self._draw_confirm_tl(self.wz_interval, self.tl_hours, self.tl_mins,
-                                      self.wz_encode, self.confirm_idx)
-            elif self.state == self.SCH_CONFIRM:
-                self._draw_confirm_sch(self.wz_interval, self.sch_start_h, self.sch_start_m,
-                                       self.sch_end_h, self.sch_end_m, self.wz_encode, self.confirm_idx)
-            elif self.state == self.SCHED_LIST:
+                                      self.wz_encode, self.confirm_idx); return
+
+            if self.state == self.SCH_CONFIRM:
+                self._draw_confirm_sch(self.wz_interval, self.sch_date,
+                                       self.sch_start_h, self.sch_start_m,
+                                       self.sch_end_h, self.sch_end_m,
+                                       self.wz_encode, self.confirm_idx); return
+
+            if self.state == self.SCHED_LIST:
                 self._maybe_hard_clear()
-                sch = _read_schedules()
+                rows = _read_schedules()
+                self._sch_rows = rows[:]  # keep same order
                 lines = ["+ New Schedule"]
-                now = int(time.time())
-                for sid, st in sch:
-                    st_ts = int(st.get("start_ts", 0)); en_ts = int(st.get("end_ts", 0))
-                    tag = "now" if (st_ts <= now < en_ts) else "next"
-                    name = (st.get("sess") or sid)[:10]
-                    lines.append(f"{tag} {name} {st.get('interval', 10)}s")
+                now_ts = int(time.time())
+                for _, st in rows[:5]:  # show up to 5 rows on the small screen
+                    line = self._format_sched_row(st)
+                    # add small status tag at the end (now/next) if useful
+                    st_ts = int(st.get("start_ts",0)); en_ts = int(st.get("end_ts",0))
+                    tag = "now" if (st_ts <= now_ts < en_ts) else "next"
+                    line = f"{line}  [{tag}]"
+                    lines.append(line)
                 hi = min(self.menu_idx, len(lines)-1) if lines else 0
-                self._draw_lines(lines[:6], title="Schedules",
+                self._draw_lines(lines, title="Schedules",
                                  footer="UP/DOWN, OK select",
-                                 highlight=hi, hints=True)
-            else:
-                self._clear()
+                                 highlight=hi, hints=True, dividers=True)
+                return
+
+            if self.state == self.SCHED_VIEW:
+                # Minimal “details” with a Delete action
+                sid = getattr(self, "_selected_sched", None)
+                st = None
+                for _id, _st in self._sch_rows:
+                    if _id == sid: st = _st; break
+                info = "(not found)" if not st else self._format_sched_row(st)
+                lines = [info, "", "[Delete]"]
+                self._draw_lines(lines, title="Schedule", footer="OK=select, UP/DOWN toggle",
+                                 highlight=self.confirm_idx, hints=True)
+                return
+
+            if self.state == self.SCHED_DEL_CONFIRM:
+                yes = "[Yes]" if self.confirm_idx == 0 else " Yes "
+                no  = "[No] " if self.confirm_idx == 1 else " No  "
+                lines = ["Delete this schedule?", "", f"{yes}    {no}"]
+                self._draw_lines(lines, title="Confirm delete",
+                                 footer="UP/DOWN choose, OK select",
+                                 highlight=-1, hints=False)
+                return
+
+            # fallback
+            self._clear()
+
         except Exception as e:
             log("render error:", repr(e))
 
