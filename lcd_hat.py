@@ -277,7 +277,7 @@ class UI:
 
     def _hard_clear(self):
         img = Image.new("RGB", (self.device.width, self.device.height), (0, 0, 0))
-        frame = img.rotate(90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
+        frame = img.rotate(-90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
         with self._draw_lock:
             self.device.display(frame); time.sleep(0.02)
             self.device.display(frame); time.sleep(0.02)
@@ -292,7 +292,7 @@ class UI:
         self._need_hard_clear = False
 
     def _present(self, img):
-        frame = img.rotate(90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
+        frame = img.rotate(-90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
         with self._draw_lock:
             self.device.display(frame)
 
@@ -405,11 +405,15 @@ class UI:
     def _rebind_joystick(self):
         # Keep joystick as the navigator; the three top keys are free.
         if self.rot_deg == 0:
+            # normal orientation
             m = dict(up=self._logical_up, right=self._logical_right,
-                     down=self._logical_down, left=self._logical_left)
-        else:  # 90°
-            m = dict(up=self._logical_right, right=self._logical_down,
-                     down=self._logical_left, left=self._logical_up)
+                    down=self._logical_down, left=self._logical_left)
+        else:  # 90° CLOCKWISE
+            # physical ↑ should move UI "up" on the rotated screen:
+            # map: up->left, right->up, down->right, left->down
+            m = dict(up=self._logical_left, right=self._logical_up,
+                    down=self._logical_right, left=self._logical_down)
+
         if self.js_up:    self.js_up.when_pressed    = self._wrap_wake(m['up'])
         if self.js_right: self.js_right.when_pressed = self._wrap_wake(m['right'])
         if self.js_down:  self.js_down.when_pressed  = self._wrap_wake(m['down'])
@@ -755,7 +759,7 @@ class UI:
 
             self._bind_inputs()
             self._request_hard_clear()
-            self._draw_center("Rotation set", f"{self.rot_deg} degrees")
+            self._draw_center("Rotation set")
             time.sleep(0.6)
             self.state = self.HOME
             self.render(force=True)
