@@ -22,144 +22,6 @@ def _nmcli(*args, timeout=6):
         return False, str(e)
 import re
 
-# ---------- AP status with IP discovery ----------
-def _ap_active_info():
-    """
-    Return dict: {'on':bool, 'name':HOTSPOT_NAME, 'device':str|None,
-                  'ip':str|None, 'ips':[str,...]}
-    """
-    on = _ap_is_active()
-    dev = None
-    ips = []
-
-    # Find which DEVICE the hotspot connection is bound to
-    ok, out = _nmcli("con", "show", "--active")
-    if ok:
-        # nmcli prints a table; last column is DEVICE
-        # We look for the row that contains our HOTSPOT_NAME
-        for ln in out.splitlines():
-            if HOTSPOT_NAME in ln:
-                parts = ln.split()
-                if parts:
-                    dev = parts[-1]          # DEVICE is last column
-                break
-
-    # If we found a device, ask NM for its IPv4 addresses
-    if dev:
-        ok2, out2 = _nmcli("device", "show", dev)
-        if ok2:
-            for ln in out2.splitlines():
-                ln = ln.strip()
-                if ln.startswith("IP4.ADDRESS"):
-                    # Format is like: IP4.ADDRESS[1]: 10.42.0.1/24
-                    ip = ln.split(":", 1)[-1].strip().split("/", 1)[0]
-                    if ip:
-                        ips.append(ip)
-
-    return {
-        "on": on,
-        "name": HOTSPOT_NAME,
-        "device": dev,
-        "ip": (ips[0] if ips else None),
-        "ips": ips,
-    }
-
-# ---------- AP status with robust IP discovery ----------
-import re
-
-def _find_ap_device_nm():
-    """
-    Return the device name (e.g. wlan0) that is connected with HOTSPOT_NAME,
-    using NetworkManager. Return None if not found.
-    """
-    ok, out = _nmcli("device", "status")
-    if ok:
-        # DEVICE  TYPE  STATE      CONNECTION
-        # wlan0   wifi  connected  Pi-Hotspot
-        lines = out.splitlines()
-        # try to find a row whose last column equals HOTSPOT_NAME
-        for ln in lines[1:]:
-            cols = ln.split()
-            if len(cols) >= 4:
-                dev = cols[0]
-                conn = " ".join(cols[3:])
-                if conn == HOTSPOT_NAME:
-                    return dev
-
-    # fallback: inspect active connections table
-    ok2, out2 = _nmcli("con", "show", "--active")
-    if ok2:
-        for ln in out2.splitlines():
-            if HOTSPOT_NAME in ln:
-                parts = ln.split()
-                if parts:
-                    return parts[-1]   # last column is DEVICE
-    return None
-
-def _ipv4_addrs_nm(dev):
-    """Return list of IPv4 addresses (strings) for a device via nmcli."""
-    if not dev:
-        return []
-    ok, out = _nmcli("-g", "IP4.ADDRESS", "device", "show", dev)
-    if not ok or not out:
-        return []
-    ips = []
-    for ln in out.splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
-        ip = ln.split("/", 1)[0]
-        if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
-            ips.append(ip)
-    return ips
-
-def _ipv4_addrs_iproute(dev):
-    """Fallback using `ip -4 addr show dev ...`."""
-    try:
-        import subprocess
-        p = subprocess.run(
-            ["ip", "-4", "addr", "show", "dev", str(dev)],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False
-        )
-        ips = []
-        for ln in p.stdout.splitlines():
-            ln = ln.strip()
-            # inet 10.42.0.1/24 brd 10.42.0.255 scope global ...
-            if ln.startswith("inet "):
-                ip = ln.split()[1].split("/", 1)[0]
-                if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
-                    ips.append(ip)
-        return ips
-    except Exception:
-        return []
-
-def _ap_active_info():
-    """
-    Return dict used by LCD:
-      {'on': bool, 'name': HOTSPOT_NAME, 'device': 'wlan0'|None,
-       'ip': 'x.x.x.x'|None, 'ips': [..]}
-    """
-    on = _ap_is_active()
-    dev = _find_ap_device_nm()
-    ips = _ipv4_addrs_nm(dev) or _ipv4_addrs_iproute(dev)
-
-    return {
-        "on": on,
-        "name": HOTSPOT_NAME,
-        "device": dev,
-        "ip": (ips[0] if ips else None),
-        "ips": ips,
-    }
-
-@app.get("/ap/status")
-def ap_status_new():
-    return jsonify(_ap_active_info())
-
-# Back-compat for older clients
-@app.get("/ap_status")
-def ap_status_compat():
-    return jsonify(_ap_active_info())
-
 def _ap_active_device():
     """Return the device name (e.g. wlan0) for the active AP, or ''."""
     ok, out = _nmcli("con", "show", "--active")
@@ -776,6 +638,19 @@ def ap_off():
 def ap_toggle():
     ok = (ap_disable() if ap_is_on() else ap_enable())
     return (jsonify({"on": ap_is_on()}) if ok else (jsonify({"on": ap_is_on(), "error":"toggle_failed"}), 500))
+
+@app.get("/ap/status")
+def ap_status_json():
+    on = ap_is_on()
+    dev = _ap_active_device() if on else ""
+    ip  = _ipv4_for_device(dev) if dev else ""
+    return jsonify({
+        "on": on,
+        "name": HOTSPOT_NAME,
+        "device": dev,
+        "ip": ip,                # single best IP for the AP interface
+        "ips": _all_ipv4_local() # all local IPv4s (fallback/diagnostic)
+    })
 
 @app.route("/", methods=["GET"])
 def index():
