@@ -24,7 +24,7 @@ except Exception:
 # ----------------- HAT wiring (BCM) -----------------
 PIN_DC   = int(os.environ.get("LCD_PIN_DC",   "25"))
 PIN_RST  = int(os.environ.get("LCD_PIN_RST",  "27"))
-PIN_BL   = int(os.environ.get("LCD_PIN_BL",  "24"))  # Backlight (PWM LED)
+PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))  # Backlight (PWM LED)
 
 # Waveshare 1.44" LCD HAT keys + joystick
 KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up
@@ -148,7 +148,6 @@ def _read_schedules():
                 if isinstance(d, dict):
                     sid = str(d.get("id", ""))
                     if not sid:
-                        # synthesize id from timestamps to keep selectable
                         sid = f"{int(d.get('start_ts',0))}-{int(d.get('end_ts',0))}"
                     items.append((sid, d))
         else:
@@ -269,6 +268,7 @@ class UI:
 
         # schedule list bookkeeping
         self._sch_rows = []   # [(id, dict), ...] in listing order
+        self._sched_hidden = set()  # ids hidden immediately after delete request
 
         # state
         self.state = self.HOME
@@ -305,22 +305,26 @@ class UI:
     def _reload_schedules_view(self, gone_id=None):
         """
         Ensure the schedules list reflects the latest file contents.
-        Optionally wait until `gone_id` is no longer present.
+        Optionally wait until `gone_id` is no longer present, then unhide.
         """
-        deadline = time.time() + 1.2 if gone_id is not None else time.time()
-        while time.time() <= deadline:
-            rows = _read_schedules()
-            if gone_id is None or not any(str(rid) == str(gone_id) for rid, _ in rows):
-                break
-            time.sleep(0.1)
+        if gone_id is not None:
+            sid = str(gone_id)
+            deadline = time.time() + 1.5
+            while time.time() < deadline:
+                rows = _read_schedules()
+                if not any(str(rid) == sid for rid, _ in rows):
+                    break
+                time.sleep(0.1)
+            # File caught up — no need to keep it hidden
+            self._sched_hidden.discard(sid)
 
         # Clear then draw a fresh list
         self._request_hard_clear()
         self._hard_clear()
 
-        # Keep cursor valid (+1 because "+ New Schedule" is index 0)
-        rows = _read_schedules()
-        self.menu_idx = min(self.menu_idx, max(0, len(rows)))
+        # Keep cursor valid (+2 because "‹ Back", "+ New Schedule")
+        rows = [kv for kv in _read_schedules() if str(kv[0]) not in self._sched_hidden]
+        self.menu_idx = min(self.menu_idx, max(0, len(rows) + 1))  # +1 header offset
 
         # Render immediately
         self.state = self.SCHED_LIST
@@ -603,9 +607,11 @@ class UI:
             elif self.menu_idx == 1:
                 self.start_schedule_wizard()
             else:
+                # map visible index to actual row, skipping hidden ids
+                visible = [kv for kv in self._sch_rows if str(kv[0]) not in self._sched_hidden]
                 idx = self.menu_idx - 2
-                if 0 <= idx < len(self._sch_rows):
-                    self._selected_sched = self._sch_rows[idx][0]  # schedule id
+                if 0 <= idx < len(visible):
+                    self._selected_sched = str(visible[idx][0])  # schedule id
                     self.state = self.SCHED_DEL_CONFIRM
                     self.confirm_idx = 1  # default to "No"
                     self.render()
@@ -615,15 +621,18 @@ class UI:
             # confirm_idx: 0 = Yes, 1 = No
             if self.confirm_idx == 0 and getattr(self, "_selected_sched", None):
                 sid = str(self._selected_sched)
+
+                # Hide immediately in UI to prevent "ghost" re-delete
+                self._sched_hidden.add(sid)
                 self._busy = True
                 self._draw_center("Deleting…")
 
-                ok_flag = _delete_schedule_backend(sid)  # may be False even if the backend deletes it
+                ok_flag = _delete_schedule_backend(sid)
                 time.sleep(0.12)  # brief tick for writer
 
                 # Treat success if the id disappears
                 success = False
-                deadline = time.time() + 1.2
+                deadline = time.time() + 1.5
                 while time.time() < deadline:
                     rows = _read_schedules()
                     if not any(str(rid) == sid for rid, _ in rows):
@@ -635,7 +644,7 @@ class UI:
                 self._draw_center("Deleted" if (success or ok_flag) else "Failed")
                 time.sleep(0.4)
 
-                # Hard refresh the Schedules view and wait until `sid` is gone
+                # Hard refresh the Schedules view and wait until `sid` is gone; unhide then.
                 self._selected_sched = None
                 self._reload_schedules_view(gone_id=sid)
                 return
@@ -934,12 +943,13 @@ class UI:
 
             if self.state == self.SCHED_LIST:
                 self._maybe_hard_clear()
-                rows = _read_schedules()
+                rows = [kv for kv in _read_schedules() if str(kv[0]) not in self._sched_hidden]
                 self._sch_rows = rows[:]  # keep same order
+
                 # index 0 ← Back, 1 ← New Schedule, 2.. ← schedules
                 lines = ["‹ Back", "+ New Schedule"]
                 now_ts = int(time.time())
-                for _, st in rows[:4]:  # show up to 4 rows after the two headers
+                for _, st in rows[:4]:  # show up to 4 rows after headers
                     line = self._format_sched_row(st)
                     st_ts = int(st.get("start_ts",0)); en_ts = int(st.get("end_ts",0))
                     tag = "now" if (st_ts <= now_ts < en_ts) else "next"
