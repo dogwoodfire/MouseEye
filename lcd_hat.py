@@ -588,15 +588,31 @@ class UI:
 
         if self.state == self.SCHED_DEL_CONFIRM:
             if self.confirm_idx == 0 and getattr(self, "_selected_sched", None):
+                sid = self._selected_sched
                 self._busy = True
                 self._draw_center("Deleting…")
-                ok = _delete_schedule_backend(self._selected_sched)
-                time.sleep(0.3)
+
+                ok = _delete_schedule_backend(sid)
+                time.sleep(0.15)  # give backend a tick
+
+                # Wait briefly for the schedule to actually disappear
+                gone = False
+                for _ in range(12):  # ~1.2s max
+                    rows = _read_schedules()
+                    if not any(sid == rid for rid, _ in rows):
+                        gone = True
+                        break
+                    time.sleep(0.1)
+
                 self._busy = False
-                self._draw_center("Deleted" if ok else "Failed")
-                time.sleep(0.6)
-            # Always reload the list from disk after deletion attempt
-            self.open_schedules()
+                self._draw_center("Deleted" if (ok and gone) else "Failed")
+                time.sleep(0.4)
+
+            # Always reload the list fresh and show it immediately
+            self.state = self.SCHED_LIST
+            self.menu_idx = 0
+            self._request_hard_clear()
+            self.render(force=True)
             return
 
     def _abort_to_home(self):
