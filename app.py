@@ -28,6 +28,26 @@ def _ap_is_active():
         return False
     # Look for HOTSPOT_NAME in active connections table
     return HOTSPOT_NAME in out
+# ---- AP helpers wired to nmcli ----
+def ap_is_on():
+    try:
+        return _ap_is_active()
+    except Exception:
+        return False
+
+def ap_enable():
+    # ensure Wi-Fi radio is on first
+    _nmcli("radio", "wifi", "on")
+    ok, out = _nmcli("con", "up", HOTSPOT_NAME)
+    return ok
+
+def ap_disable():
+    ok, out = _nmcli("con", "down", HOTSPOT_NAME)
+    # treat “not active” as success so it’s idempotent
+    if ok:
+        return True
+    txt = (out or "").lower()
+    return ("not active" in txt) or ("unknown connection" in txt)
 
 @app.get("/ap_status")
 def ap_status():
@@ -580,9 +600,6 @@ def _capture_loop(sess_dir, interval):
 #     _capture_end_ts = None
 
 # ---------- Routes ----------
-@app.get("/ap/status")
-def ap_status():
-    return jsonify({"on": ap_is_on()})
 
 @app.post("/ap/on")
 def ap_on():
