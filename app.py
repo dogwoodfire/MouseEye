@@ -20,6 +20,50 @@ def _nmcli(*args, timeout=6):
         return ok, (proc.stdout.strip() or proc.stderr.strip())
     except Exception as e:
         return False, str(e)
+import re
+
+def _ap_active_device():
+    """Return the device name (e.g. wlan0) for the active AP, or ''."""
+    ok, out = _nmcli("con", "show", "--active")
+    if not ok or not out:
+        return ""
+    # nmcli table lines typically have NAME, UUID, TYPE, DEVICE
+    # Find the line that contains our HOTSPOT_NAME and extract the last column (device)
+    for line in out.splitlines():
+        if HOTSPOT_NAME in line:
+            parts = line.split()
+            if parts:
+                return parts[-1]  # DEVICE col
+    return ""
+
+def _ipv4_for_device(dev):
+    """Return the first IPv4 address for a given device, or ''."""
+    if not dev:
+        return ""
+    try:
+        proc = subprocess.run(
+            ["ip", "-4", "addr", "show", "dev", dev],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0
+        )
+        if proc.returncode == 0:
+            m = re.search(r"\binet\s+(\d+\.\d+\.\d+\.\d+)", proc.stdout)
+            return m.group(1) if m else ""
+    except Exception:
+        pass
+    return ""
+
+def _all_ipv4_local():
+    """Return a list of local IPv4 addresses (best-effort)."""
+    try:
+        proc = subprocess.run(
+            ["hostname", "-I"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, timeout=1.5
+        )
+        if proc.returncode == 0:
+            return [ip for ip in proc.stdout.split() if "." in ip]
+    except Exception:
+        pass
+    return []
 
 def _ap_is_active():
     # Fast check: is our AP connection currently active?
@@ -597,7 +641,16 @@ def ap_toggle():
 
 @app.get("/ap/status")
 def ap_status_json():
-    return jsonify({"on": ap_is_on()})
+    on = ap_is_on()
+    dev = _ap_active_device() if on else ""
+    ip  = _ipv4_for_device(dev) if dev else ""
+    return jsonify({
+        "on": on,
+        "name": HOTSPOT_NAME,
+        "device": dev,
+        "ip": ip,                # single best IP for the AP interface
+        "ips": _all_ipv4_local() # all local IPv4s (fallback/diagnostic)
+    })
 
 @app.route("/", methods=["GET"])
 def index():

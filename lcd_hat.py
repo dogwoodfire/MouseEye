@@ -794,23 +794,46 @@ class UI:
 
         def worker():
             try:
-                ok = _http_post_form(AP_TOGGLE_URL, {}, timeout=1.0)  # short timeout
+                # Give nmcli a little room to complete
+                ok = _http_post_form(AP_TOGGLE_URL, {}, timeout=4.0)
                 if not ok:
-                    self._draw_center("AP toggle failed")
-                    time.sleep(0.6)
-                    return
-                st = _http_json(AP_STATUS_URL) or {}
-                mode = (st.get("mode") or "").lower()
-                if mode == "ap":
-                    self._draw_center("Hotspot ON", "SSID: cyclopi_camera")
-                elif mode == "client":
-                    self._draw_center("Hotspot OFF", "Client mode")
+                    # Even if the POST timed out, it may still succeed shortly.
+                    # Poll status briefly before declaring failure.
+                    deadline = time.time() + 3.0
+                    success = False
+                    while time.time() < deadline:
+                        st = _http_json(AP_STATUS_URL) or {}
+                        if isinstance(st.get("on"), bool):
+                            success = True
+                            break
+                        time.sleep(0.2)
+                    if not success:
+                        self._draw_center("AP toggle failed")
+                        time.sleep(0.6)
+                        return
+
+                # Confirm final state (with a few retries while NM settles)
+                st = {}
+                deadline = time.time() + 4.0
+                while time.time() < deadline:
+                    st = _http_json(AP_STATUS_URL) or {}
+                    if "on" in st:
+                        break
+                    time.sleep(0.2)
+
+                if st.get("on"):
+                    ssid = st.get("name") or "Hotspot"
+                    ip   = st.get("ip") or (st.get("ips") or [""])[0]
+                    sub  = f"SSID: {ssid}"
+                    if ip:
+                        sub += f"\nIP: {ip}\nOpen http://{ip}:5050"
+                    self._draw_center("Hotspot ON", sub)
                 else:
-                    self._draw_center("AP state updated")
-                time.sleep(0.6)
+                    self._draw_center("Hotspot OFF", "Client mode")
+                time.sleep(0.8)
             finally:
                 self._busy = False
-                self.render(force=True)
+                self.render(True)
 
         threading.Thread(target=worker, daemon=True).start()
 
