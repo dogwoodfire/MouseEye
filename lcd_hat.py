@@ -212,6 +212,12 @@ def _delete_schedule_backend(sched_id: str):
     # fallback: modify schedule.json directly
     return _write_schedules_generic(sched_id)
 
+def _sched_file_mtime():
+    try:
+        return os.path.getmtime(SCHED_FILE)
+    except Exception:
+        return 0.0
+
 # =====================================================================
 #                              UI CONTROLLER
 # =====================================================================
@@ -269,6 +275,7 @@ class UI:
         # schedule list bookkeeping
         self._sch_rows = []   # [(id, dict), ...] in listing order
         self._sched_hidden = set()  # ids hidden immediately after delete request
+        self._sched_mtime = _sched_file_mtime()
 
         # state
         self.state = self.HOME
@@ -328,6 +335,7 @@ class UI:
 
         # Render immediately
         self.state = self.SCHED_LIST
+        self._sched_mtime = _sched_file_mtime()
         self.render(force=True)
 
     def _request_hard_clear(self):
@@ -778,6 +786,7 @@ class UI:
         self._request_hard_clear()
         self.state = self.SCHED_LIST
         self.menu_idx = 0
+        self._sched_mtime = _sched_file_mtime()
         self.render()
 
     def toggle_rotation(self):
@@ -942,6 +951,12 @@ class UI:
                                        self.wz_encode, self.confirm_idx); return
 
             if self.state == self.SCHED_LIST:
+                # Auto-refresh if the file changed on disk (e.g., after a delete)
+                cur_mtime = _sched_file_mtime()
+                if cur_mtime != self._sched_mtime:
+                    self._sched_mtime = cur_mtime
+                    self._request_hard_clear()
+                    # fall through to redraw using fresh rows
                 self._maybe_hard_clear()
                 rows = [kv for kv in _read_schedules() if str(kv[0]) not in self._sched_hidden]
                 self._sch_rows = rows[:]  # keep same order
