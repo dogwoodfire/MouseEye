@@ -1,781 +1,136 @@
-# -*- coding: utf-8 -*-
-import os, time, threading, subprocess, shutil, glob, json, mimetypes
-from datetime import datetime
-from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, render_template_string
-
-import subprocess  # add this if not already present
-
 # ---------- Hotspot / AP control (NetworkManager) ----------
+import os, subprocess, re
+from flask import jsonify
+
 HOTSPOT_NAME = os.environ.get("HOTSPOT_NAME", "Pi-Hotspot")
 
 def _nmcli(*args, timeout=6):
     """Run nmcli via sudo (allowed in sudoers). Return (ok, stdout)."""
     try:
-        proc = subprocess.run(
+        p = subprocess.run(
             ["sudo", "/usr/bin/nmcli", *map(str, args)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, timeout=timeout, check=False
         )
-        ok = (proc.returncode == 0)
-        return ok, (proc.stdout.strip() or proc.stderr.strip())
+        out = (p.stdout or "").strip() or (p.stderr or "").strip()
+        return (p.returncode == 0), out
     except Exception as e:
         return False, str(e)
-import re
 
-# ---------- AP status with IP discovery ----------
-def _ap_active_info():
-    """
-    Return dict: {'on':bool, 'name':HOTSPOT_NAME, 'device':str|None,
-                  'ip':str|None, 'ips':[str,...]}
-    """
-    on = _ap_is_active()
-    dev = None
-    ips = []
-
-    # Find which DEVICE the hotspot connection is bound to
+def _ap_is_active() -> bool:
     ok, out = _nmcli("con", "show", "--active")
-    if ok:
-        # nmcli prints a table; last column is DEVICE
-        # We look for the row that contains our HOTSPOT_NAME
-        for ln in out.splitlines():
-            if HOTSPOT_NAME in ln:
-                parts = ln.split()
-                if parts:
-                    dev = parts[-1]          # DEVICE is last column
-                break
+    return ok and (HOTSPOT_NAME in out)
 
-    # If we found a device, ask NM for its IPv4 addresses
-    if dev:
-        ok2, out2 = _nmcli("device", "show", dev)
-        if ok2:
-            for ln in out2.splitlines():
-                ln = ln.strip()
-                if ln.startswith("IP4.ADDRESS"):
-                    # Format is like: IP4.ADDRESS[1]: 10.42.0.1/24
-                    ip = ln.split(":", 1)[-1].strip().split("/", 1)[0]
-                    if ip:
-                        ips.append(ip)
-
-    return {
-        "on": on,
-        "name": HOTSPOT_NAME,
-        "device": dev,
-        "ip": (ips[0] if ips else None),
-        "ips": ips,
-    }
-
-# ---------- AP status with robust IP discovery ----------
-import re
-
-def _find_ap_device_nm():
-    """
-    Return the device name (e.g. wlan0) that is connected with HOTSPOT_NAME,
-    using NetworkManager. Return None if not found.
-    """
+def _find_ap_device() -> str | None:
+    # Prefer device status table
     ok, out = _nmcli("device", "status")
     if ok:
         # DEVICE  TYPE  STATE      CONNECTION
         # wlan0   wifi  connected  Pi-Hotspot
-        lines = out.splitlines()
-        # try to find a row whose last column equals HOTSPOT_NAME
-        for ln in lines[1:]:
+        for ln in out.splitlines()[1:]:
             cols = ln.split()
-            if len(cols) >= 4:
-                dev = cols[0]
-                conn = " ".join(cols[3:])
-                if conn == HOTSPOT_NAME:
-                    return dev
-
-    # fallback: inspect active connections table
-    ok2, out2 = _nmcli("con", "show", "--active")
-    if ok2:
-        for ln in out2.splitlines():
+            if len(cols) >= 4 and " ".join(cols[3:]) == HOTSPOT_NAME:
+                return cols[0]
+    # Fallback: active connections table
+    ok, out = _nmcli("con", "show", "--active")
+    if ok:
+        for ln in out.splitlines():
             if HOTSPOT_NAME in ln:
                 parts = ln.split()
-                if parts:
-                    return parts[-1]   # last column is DEVICE
+                return parts[-1] if parts else None
     return None
 
-def _ipv4_addrs_nm(dev):
-    """Return list of IPv4 addresses (strings) for a device via nmcli."""
+def _ipv4_for_device(dev: str) -> list[str]:
+    """Try nmcli; fallback to iproute2."""
     if not dev:
         return []
     ok, out = _nmcli("-g", "IP4.ADDRESS", "device", "show", dev)
-    if not ok or not out:
-        return []
     ips = []
-    for ln in out.splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
-        ip = ln.split("/", 1)[0]
-        if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
-            ips.append(ip)
-    return ips
-
-def _ipv4_addrs_iproute(dev):
-    """Fallback using `ip -4 addr show dev ...`."""
+    if ok and out:
+        for ln in out.splitlines():
+            ip = ln.strip().split("/", 1)[0]
+            if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
+                ips.append(ip)
+    if ips:
+        return ips
+    # Fallback
     try:
-        import subprocess
         p = subprocess.run(
-            ["ip", "-4", "addr", "show", "dev", str(dev)],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False
+            ["ip", "-4", "-o", "addr", "show", "dev", dev],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, check=False
         )
-        ips = []
         for ln in p.stdout.splitlines():
-            ln = ln.strip()
-            # inet 10.42.0.1/24 brd 10.42.0.255 scope global ...
-            if ln.startswith("inet "):
-                ip = ln.split()[1].split("/", 1)[0]
+            # e.g. "3: wlan0    inet 10.42.0.1/24 ..."
+            parts = ln.split()
+            if len(parts) >= 4 and parts[2] == "inet":
+                ip = parts[3].split("/", 1)[0]
                 if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
                     ips.append(ip)
-        return ips
     except Exception:
-        return []
+        pass
+    return ips
 
-def _ap_active_info():
-    """
-    Return dict used by LCD:
-      {'on': bool, 'name': HOTSPOT_NAME, 'device': 'wlan0'|None,
-       'ip': 'x.x.x.x'|None, 'ips': [..]}
-    """
-    on = _ap_is_active()
-    dev = _find_ap_device_nm()
-    ips = _ipv4_addrs_nm(dev) or _ipv4_addrs_iproute(dev)
-
+def _ap_status_payload() -> dict:
+    on  = _ap_is_active()
+    dev = _find_ap_device()
+    ips = _ipv4_for_device(dev)
+    # Choose a single "best" IP (prefer wlan*)
+    best = ips[0] if ips else None
     return {
         "on": on,
         "name": HOTSPOT_NAME,
+        "mode": "ap" if on else "client",
         "device": dev,
-        "ip": (ips[0] if ips else None),
+        "ip": best,
         "ips": ips,
     }
 
-@app.get("/ap/status")
-def ap_status_new():
-    return jsonify(_ap_active_info())
+# Public helpers (kept minimal & idempotent)
+def ap_is_on() -> bool:
+    return _ap_is_active()
 
-# Back-compat for older clients
-@app.get("/ap_status")
-def ap_status_compat():
-    return jsonify(_ap_active_info())
-
-def _ap_active_device():
-    """Return the device name (e.g. wlan0) for the active AP, or ''."""
-    ok, out = _nmcli("con", "show", "--active")
-    if not ok or not out:
-        return ""
-    # nmcli table lines typically have NAME, UUID, TYPE, DEVICE
-    # Find the line that contains our HOTSPOT_NAME and extract the last column (device)
-    for line in out.splitlines():
-        if HOTSPOT_NAME in line:
-            parts = line.split()
-            if parts:
-                return parts[-1]  # DEVICE col
-    return ""
-
-def _ipv4_for_device(dev):
-    """Return the first IPv4 address for a given device, or ''."""
-    if not dev:
-        return ""
-    try:
-        proc = subprocess.run(
-            ["ip", "-4", "addr", "show", "dev", dev],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0
-        )
-        if proc.returncode == 0:
-            m = re.search(r"\binet\s+(\d+\.\d+\.\d+\.\d+)", proc.stdout)
-            return m.group(1) if m else ""
-    except Exception:
-        pass
-    return ""
-
-def _all_ipv4_local():
-    """Return a list of local IPv4 addresses (best-effort)."""
-    try:
-        proc = subprocess.run(
-            ["hostname", "-I"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, timeout=1.5
-        )
-        if proc.returncode == 0:
-            return [ip for ip in proc.stdout.split() if "." in ip]
-    except Exception:
-        pass
-    return []
-
-def _ap_is_active():
-    # Fast check: is our AP connection currently active?
-    ok, out = _nmcli("con", "show", "--active")
-    if not ok:
-        return False
-    # Look for HOTSPOT_NAME in active connections table
-    return HOTSPOT_NAME in out
-# ---- AP helpers wired to nmcli ----
-def ap_is_on():
-    try:
-        return _ap_is_active()
-    except Exception:
-        return False
-
-def ap_enable():
-    # ensure Wi-Fi radio is on first
+def ap_enable() -> bool:
     _nmcli("radio", "wifi", "on")
     ok, out = _nmcli("con", "up", HOTSPOT_NAME)
     return ok
 
-def ap_disable():
+def ap_disable() -> bool:
     ok, out = _nmcli("con", "down", HOTSPOT_NAME)
-    # treat “not active” as success so it’s idempotent
     if ok:
         return True
     txt = (out or "").lower()
+    # Treat "not active" as success to make it idempotent
     return ("not active" in txt) or ("unknown connection" in txt)
 
-
-# ---------- Paths & config ----------
-BASE         = "/home/pi/timelapse"
-SESSIONS_DIR = os.path.join(BASE, "sessions")
-IMAGES_DIR   = os.path.join(BASE, "images")      # legacy; not used for new sessions
-os.makedirs(SESSIONS_DIR, exist_ok=True)
-os.makedirs(IMAGES_DIR,   exist_ok=True)
-
-CAMERA_STILL = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
-FFMPEG       = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
-
-# capture defaults
-CAPTURE_INTERVAL_SEC = 10
-CAPTURE_WIDTH   = "1296"
-CAPTURE_HEIGHT  = "972"
-CAPTURE_QUALITY = "90"
-
-# encoding defaults / choices
-FPS_CHOICES = [10, 24, 30]
-DEFAULT_FPS = 24
-
-# thumbnails (off by default; we serve full frames on index)
-GENERATE_THUMBS = False
-THUMB_WIDTH = 320  # only used if GENERATE_THUMBS = True
-
-import atexit
-def _cleanup_all():
-    try: _stop_live_proc()
-    except: pass
-    try: stop_timelapse()
-    except: pass
-    _force_release_camera()
-atexit.register(_cleanup_all)
-
-# ---------- Globals ----------
-
-# camera orientation (degrees). Set to 0, 90, 180, or 270
-CAM_ROTATE_DEG = int(os.environ.get("CAM_ROTATE_DEG", "180"))
-
-def _rot_flags_for(bin_path: str):
-    """
-    Return CLI flags to rotate frames for rpicam-* or libcamera-*.
-    Uses --rotation <deg>, which is supported by both families.
-    """
-    try:
-        deg = int(CAM_ROTATE_DEG)
-    except Exception:
-        deg = 0
-    if deg not in (0, 90, 180, 270):
-        deg = 0
-    return ["--rotation", str(deg)] if deg else []
-
-app = Flask(__name__)
-app.jinja_env.globals.update(datetime=datetime)
-
-# --- schedule_addon absolute-path import & init ---
-# try:
-#     import importlib.util
-#     _sched_path = "/home/pi/timelapse/schedule_addon.py"
-#     _spec = importlib.util.spec_from_file_location("schedule_addon", _sched_path)
-#     schedule_addon = importlib.util.module_from_spec(_spec)
-#     _spec.loader.exec_module(schedule_addon)
-#     # register blueprint(s)
-#     try:
-#         schedule_addon.init(app)
-#     except AttributeError:
-#         pass
-# except Exception as e:
-#     print("[schedule] init failed:", e)
-
-_last_frame_ts = 0
-_stop_event = threading.Event()
-_capture_thread = None
-_current_session = None   # session name (string) while capturing
-_jobs = {}                # encode job progress by session
-
-_last_live_spawn = 0
-def _can_spawn_live(period=1.0):
-    global _last_live_spawn
-    now = time.time()
-    if now - _last_live_spawn < period:
-        return False
-    _last_live_spawn = now
-    return True
-
-# --- Encode queue/worker (back-pressure + low priority) ---
-import queue
-_encode_q = queue.Queue()
-
-def _start_encode_worker_once():
-    if getattr(_start_encode_worker_once, "_started", False):
-        return
-    _start_encode_worker_once._started = True
-
-    def _encode_worker():
-        while True:
-            task = _encode_q.get()
-            if not task:
-                _encode_q.task_done()
-                continue
-            sess, fps = task
-            try:
-                sess_dir = _session_path(sess)
-                out = _video_path(sess_dir)
-                frames = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
-                total_frames = len(frames)
-                if total_frames == 0:
-                    _jobs[sess] = {"status": "error", "progress": 0}
-                    _encode_q.task_done()
-                    continue
-
-                _jobs[sess] = {"status": "encoding", "progress": 0}
-
-                # be tolerant if ionice/nice not installed
-                prio = []
-                if shutil.which("ionice"): prio += ["ionice", "-c3"]
-                if shutil.which("nice"):   prio += ["nice", "-n", "19"]
-
-                # ...after computing sess_dir, out, fps...
-                cmd = prio + [
-                    FFMPEG, "-y",
-                    "-framerate", str(fps),                          # input rate
-                    "-pattern_type", "glob",                         # read by glob, not %d
-                    "-i", os.path.join(sess_dir, "*.jpg"),
-                    "-vf", f"scale={CAPTURE_WIDTH}:{CAPTURE_HEIGHT},fps={fps}",  # lock exact fps
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                    "-pix_fmt", "yuv420p",
-                    "-r", str(fps),                                  # output rate (belt & braces)
-                    out
-                ]
-
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True)
-                while True:
-                    line = proc.stdout.readline()
-                    if not line and proc.poll() is not None:
-                        break
-                    if "frame=" in line:
-                        try:
-                            parts = line.split("frame=")[-1].strip().split()
-                            frame_num = int(parts[0])
-                            prog = int((frame_num / max(1, total_frames)) * 99)
-                            _jobs[sess]["progress"] = max(0, min(99, prog))
-                        except Exception:
-                            pass
-
-                rc = proc.wait()
-                if rc == 0 and os.path.exists(out):
-                    _jobs[sess] = {"status": "done", "progress": 100}
-                else:
-                    _jobs[sess] = {"status": "error", "progress": 0}
-            except Exception:
-                _jobs[sess] = {"status": "error", "progress": 0}
-            finally:
-                _encode_q.task_done()
-    threading.Thread(target=_encode_worker, daemon=True).start()
-
-_start_encode_worker_once()
-
-# ---- priming the live camera ----
-_camera_warmed = False
-WARMUP_MS = 1500  # short, just to init pipeline
-
-def _warmup_camera():
-    global _camera_warmed
-    if _camera_warmed:
-        return
-    vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
-    if not vid_bin:
-        return
-    try:
-        # quick run that discards output; just enough to init pipeline
-        cmd = [vid_bin, "--codec", "mjpeg", "-t", str(WARMUP_MS), "-o", "-"]
-        if os.path.basename(vid_bin) == "libcamera-vid":
-            cmd.insert(1, "-n")
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
-        _camera_warmed = True
-    except Exception:
-        # harmless if it fails; we’ll fall back to retry below
-        pass
-
-# Globals for timed captures
-_capture_stop_timer = None
-_capture_end_ts     = None
-
-# ---------- Session status API ----------
-# This endpoint returns whether the session is active, the number of frames
-# captured so far and the remaining time (if a duration was set).  The
-# front-end can poll this to update the UI for the active session.
-@app.get("/session_status/<sess>")
-def session_status(sess):
-    """Return JSON with number of frames and remaining seconds for a session."""
-    active = (_current_session == sess)
-    frames_count = 0
-    try:
-        sess_dir = _session_path(sess)
-        if os.path.isdir(sess_dir):
-            frames_count = len(glob.glob(os.path.join(sess_dir, "*.jpg")))
-    except Exception:
-        frames_count = 0
-    remaining_sec = None
-    try:
-        if active and _capture_end_ts:
-            rem = int(_capture_end_ts - time.time())
-            if rem > 0:
-                remaining_sec = rem
-    except Exception:
-        remaining_sec = None
-    return jsonify({
-        "active": active,
-        "frames": frames_count,
-        "remaining_sec": remaining_sec
-    })
-
-# ---------- Helpers ----------
-def _session_path(name): return os.path.join(SESSIONS_DIR, name)
-def _session_latest_jpg(sess_dir):
-    files = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
-    return files[-1] if files else None
-def _video_path(sess_dir): return os.path.join(sess_dir, "video.mp4")
-def _safe_name(s): return "".join(c for c in s if c.isalnum() or c in ("-","_"))
-def _timestamped_session():
-    return "session-" + datetime.now().strftime("%Y%m%d-%H%M%S")
-
-def _any_encoding_active():
-    return any(v.get("status") in ("queued", "encoding") for v in _jobs.values())
-
-_schedules = {}        # {sid: {...state...}}
-_sched_timers = {}     # {sid: {'start': Timer|None, 'stop': Timer|None}}
-
-def _cancel_schedule_locked(sid: str):
-    """Assumes _sched_lock is held."""
-    timers = _sched_timers.pop(sid, {})
-    for t in timers.values():
-        try:
-            t and t.cancel()
-        except Exception:
-            pass
-    _schedules.pop(sid, None)
-    try:
-        _save_schedules()     # or your existing persistence function
-    except Exception:
-        pass
-
-# ---- Live viewfinder ----
-LIVE_PROC = None
-LIVE_LOCK = threading.Lock()
-from collections import deque
-_live_last_stderr = deque(maxlen=120)
-
-def _trace(msg: str):
-    try:
-        _live_last_stderr.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
-    except Exception:
-        pass
-
-def _force_release_camera():
-    """
-    Best-effort: kill any leftover processes that hold the camera.
-    Safe to call right before spawning live preview.
-    """
-    names = ["rpicam-vid", "libcamera-vid", "rpicam-still", "libcamera-still"]
-    for nm in names:
-        try:
-            subprocess.run(["pkill", "-TERM", "-x", nm], check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-    # Give the kernel a moment to release /dev/media*/video* nodes
-    time.sleep(0.3)
-
-def _idle_now():
-    return (_capture_thread is None or not _capture_thread.is_alive()) and not _any_encoding_active()
-
-def _list_sessions():
-    out = []
-    for d in sorted(os.listdir(SESSIONS_DIR)):
-        sd = os.path.join(SESSIONS_DIR, d)
-        if not os.path.isdir(sd): continue
-        jpg = _session_latest_jpg(sd)
-        vid = _video_path(sd)
-        out.append({
-            "name": d,
-            "dir": sd,
-            "has_frame": bool(jpg),
-            "latest": os.path.basename(jpg) if jpg else "",
-            "has_video": os.path.exists(vid),
-            "video": os.path.basename(vid) if os.path.exists(vid) else "",
-            "count": len(glob.glob(os.path.join(sd, "*.jpg")))
-        })
-    out.sort(key=lambda x: x["name"], reverse=True)
-    return out
-
-# ===== Multiple Schedules =====
-import uuid
-
-# schedules keyed by id: {"id": {"start_ts":int,"end_ts":int,"interval":int,"fps":int,"sess":str,"auto_encode":bool}}
-_schedules = {}                    # id -> dict (state)
-_sched_timers = {}                 # id -> {"start": Timer|None, "stop": Timer|None}
-SCHED_FILE = os.path.join(BASE, "schedule.json")
-_sched_lock = threading.Lock()
-
-def _save_sched_state():
-    try:
-        tmp = SCHED_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(_schedules, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, SCHED_FILE)  # atomic swap
-    except Exception:
-        pass
-
-def _load_sched_state():
-    try:
-        if os.path.exists(SCHED_FILE):
-            with open(SCHED_FILE, "r") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                _schedules.clear()
-                _schedules.update(data)
-                return True
-    except Exception:
-        pass
-    return False
-
-def _cancel_timers_for(sid):
-    t = _sched_timers.get(sid)
-    if not t: return
-    for k in ("start","stop"):
-        try:
-            tm = t.get(k)
-            if tm: tm.cancel()
-        except Exception: pass
-    _sched_timers[sid] = {"start": None, "stop": None}
-
-def _arm_timers_for(sid, st):
-    """Arm start/stop timers for one schedule dict `st`."""
-    _cancel_timers_for(sid)
-
-    now = int(time.time())
-    start_ts   = int(st.get("start_ts", 0))
-    end_ts     = int(st.get("end_ts",   0))
-    interval   = int(st.get("interval", 10))
-    fps        = int(st.get("fps",      24))
-    sess_name  = st.get("sess", "") or ""
-    auto_encode = bool(st.get("auto_encode", False))
-    created_ts  = int(st.get("created_ts", start_ts))
-
-    # If already expired, drop it
-    if end_ts <= now:
-        with _sched_lock:
-            _schedules.pop(sid, None)
-            _save_sched_state()
-        return
-
-    # Helper wrappers
-    def _fire_start():
-        if not _idle_now():
-            # retry while within window
-            if int(time.time()) < end_ts:
-                tm = threading.Timer(30, _fire_start)
-                tm.daemon = True
-                _sched_timers[sid]["start"] = tm
-                tm.start()
-            return
-        _sched_fire_start(interval, fps, sess_name)
-
-    def _fire_stop():
-        _sched_fire_stop(sess_name, fps, auto_encode)
-        _cancel_timers_for(sid)
-
-    if start_ts <= now < end_ts:
-        # Only autostart immediately if this schedule was created recently
-        # (e.g., user just armed it). This prevents “old start-now” tasks
-        # from firing after a reboot.
-        GRACE = 90  # seconds
-        if (now - created_ts) <= GRACE:
-            _fire_start()
-        # Always ensure we stop at end_ts
-        delay_stop = max(0, end_ts - now)
-        tm_stop = threading.Timer(delay_stop, _fire_stop)
-        tm_stop.daemon = True
-        _sched_timers[sid] = {"start": None, "stop": tm_stop}
-        tm_stop.start()
-    else:
-        delay_start = max(0, start_ts - now)
-        delay_stop  = max(0, end_ts   - now)
-        tm_start = threading.Timer(delay_start, _fire_start)
-        tm_stop  = threading.Timer(delay_stop,  _fire_stop)
-        for tm in (tm_start, tm_stop):
-            tm.daemon = True
-        _sched_timers[sid] = {"start": tm_start, "stop": tm_stop}
-        tm_start.start()
-        tm_stop.start()
-
-def _arm_timers_all():
-    for sid, st in list(_schedules.items()):
-        _arm_timers_for(sid, st)
-
-def _arm_timers_from_state():
-    """(Re)arm timers according to _sched_state and current time."""
-    global _sched_start_t, _sched_stop_t
-
-    with _sched_lock:
-        # Cancel any existing timers
-        if _sched_start_t:
-            try: _sched_start_t.cancel()
-            except: pass
-            _sched_start_t = None
-        if _sched_stop_t:
-            try: _sched_stop_t.cancel()
-            except: pass
-            _sched_stop_t = None
-
-        if not _sched_state:
-            return
-
-        now        = int(time.time())
-        start_ts   = int(_sched_state.get("start_ts", 0))
-        end_ts     = int(_sched_state.get("end_ts",   0))
-        interval   = int(_sched_state.get("interval", 10))
-        fps        = int(_sched_state.get("fps",      24))
-        sess_name  = _sched_state.get("sess", "") or ""
-        auto_encode = bool(_sched_state.get("auto_encode", False))
-
-        # If schedule already ended, clear it
-        if end_ts <= now:
-            _sched_state.clear()
-            _save_sched_state()
-            return
-
-        # If we are in the window, start immediately and schedule stop
-        if start_ts <= now < end_ts:
-            _sched_fire_start(interval, fps, sess_name)
-            delay_stop = max(0, end_ts - now)
-            _sched_stop_t = threading.Timer(delay_stop, _sched_fire_stop,
-                                            args=(sess_name, fps, auto_encode))
-            _sched_stop_t.daemon = True
-            _sched_stop_t.start()
-            return
-
-        # Otherwise schedule future start and stop
-        delay_start = max(0, start_ts - now)
-        delay_stop  = max(0, end_ts   - now)
-        _sched_start_t = threading.Timer(delay_start, _sched_fire_start,
-                                         args=(interval, fps, sess_name))
-        _sched_stop_t  = threading.Timer(delay_stop,  _sched_fire_stop,
-                                         args=(sess_name, fps, auto_encode))
-        _sched_start_t.daemon = True
-        _sched_stop_t.daemon  = True
-        _sched_start_t.start()
-        _sched_stop_t.start()
-
-# ---------- Capture thread ----------
-def _capture_loop(sess_dir, interval):
-    global _stop_event, _last_frame_ts
-    # start from the last existing frame index
-    existing = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
-    i = int(os.path.splitext(os.path.basename(existing[-1]))[0]) if existing else 0
-
-    timeout_s = max(2, min(5, int(interval)))  # a little more tolerant
-
-    while not _stop_event.is_set():
-        target_idx = i + 1
-        jpg = os.path.join(sess_dir, f"{target_idx:06d}.jpg")
-        cmd = [
-            CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", jpg,
-            "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
-            "--quality", CAPTURE_QUALITY,
-            "--immediate", "--nopreview"
-        ]
-        try:
-            subprocess.run(
-                cmd, check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=timeout_s
-            )
-            # only now advance the counter (no gaps)
-            i = target_idx
-            _last_frame_ts = time.time()
-
-            if GENERATE_THUMBS:
-                thumbs_dir = os.path.join(sess_dir, "thumbs")
-                os.makedirs(thumbs_dir, exist_ok=True)
-                try:
-                    _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
-                except Exception:
-                    pass
-
-        except subprocess.TimeoutExpired:
-            # camera stalled — skip quickly; do NOT increment i
-            time.sleep(0.5)
-        except Exception:
-            # transient failure — short backoff; do NOT increment i
-            time.sleep(min(2, interval))
-
-        # sleep between frames but allow early stop
-        sleep_left = float(interval)
-        step = 0.1
-        while sleep_left > 0 and not _stop_event.is_set():
-            # soft watchdog: if no good frame for > 3*interval, break early
-            if _last_frame_ts and (time.time() - _last_frame_ts) > (3 * interval):
-                break
-            t = min(step, sleep_left)
-            time.sleep(t)
-            sleep_left -= t
-
-# ---------- Stop helper (idempotent) ----------
-# def stop_timelapse():
-#     global _stop_event, _capture_thread, _current_session
-#     global _capture_stop_timer, _capture_end_ts
-#     try:
-#         _stop_event.set()
-#     except Exception: pass
-#     if _capture_thread and getattr(_capture_thread, "is_alive", lambda: False)():
-#         try: _capture_thread.join(timeout=5)
-#         except Exception: pass
-#     _capture_thread = None
-#     _stop_event = threading.Event()
-#     _current_session = None
-#     if _capture_stop_timer:
-#         try:
-#             _capture_stop_timer.cancel()
-#         except Exception:
-#             pass
-#     _capture_stop_timer = None
-#     _capture_end_ts = None
-
 # ---------- Routes ----------
+@app.get("/ap/status")
+def ap_status():
+    return jsonify(_ap_status_payload())
+
+# Back-compat for older clients that might be calling /ap_status
+@app.get("/ap_status")
+def ap_status_compat():
+    return jsonify(_ap_status_payload())
 
 @app.post("/ap/on")
 def ap_on():
     ok = ap_enable()
-    return (jsonify({"on": True}) if ok else (jsonify({"on": False, "error":"enable_failed"}), 500))
+    return (jsonify({"on": True}) if ok
+            else (jsonify({"on": False, "error": "enable_failed"}), 500))
 
 @app.post("/ap/off")
 def ap_off():
     ok = ap_disable()
-    return (jsonify({"on": False}) if ok else (jsonify({"on": True, "error":"disable_failed"}), 500))
+    return (jsonify({"on": False}) if ok
+            else (jsonify({"on": ap_is_on(), "error": "disable_failed"}), 500))
 
 @app.post("/ap/toggle")
 def ap_toggle():
-    ok = (ap_disable() if ap_is_on() else ap_enable())
-    return (jsonify({"on": ap_is_on()}) if ok else (jsonify({"on": ap_is_on(), "error":"toggle_failed"}), 500))
+    target_ok = ap_disable() if ap_is_on() else ap_enable()
+    # Report final state (even if the requested action failed)
+    return (jsonify({"on": ap_is_on()}) if target_ok
+            else (jsonify({"on": ap_is_on(), "error": "toggle_failed"}), 500))
 
 @app.route("/", methods=["GET"])
 def index():
