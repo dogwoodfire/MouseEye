@@ -27,9 +27,9 @@ PIN_RST  = int(os.environ.get("LCD_PIN_RST",  "27"))
 PIN_BL   = int(os.environ.get("LCD_PIN_BL",   "24"))  # Backlight (PWM LED)
 
 # Waveshare 1.44" LCD HAT keys + joystick
-KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up
-KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # OK
-KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down
+KEY1     = int(os.environ.get("LCD_KEY1",     "21"))  # Up (not used for menu now)
+KEY2     = int(os.environ.get("LCD_KEY2",     "20"))  # OK (not used for menu now)
+KEY3     = int(os.environ.get("LCD_KEY3",     "16"))  # Down (not used for menu now)
 JS_UP    = int(os.environ.get("LCD_JS_UP",    "6"))
 JS_DOWN  = int(os.environ.get("LCD_JS_DOWN",  "19"))
 JS_LEFT  = int(os.environ.get("LCD_JS_LEFT",  "5"))
@@ -52,12 +52,8 @@ SCHED_DEL_URLS  = [
     f"{LOCAL}/schedule/remove",
     f"{LOCAL}/schedule/cancel",
 ]
-BACKEND_LIST_URLS = [
-    f"{LOCAL}/schedule/list",
-    f"{LOCAL}/schedules",
-    f"{LOCAL}/schedule",
-]
-SCHED_FILE      = "/home/pi/timelapse/schedule.json"
+SCHED_LIST_URL  = f"{LOCAL}/schedule/list"   # preferred
+SCHED_FILE      = "/home/pi/timelapse/schedule.json"  # legacy fallback
 
 # ----------------- Preferences (rotation) -----------------
 PREFS_FILE = "/home/pi/timelapse/lcd_prefs.json"
@@ -136,25 +132,19 @@ def _http_post_form(url, data: dict, timeout=2.5):
     except Exception:
         return False
 
-# ----------------- Schedules (local read/write) -----------------
+# ----------------- Schedules (read: prefer backend JSON) -----------------
 def _read_schedules():
-    # 1) Try backend JSON
-    for url in (f"{LOCAL}/schedule/list",):
-        try:
-            arr = _http_json(url, timeout=1.2)
-            if isinstance(arr, list):
-                # return as [(id, dict), ...]
-                out = []
-                for d in arr:
-                    if isinstance(d, dict) and d.get("id"):
-                        sid = str(d["id"])
-                        d2 = dict(d); d2.pop("id", None)
-                        out.append((sid, d2))
-                out.sort(key=lambda kv: int(kv[1].get("start_ts", 0)))
-                return out
-        except Exception:
-            pass
-
+    # 1) Try backend list
+    arr = _http_json(SCHED_LIST_URL)
+    if isinstance(arr, list):
+        out = []
+        for d in arr:
+            if isinstance(d, dict) and d.get("id"):
+                sid = str(d["id"])
+                d2 = dict(d); d2.pop("id", None)
+                out.append((sid, d2))
+        out.sort(key=lambda kv: int(kv[1].get("start_ts", 0)))
+        return out
     # 2) Fallback to file (legacy)
     try:
         with open(SCHED_FILE, "r") as f:
@@ -174,40 +164,6 @@ def _read_schedules():
     except Exception:
         return []
 
-def _write_schedules_generic(remove_id: str):
-    """
-    Delete schedule with id from file, handling dict or list layout.
-    """
-    try:
-        with open(SCHED_FILE, "r") as f:
-            data = json.load(f)
-    except Exception:
-        return False
-
-    changed = False
-    if isinstance(data, dict):
-        if remove_id in data:
-            data.pop(remove_id, None)
-            changed = True
-    elif isinstance(data, list):
-        new_list = []
-        for d in data:
-            if isinstance(d, dict) and str(d.get("id","")) == remove_id:
-                changed = True
-                continue
-            new_list.append(d)
-        if changed:
-            data = new_list
-
-    if changed:
-        try:
-            with open(SCHED_FILE, "w") as f:
-                json.dump(data, f)
-            return True
-        except Exception:
-            return False
-    return False
-
 def _post_schedule_arm(start_dt, duration_hr, duration_min, interval_s, auto_encode=True, fps=24, sess_name=""):
     start_local = start_dt.strftime("%Y-%m-%dT%H:%M")
     payload = {
@@ -222,18 +178,11 @@ def _post_schedule_arm(start_dt, duration_hr, duration_min, interval_s, auto_enc
     return _http_post_form(SCHED_ARM_URL, payload)
 
 def _delete_schedule_backend(sched_id: str):
-    # Try a few common endpoints; if all fail, edit the file.
+    # Try a few common endpoints; if all fail, it's okay (backend is source of truth).
     for url in SCHED_DEL_URLS:
         if _http_post_form(url, {"id": sched_id}):
             return True
-    # fallback: modify schedule.json directly
-    return _write_schedules_generic(sched_id)
-
-def _sched_file_mtime():
-    try:
-        return os.path.getmtime(SCHED_FILE)
-    except Exception:
-        return 0.0
+    return False
 
 # =====================================================================
 #                              UI CONTROLLER
@@ -266,6 +215,7 @@ class UI:
             self.bl = None
 
         # input (constructed before binding)
+        # NOTE: we still create them, but we DO NOT bind KEY1/KEY2/KEY3 to menu actions anymore.
         self.btn_up   = self._mk_button(KEY1)
         self.btn_ok   = self._mk_button(KEY2)
         self.btn_down = self._mk_button(KEY3)
@@ -291,8 +241,6 @@ class UI:
 
         # schedule list bookkeeping
         self._sch_rows = []   # [(id, dict), ...] in listing order
-        self._sched_hidden = set()  # ids hidden immediately after delete request
-        self._sched_mtime = _sched_file_mtime()
 
         # state
         self.state = self.HOME
@@ -325,34 +273,24 @@ class UI:
             pass
 
     # ---------- one-shot clears ----------
-
     def _reload_schedules_view(self, gone_id=None):
         """
-        Ensure the schedules list reflects the latest file contents.
-        Optionally wait until `gone_id` is no longer present, then unhide.
+        Ensure the schedules list reflects the latest backend state.
+        Optionally wait until `gone_id` disappears.
         """
-        if gone_id is not None:
-            sid = str(gone_id)
-            deadline = time.time() + 1.5
-            while time.time() < deadline:
-                rows = _read_schedules()
-                if not any(str(rid) == sid for rid, _ in rows):
-                    break
-                time.sleep(0.1)
-            # File caught up — no need to keep it hidden
-            self._sched_hidden.discard(sid)
+        deadline = time.time() + (1.2 if gone_id is not None else 0.0)
+        while time.time() <= deadline:
+            rows = _read_schedules()
+            if gone_id is None or not any(str(rid) == str(gone_id) for rid, _ in rows):
+                break
+            time.sleep(0.1)
 
-        # Clear then draw a fresh list
         self._request_hard_clear()
         self._hard_clear()
 
-        # Keep cursor valid (+2 because "‹ Back", "+ New Schedule")
-        rows = [kv for kv in _read_schedules() if str(kv[0]) not in self._sched_hidden]
-        self.menu_idx = min(self.menu_idx, max(0, len(rows) + 1))  # +1 header offset
-
-        # Render immediately
+        rows = _read_schedules()
+        self.menu_idx = min(self.menu_idx, max(0, 2 + len(rows) - 1))
         self.state = self.SCHED_LIST
-        self._sched_mtime = _sched_file_mtime()
         self.render(force=True)
 
     def _request_hard_clear(self):
@@ -397,20 +335,24 @@ class UI:
             except Exception: return len(txt) * 6
 
     # ---------- drawing ----------
-    def _draw_lines(self, lines, title=None, footer=None, highlight=-1, hints=True, dividers=False):
+    def _draw_lines(self, lines, title=None, footer=None, highlight_idxes=None, dividers=False):
+        """
+        highlight_idxes: a set/list of line indexes to draw in CYAN (supports multi-line highlight)
+        """
+        if highlight_idxes is None: highlight_idxes = set()
+        else: highlight_idxes = set(highlight_idxes)
+
         img = self._blank(); drw = ImageDraw.Draw(img); y = 2
         if title:
             drw.text((2,y), title, font=F_TITLE, fill=WHITE); y += 18
         for i, txt in enumerate(lines):
-            drw.text((2,y), txt, font=F_TEXT, fill=(CYAN if i==highlight else WHITE)); y += 14
+            fill = CYAN if i in highlight_idxes else WHITE
+            drw.text((2,y), txt, font=F_TEXT, fill=fill); y += 14
             if dividers and i < len(lines)-1:
                 drw.line((2, y-2, WIDTH-2, y-2), fill=DIM)
         if footer:
             drw.text((2, HEIGHT-12), footer, font=F_SMALL, fill=GRAY)
-        if hints:
-            drw.text((WIDTH-30,  8), "UP",   font=F_SMALL, fill=GRAY)
-            drw.text((WIDTH-30, 54), "OK",   font=F_SMALL, fill=GRAY)
-            drw.text((WIDTH-30, 98), "DOWN", font=F_SMALL, fill=GRAY)
+        # (No right-side "UP/OK/DOWN" hints anymore)
         self._present(img)
 
     def _draw_center(self, msg, sub=None):
@@ -470,6 +412,7 @@ class UI:
                 b.when_released = None
 
     def _rebind_joystick(self):
+        # Keep joystick as the navigator; the three top keys are no longer bound to menu.
         if self.rot_deg == 0:
             m = dict(up=self._logical_up, right=self._logical_right,
                      down=self._logical_down, left=self._logical_left)
@@ -483,9 +426,10 @@ class UI:
         if self.js_push:  self.js_push.when_pressed  = self._wrap_wake(self.ok)
 
     def _bind_inputs(self):
-        if self.btn_up:   self.btn_up.when_pressed   = self._wrap_wake(lambda: self.nav(-1))
-        if self.btn_down: self.btn_down.when_pressed = self._wrap_wake(lambda: self.nav(+1))
-        if self.btn_ok:   self.btn_ok.when_pressed   = self._wrap_wake(self.ok)
+        # DO NOT bind KEY1/KEY2/KEY3 to menu anymore; they’re free for future features.
+        # if self.btn_up:   self.btn_up.when_pressed   = self._wrap_wake(lambda: self.nav(-1))
+        # if self.btn_down: self.btn_down.when_pressed = self._wrap_wake(lambda: self.nav(+1))
+        # if self.btn_ok:   self.btn_ok.when_pressed   = self._wrap_wake(self.ok)
         self._rebind_joystick()
 
     # ---------- logical joystick actions ----------
@@ -496,6 +440,7 @@ class UI:
             self.sch_date = self.sch_date + timedelta(days=1); self.render()
         else:
             self.adjust(+1)
+
     def _logical_down(self):
         if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.nav(+1)
@@ -503,6 +448,7 @@ class UI:
             self.sch_date = self.sch_date - timedelta(days=1); self.render()
         else:
             self.adjust(-1)
+
     def _logical_left(self):
         if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
             self.adjust(-10)
@@ -536,7 +482,7 @@ class UI:
             if self.bl is not None: self.bl.value = 1.0
         except Exception: pass
         self._screen_off = False
-        self.state = self.HOME
+               self.state = self.HOME
         self.menu_idx = 0
         self._need_home_clear = True
         self.render(force=True)
@@ -549,7 +495,10 @@ class UI:
             self.menu_idx = (self.menu_idx + delta) % max(1, len(items))
             self.render()
         elif self.state == self.SCHED_LIST:
-            self.menu_idx = max(0, self.menu_idx + delta); self.render()
+            # menu_idx: 0=Back, 1=New Schedule, 2..(2+N-1)=N schedules
+            n_items = 2 + len(self._sch_rows)
+            self.menu_idx = (self.menu_idx + delta) % max(1, n_items)
+            self.render()
         elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
         else:
@@ -632,32 +581,26 @@ class UI:
             elif self.menu_idx == 1:
                 self.start_schedule_wizard()
             else:
-                # map visible index to actual row, skipping hidden ids
-                visible = [kv for kv in self._sch_rows if str(kv[0]) not in self._sched_hidden]
                 idx = self.menu_idx - 2
-                if 0 <= idx < len(visible):
-                    self._selected_sched = str(visible[idx][0])  # schedule id
+                if 0 <= idx < len(self._sch_rows):
+                    self._selected_sched = self._sch_rows[idx][0]  # schedule id
                     self.state = self.SCHED_DEL_CONFIRM
                     self.confirm_idx = 1  # default to "No"
                     self.render()
             return
 
         if self.state == self.SCHED_DEL_CONFIRM:
-            # confirm_idx: 0 = Yes, 1 = No
             if self.confirm_idx == 0 and getattr(self, "_selected_sched", None):
                 sid = str(self._selected_sched)
-
-                # Hide immediately in UI to prevent "ghost" re-delete
-                self._sched_hidden.add(sid)
                 self._busy = True
                 self._draw_center("Deleting…")
 
                 ok_flag = _delete_schedule_backend(sid)
-                time.sleep(0.12)  # brief tick for writer
+                time.sleep(0.1)
 
-                # Treat success if the id disappears
+                # consider success if the id disappears from listing
                 success = False
-                deadline = time.time() + 1.5
+                deadline = time.time() + 1.2
                 while time.time() < deadline:
                     rows = _read_schedules()
                     if not any(str(rid) == sid for rid, _ in rows):
@@ -669,12 +612,11 @@ class UI:
                 self._draw_center("Deleted" if (success or ok_flag) else "Failed")
                 time.sleep(0.4)
 
-                # Hard refresh the Schedules view and wait until `sid` is gone; unhide then.
                 self._selected_sched = None
                 self._reload_schedules_view(gone_id=sid)
                 return
 
-            # If they chose "No", just go back to the list and fully refresh it
+            # chose "No"
             self._selected_sched = None
             self._reload_schedules_view()
             return
@@ -803,7 +745,6 @@ class UI:
         self._request_hard_clear()
         self.state = self.SCHED_LIST
         self.menu_idx = 0
-        self._sched_mtime = _sched_file_mtime()
         self.render()
 
     def toggle_rotation(self):
@@ -846,7 +787,7 @@ class UI:
         lines.append(f"{yes}    {no}")
         self._draw_lines(lines, title="Confirm",
                          footer="UP/DOWN choose, OK select",
-                         highlight=-1, hints=False)
+                         highlight_idxes=set(), dividers=False)
 
     def _draw_confirm_sch(self, interval_s, sch_date, sh, sm, eh, em, auto_encode, hi):
         # Two-digit year so it fits
@@ -863,18 +804,25 @@ class UI:
         lines.append(f"{yes}    {no}")
         self._draw_lines(lines, title="Confirm",
                          footer="UP/DOWN choose, OK select",
-                         highlight=-1, hints=False)
+                         highlight_idxes=set(), dividers=False)
 
-    def _format_sched_row(self, st: dict):
-        # Row like: "10s  08:30–09:15, 25-03-12"
+    def _format_sched_lines(self, st: dict):
+        """
+        Return two text lines for a schedule, compact enough for 128px:
+        line1: "10s • 25-09-06"
+        line2: "08:30–09:15 • fps24 • enc:on"
+        """
         interval = int(st.get("interval", 10))
         st_ts = int(st.get("start_ts", 0)); en_ts = int(st.get("end_ts", 0))
         if st_ts and en_ts:
             sd = datetime.fromtimestamp(st_ts); ed = datetime.fromtimestamp(en_ts)
-            times = f"{sd.strftime('%H:%M')}–{ed.strftime('%H:%M')}, {sd.strftime('%y-%m-%d')}"
+            line1 = f"{interval}s • {sd.strftime('%y-%m-%d')}"
+            enc = "on" if bool(st.get("auto_encode", False)) else "off"
+            line2 = f"{sd.strftime('%H:%M')}–{ed.strftime('%H:%M')} • fps{int(st.get('fps',24))} • enc:{enc}"
         else:
-            times = "(unscheduled)"
-        return f"{interval}s  {times}"
+            line1 = f"{interval}s • (no date)"
+            line2 = "(unscheduled)"
+        return line1, line2
 
     def _render_home(self):
         self._maybe_hard_clear()
@@ -900,8 +848,10 @@ class UI:
 
         if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
 
-        self._draw_lines(items, title=status, highlight=self.menu_idx,
-                         footer="UP/DOWN move, OK select", hints=True)
+        self._draw_lines(items, title=status,
+                         footer="UP/DOWN move, OK select",
+                         highlight_idxes={self.menu_idx},
+                         dividers=False)
 
     def _render_wz(self):
         self._maybe_hard_clear()
@@ -968,29 +918,42 @@ class UI:
                                        self.wz_encode, self.confirm_idx); return
 
             if self.state == self.SCHED_LIST:
-                # Auto-refresh if the file changed on disk (e.g., after a delete)
-                cur_mtime = _sched_file_mtime()
-                if cur_mtime != self._sched_mtime:
-                    self._sched_mtime = cur_mtime
-                    self._request_hard_clear()
-                    # fall through to redraw using fresh rows
                 self._maybe_hard_clear()
-                rows = [kv for kv in _read_schedules() if str(kv[0]) not in self._sched_hidden]
+                rows = _read_schedules()
                 self._sch_rows = rows[:]  # keep same order
 
-                # index 0 ← Back, 1 ← New Schedule, 2.. ← schedules
+                # Build two-line-per-schedule view
                 lines = ["‹ Back", "+ New Schedule"]
+                # we will compute highlight indexes (both lines for the selected schedule)
+                highlight = set()
                 now_ts = int(time.time())
-                for _, st in rows[:4]:  # show up to 4 rows after headers
-                    line = self._format_sched_row(st)
+
+                # We can fit: title + (max ~7-8 lines). With two headers, we’ll show up to 3 schedules (2 lines each) comfortably.
+                max_sched_to_show = 3
+
+                for idx, (_, st) in enumerate(rows[:max_sched_to_show]):
+                    l1, l2 = self._format_sched_lines(st)
+                    # tag active/next at end of line2 (compact)
                     st_ts = int(st.get("start_ts",0)); en_ts = int(st.get("end_ts",0))
                     tag = "now" if (st_ts <= now_ts < en_ts) else "next"
-                    line = f"{line}  [{tag}]"
-                    lines.append(line)
-                hi = min(self.menu_idx, len(lines)-1) if lines else 0
+                    l2 = f"{l2}  [{tag}]"
+                    lines.append(l1)
+                    lines.append(l2)
+
+                # figure which **line indexes** to highlight
+                # menu_idx: 0 (Back), 1 (New), 2.. schedules (one per schedule)
+                if self.menu_idx >= 2:
+                    sched_i = self.menu_idx - 2  # which schedule is selected
+                    # its top line index in `lines` is 2 + sched_i*2
+                    top = 2 + sched_i*2
+                    if top < len(lines):
+                        highlight.update({top, top+1})
+
+                hi_ok = {0} if self.menu_idx == 0 else ({1} if self.menu_idx == 1 else highlight)
+
                 self._draw_lines(lines, title="Schedules",
-                                 footer="UP/DOWN/OK • Back=first item",
-                                 highlight=hi, hints=True, dividers=True)
+                                 footer="OK select • Back=first item",
+                                 highlight_idxes=hi_ok, dividers=True)
                 return
 
             if self.state == self.SCHED_DEL_CONFIRM:
@@ -999,7 +962,7 @@ class UI:
                 lines = ["Delete this schedule?", "", f"{yes}    {no}"]
                 self._draw_lines(lines, title="Confirm delete",
                                  footer="UP/DOWN choose, OK select",
-                                 highlight=-1, hints=False)
+                                 highlight_idxes=set(), dividers=False)
                 return
 
             # fallback
