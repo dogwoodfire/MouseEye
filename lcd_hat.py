@@ -54,6 +54,8 @@ SCHED_DEL_URLS  = [
 ]
 SCHED_LIST_URL  = f"{LOCAL}/schedule/list"   # preferred if available
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"  # legacy fallback
+
+# AP endpoints (Flask backend should return {"on","name","device","ip","ips":[]})
 AP_STATUS_URL = f"{LOCAL}/ap/status"
 AP_TOGGLE_URL = f"{LOCAL}/ap/toggle"
 AP_ON_URL     = f"{LOCAL}/ap/on"
@@ -122,18 +124,14 @@ def _ap_status():
     j = _http_json(AP_STATUS_URL)
     return bool(j and j.get("on"))
 
-def _ap_toggle():
-    # We don’t care about response body; UI will repoll status
-    return _http_post_form(AP_TOGGLE_URL, {})
-
-def _http_json(url, timeout=1.2):
+def _http_json(url, timeout=1.6):
     try:
         with urlopen(Request(url, headers={"Cache-Control":"no-store"}), timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "ignore"))
     except Exception:
         return None
 
-def _http_post_form(url, data: dict, timeout=2.5):
+def _http_post_form(url, data: dict, timeout=3.5):
     try:
         body = urlencode(data).encode("utf-8")
         req = Request(url, data=body, method="POST",
@@ -200,10 +198,10 @@ def _delete_schedule_backend(sched_id: str):
 #                              UI CONTROLLER
 # =====================================================================
 class UI:
-    # Timelapse wizard (start now): interval, duration hr, duration min, enc, confirm
+    # States
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
     SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
-    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING = range(17)
+    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL = range(18)
 
     def __init__(self):
         # prefs
@@ -226,13 +224,10 @@ class UI:
         except Exception:
             self.bl = None
 
-        # inputs (top 3 keys left unbound from menu)
-        # inputs (top 3 keys are free for custom actions)
-        self.btn_key1 = self._mk_button(KEY1)  # top
-        self.btn_key2 = self._mk_button(KEY2)  # middle (unused for now)
-        self.btn_key3 = self._mk_button(KEY3)  # bottom (unused for now)
-
-        # joystick (kept for menus)
+        # inputs
+        self.btn_key1 = self._mk_button(KEY1)
+        self.btn_key2 = self._mk_button(KEY2)
+        self.btn_key3 = self._mk_button(KEY3)
         self.js_up    = self._mk_button(JS_UP)
         self.js_down  = self._mk_button(JS_DOWN)
         self.js_left  = self._mk_button(JS_LEFT)
@@ -240,7 +235,7 @@ class UI:
         self.js_push  = self._mk_button(JS_PUSH)
         self._bind_inputs()
 
-        # defaults for both wizards
+        # defaults & state
         now = datetime.now()
         self.wz_interval = 10
         self.tl_hours = 0
@@ -253,17 +248,14 @@ class UI:
         self.wz_encode   = True
         self.confirm_idx = 0
         self._last_status = {}
+        self._sch_rows = []
 
-        # schedule list bookkeeping
-        self._sch_rows = []   # [(id, dict), ...] in listing order
-
-        # state
         self.state = self.HOME
         self.menu_idx = 0
         self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display"]
         self._home_items = self.menu_items[:]
 
-        # bind inputs and draw
+        # bind + draw
         self._draw_center("Booting…")
         time.sleep(0.2)
         self._need_home_clear = True
@@ -331,12 +323,6 @@ class UI:
     # ---------- drawing ----------
     def _draw_lines(self, lines, title=None, footer=None,
                     highlight_idxes=None, dividers=False, divider_after=None):
-        """
-        - highlight_idxes: set of line indexes to draw in CYAN (multi-line highlight)
-        - dividers: if True, draw horizontal rules
-        - divider_after: optional set of indexes after which to draw a divider.
-                         If provided, overrides the default "divider under every line".
-        """
         if highlight_idxes is None: highlight_idxes = set()
         else: highlight_idxes = set(highlight_idxes)
         if divider_after is None: divider_after = set()
@@ -349,8 +335,6 @@ class UI:
             fill = CYAN if i in highlight_idxes else WHITE
             drw.text((2,y), txt, font=F_TEXT, fill=fill); y += 14
             if dividers:
-                # If divider_after is given, only draw after those indexes.
-                # Otherwise (legacy behaviour), draw under every line except the last.
                 if divider_after:
                     if i in divider_after:
                         drw.line((2, y-2, WIDTH-2, y-2), fill=DIM)
@@ -413,22 +397,18 @@ class UI:
 
     def _unbind_inputs(self):
         for b in (self.btn_key1, self.btn_key2, self.btn_key3,
-                self.js_up, self.js_down, self.js_left, self.js_right, self.js_push):
+                  self.js_up, self.js_down, self.js_left, self.js_right, self.js_push):
             if b:
                 b.when_pressed = None
                 b.when_released = None
 
     def _rebind_joystick(self):
-        # Keep joystick as the navigator; the three top keys are free.
         if self.rot_deg == 0:
-            # normal orientation
             m = dict(up=self._logical_up, right=self._logical_right,
-                    down=self._logical_down, left=self._logical_left)
-        else:  # 90° CLOCKWISE
-            # physical ↑ should move UI "up" on the rotated screen:
-            # map: up->left, right->up, down->right, left->down
+                     down=self._logical_down, left=self._logical_left)
+        else:
             m = dict(up=self._logical_left, right=self._logical_up,
-                    down=self._logical_right, left=self._logical_down)
+                     down=self._logical_right, left=self._logical_down)
 
         if self.js_up:    self.js_up.when_pressed    = self._wrap_wake(m['up'])
         if self.js_right: self.js_right.when_pressed = self._wrap_wake(m['right'])
@@ -437,12 +417,46 @@ class UI:
         if self.js_push:  self.js_push.when_pressed  = self._wrap_wake(self.ok)
 
     def _bind_inputs(self):
-        # KEY1 toggles hotspot (wake screen if off)
+        # KEY1 toggles hotspot
         if self.btn_key1:
             self.btn_key1.when_pressed = self._wrap_wake(self.toggle_hotspot)
-
         # keep joystick driving menus (rotation-aware)
         self._rebind_joystick()
+
+    # ---------- MODAL helpers (show URL until any key pressed) ----------
+    def _bind_modal_inputs(self, handler):
+        """Bind all keys/joystick to a single handler during modal screen."""
+        for b in (self.btn_key1, self.btn_key2, self.btn_key3,
+                  self.js_up, self.js_down, self.js_left, self.js_right, self.js_push):
+            if b:
+                b.when_pressed = handler
+
+    def _modal_ack(self):
+        # Dismiss modal and restore normal inputs
+        self.state = self.HOME
+        self._request_hard_clear()
+        self._bind_inputs()
+        self.render(force=True)
+
+    def _show_connect_url_modal(self, ssid, ip, ips):
+        """Show SSID + IP + full Flask URL until a key is pressed."""
+        # Build message
+        lines = [f"SSID: {ssid or 'Hotspot'}"]
+        if ip:
+            lines += [f"IP: {ip}", f"http://{ip}:5050"]
+        else:
+            # try a fallback hint if ips list exists
+            hint = (ips[0] if isinstance(ips, list) and ips else "")
+            if hint:
+                lines += [f"IP: {hint}", f"http://{hint}:5050"]
+            else:
+                lines += ["IP: (acquiring…)", "http://<ip>:5050"]
+        lines += ["", "Press any key…"]
+
+        self.state = self.MODAL
+        self._draw_center("Connect in browser", "\n".join(lines))
+        # Bind all inputs to dismiss
+        self._bind_modal_inputs(self._modal_ack)
 
     # ---------- logical joystick actions ----------
     def _logical_up(self):
@@ -547,7 +561,8 @@ class UI:
         self.render()
 
     def ok(self):
-        if self._busy or self._screen_off or self.state == self.ENCODING: return
+        if self._busy or self._screen_off or self.state == self.ENCODING or self.state == self.MODAL:
+            return
 
         if self.state == self.HOME:
             items = getattr(self, "_home_items", self.menu_items)
@@ -620,10 +635,8 @@ class UI:
                 time.sleep(0.4)
 
                 self._selected_sched = None
-                # Hard refresh straight into the list view
                 self._request_hard_clear()
                 self.state = self.SCHED_LIST
-                # keep cursor sane (0=Back, 1=New, schedules start at 2)
                 self.menu_idx = min(max(self.menu_idx, 0), 1 + len(self._sch_rows))
                 self.render(force=True)
                 return
@@ -764,7 +777,6 @@ class UI:
         self._busy = True
         self._unbind_inputs()
         try:
-            # hide transition
             if self.bl is not None: self.bl.value = 0.0
             self._panel_off()
 
@@ -794,11 +806,10 @@ class UI:
 
         def worker():
             try:
-                # Give nmcli a little room to complete
+                # Give nmcli time and be tolerant of timeouts
                 ok = _http_post_form(AP_TOGGLE_URL, {}, timeout=4.0)
                 if not ok:
-                    # Even if the POST timed out, it may still succeed shortly.
-                    # Poll status briefly before declaring failure.
+                    # Even if POST timed out, it may still succeed shortly.
                     deadline = time.time() + 3.0
                     success = False
                     while time.time() < deadline:
@@ -814,7 +825,7 @@ class UI:
 
                 # Confirm final state (with a few retries while NM settles)
                 st = {}
-                deadline = time.time() + 4.0
+                deadline = time.time() + 5.0
                 while time.time() < deadline:
                     st = _http_json(AP_STATUS_URL) or {}
                     if "on" in st:
@@ -823,17 +834,27 @@ class UI:
 
                 if st.get("on"):
                     ssid = st.get("name") or "Hotspot"
-                    ip   = st.get("ip") or (st.get("ips") or [""])[0]
-                    sub  = f"SSID: {ssid}"
-                    if ip:
-                        sub += f"\nIP: {ip}\nOpen http://{ip}:5050"
-                    self._draw_center("Hotspot ON", sub)
+                    # Poll IP briefly if not yet assigned
+                    ip = st.get("ip") or ""
+                    ips = st.get("ips") or []
+                    if not ip:
+                        ip_deadline = time.time() + 6.0
+                        while time.time() < ip_deadline and not ip:
+                            time.sleep(0.4)
+                            st2 = _http_json(AP_STATUS_URL) or {}
+                            ip = st2.get("ip") or ""
+                            ips = st2.get("ips") or ips
+
+                    # Show sticky modal with URL until key press
+                    self._show_connect_url_modal(ssid, ip, ips)
                 else:
                     self._draw_center("Hotspot OFF", "Client mode")
-                time.sleep(0.8)
+                    time.sleep(0.8)
             finally:
+                # Allow input again (modal will rebind on show)
                 self._busy = False
-                self.render(True)
+                if self.state != self.MODAL:
+                    self.render(True)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -869,11 +890,6 @@ class UI:
                          highlight_idxes=set(), dividers=False)
 
     def _format_sched_lines(self, st: dict):
-        """
-        Return two text lines for a schedule:
-        line1: "10s • 25-09-06"
-        line2: "08:30–09:15 • fps24 • enc:on"
-        """
         interval = int(st.get("interval", 10))
         st_ts = int(st.get("start_ts", 0)); en_ts = int(st.get("end_ts", 0))
         if st_ts and en_ts:
@@ -916,7 +932,6 @@ class UI:
 
     def _render_wz(self):
         self._maybe_hard_clear()
-        # Timelapse wizard pages
         if self.state == self.TL_INT:
             self._draw_wizard_page("Interval (s)", f"{self.wz_interval}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
@@ -929,7 +944,6 @@ class UI:
         elif self.state == self.TL_ENC:
             self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
                                    tips=["UP/DOWN toggle", "OK next"])
-        # Schedule wizard pages
         elif self.state == self.SCH_INT:
             self._draw_wizard_page("Interval (s)", f"{self.wz_interval}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
@@ -953,7 +967,7 @@ class UI:
                                    tips=["UP/DOWN toggle", "OK next"])
 
     def render(self, force=False):
-        if self._screen_off or self._busy:
+        if self._screen_off or self._busy or self.state == self.MODAL:
             return
         try:
             if self.state == self.ENCODING:
@@ -988,7 +1002,6 @@ class UI:
                 now_ts = int(time.time())
 
                 max_sched_to_show = 3
-                # We'll draw a divider only after each schedule's 2nd line.
                 divider_after = set()
 
                 for idx, (_, st) in enumerate(rows[:max_sched_to_show]):
@@ -997,9 +1010,8 @@ class UI:
                     tag = "now" if (st_ts <= now_ts < en_ts) else "next"
                     l2 = f"{l2}  [{tag}]"
 
-                    lines.append(l1)  # index a
-                    lines.append(l2)  # index b
-                    # mark divider after this block's second line
+                    lines.append(l1)
+                    lines.append(l2)
                     divider_after.add(len(lines)-1)
 
                 if self.menu_idx >= 2:
@@ -1048,7 +1060,7 @@ def main():
     while True:
         now = time.time()
 
-        if ui._screen_off or ui._busy:
+        if ui._screen_off or ui._busy or ui.state == ui.MODAL:
             time.sleep(0.1); continue
 
         # poll /lcd_status occasionally
