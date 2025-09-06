@@ -64,12 +64,98 @@ def _ap_active_info():
         "ips": ips,
     }
 
+# ---------- AP status with robust IP discovery ----------
+import re
+
+def _find_ap_device_nm():
+    """
+    Return the device name (e.g. wlan0) that is connected with HOTSPOT_NAME,
+    using NetworkManager. Return None if not found.
+    """
+    ok, out = _nmcli("device", "status")
+    if ok:
+        # DEVICE  TYPE  STATE      CONNECTION
+        # wlan0   wifi  connected  Pi-Hotspot
+        lines = out.splitlines()
+        # try to find a row whose last column equals HOTSPOT_NAME
+        for ln in lines[1:]:
+            cols = ln.split()
+            if len(cols) >= 4:
+                dev = cols[0]
+                conn = " ".join(cols[3:])
+                if conn == HOTSPOT_NAME:
+                    return dev
+
+    # fallback: inspect active connections table
+    ok2, out2 = _nmcli("con", "show", "--active")
+    if ok2:
+        for ln in out2.splitlines():
+            if HOTSPOT_NAME in ln:
+                parts = ln.split()
+                if parts:
+                    return parts[-1]   # last column is DEVICE
+    return None
+
+def _ipv4_addrs_nm(dev):
+    """Return list of IPv4 addresses (strings) for a device via nmcli."""
+    if not dev:
+        return []
+    ok, out = _nmcli("-g", "IP4.ADDRESS", "device", "show", dev)
+    if not ok or not out:
+        return []
+    ips = []
+    for ln in out.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        ip = ln.split("/", 1)[0]
+        if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
+            ips.append(ip)
+    return ips
+
+def _ipv4_addrs_iproute(dev):
+    """Fallback using `ip -4 addr show dev ...`."""
+    try:
+        import subprocess
+        p = subprocess.run(
+            ["ip", "-4", "addr", "show", "dev", str(dev)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False
+        )
+        ips = []
+        for ln in p.stdout.splitlines():
+            ln = ln.strip()
+            # inet 10.42.0.1/24 brd 10.42.0.255 scope global ...
+            if ln.startswith("inet "):
+                ip = ln.split()[1].split("/", 1)[0]
+                if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
+                    ips.append(ip)
+        return ips
+    except Exception:
+        return []
+
+def _ap_active_info():
+    """
+    Return dict used by LCD:
+      {'on': bool, 'name': HOTSPOT_NAME, 'device': 'wlan0'|None,
+       'ip': 'x.x.x.x'|None, 'ips': [..]}
+    """
+    on = _ap_is_active()
+    dev = _find_ap_device_nm()
+    ips = _ipv4_addrs_nm(dev) or _ipv4_addrs_iproute(dev)
+
+    return {
+        "on": on,
+        "name": HOTSPOT_NAME,
+        "device": dev,
+        "ip": (ips[0] if ips else None),
+        "ips": ips,
+    }
+
 @app.get("/ap/status")
 def ap_status_new():
-    """Rich status used by the LCD: on/off, name, device, IPs."""
     return jsonify(_ap_active_info())
 
-# Back-compat: keep the old /ap_status path but return the richer JSON too.
+# Back-compat for older clients
 @app.get("/ap_status")
 def ap_status_compat():
     return jsonify(_ap_active_info())
