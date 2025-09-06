@@ -587,30 +587,35 @@ class UI:
             return
 
         if self.state == self.SCHED_DEL_CONFIRM:
+            # confirm_idx: 0 = Yes, 1 = No
             if self.confirm_idx == 0 and getattr(self, "_selected_sched", None):
-                sid = self._selected_sched
+                sid = str(self._selected_sched)
                 self._busy = True
                 self._draw_center("Deleting…")
 
-                ok = _delete_schedule_backend(sid)
-                time.sleep(0.15)  # give backend a tick
+                ok_flag = _delete_schedule_backend(sid)  # may return False even if it actually deletes
+                time.sleep(0.12)  # small tick for the writer
 
-                # Wait briefly for the schedule to actually disappear
-                gone = False
-                for _ in range(12):  # ~1.2s max
+                # Consider it success if the id disappears from the list within ~1.2s
+                success = False
+                deadline = time.time() + 1.2
+                while time.time() < deadline:
                     rows = _read_schedules()
-                    if not any(sid == rid for rid, _ in rows):
-                        gone = True
+                    if not any(str(rid) == sid for rid, _ in rows):
+                        success = True
                         break
                     time.sleep(0.1)
 
                 self._busy = False
-                self._draw_center("Deleted" if (ok and gone) else "Failed")
-                time.sleep(0.4)
+                self._draw_center("Deleted" if (success or ok_flag) else "Failed")
+                time.sleep(0.45)
 
             # Always reload the list fresh and show it immediately
+            self._selected_sched = None
             self.state = self.SCHED_LIST
-            self.menu_idx = 0
+            # After deletion, keep the cursor at a valid index
+            sch = _read_schedules()
+            self.menu_idx = min(self.menu_idx, max(0, len(sch)))  # +1 slot for "+ New Schedule"
             self._request_hard_clear()
             self.render(force=True)
             return
