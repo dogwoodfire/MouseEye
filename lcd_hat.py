@@ -759,7 +759,7 @@ class UI:
 
             self._bind_inputs()
             self._request_hard_clear()
-            self._draw_center("Rotation set")
+            self._draw_center("Rotation set", "Portrait" if self.rot_deg == 90 else "Landscape")
             time.sleep(0.6)
             self.state = self.HOME
             self.render(force=True)
