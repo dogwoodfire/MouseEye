@@ -405,13 +405,20 @@ class UI:
         try:
             drw = ImageDraw.Draw(base_img)
             # top-right with small padding
-            pad = 3
+            pad = 2
             x1, y1 = WIDTH - 1 - pad, 1 + pad
-            # three arcs + a dot = minimalist Wi-Fi glyph
-            drw.arc((x1-14, y1-2, x1-2,  y1+10), 220, 320, fill=WHITE, width=1)
-            drw.arc((x1-12, y1,   x1-4,  y1+8 ), 220, 320, fill=WHITE, width=1)
-            drw.arc((x1-10, y1+2, x1-6,  y1+6 ), 220, 320, fill=WHITE, width=1)
-            drw.ellipse((x1-3, y1+8, x1-1, y1+10), fill=WHITE)
+
+            # Draw three evenly spaced arcs around a common center so lines don't merge.
+            # Center a bit left of the right edge; place the "dot" under the arcs.
+            cx = x1 - 7   # center x
+            cy = y1 + 8   # center y (baseline for the dot)
+
+            # outer → inner radii; smaller sweep for a compact, legible glyph
+            for r in (6, 4, 2):
+                drw.arc((cx - r, cy - r, cx + r, cy + r), 215, 325, fill=WHITE, width=1)
+
+            # dot at the base of the arcs
+            drw.ellipse((cx - 1, cy - 1, cx + 1, cy + 1), fill=WHITE)
         except Exception:
             pass
 
