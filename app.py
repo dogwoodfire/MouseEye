@@ -672,7 +672,7 @@ def ap_status_json():
         "name": HOTSPOT_NAME,
         "device": dev,
         "ip": ip,                # single best IP for the AP interface
-        "ips": _all_ipv4_local() # all local IPv4s (fallback/diagnostic)
+        "ips": _all_ipv4_local(), # all local IPv4s (fallback/diagnostic)
         "ssid": ssid,            # SSID of the AP (if active)
     })
 
@@ -902,12 +902,6 @@ def encode(sess):
     _encode_q.put((sess, fps))
     return redirect(url_for("index"))
 
-@app.post("/schedule/cancel/<sid>")
-def schedule_cancel_one(sid):
-    with _sched_lock:
-        if sid in _schedules:
-            _cancel_schedule_locked(sid)
-    return redirect(url_for("schedule_page"))
 
 @app.post("/schedule/cancel")
 def schedule_cancel_compat():
@@ -1163,8 +1157,7 @@ def live_mjpg():
         "Content-Type": "multipart/x-mixed-replace; boundary=frame",
         "Cache-Control": "no-store",
     }
-    return app.response_class(gen(), headers=headers)
-import re
+    return app.response_class(gen(), headers=headers
 
 
 @app.get("/live_diag")
@@ -1965,18 +1958,6 @@ def _sched_http_post(path, data=None, timeout=5):
         return True
     except Exception:
         return False
-
-def _sched_fire_stop():
-    try:
-        from flask import current_app
-        app = current_app._get_current_object()
-    except Exception:
-        app = globals().get('app')
-    if not app: return
-    with app.app_context():
-        with app.test_client() as c:
-            c.post('/stop')
-
 
 
 

@@ -1090,5 +1090,4 @@ if __name__ == "__main__":
     try:
         if DEBUG: print("DEBUG on", file=sys.stderr, flush=True)
         main()
-    except KeyboardInterrupt:
-        pass
+    except KeyboardInterrup
