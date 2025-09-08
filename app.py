@@ -675,6 +675,19 @@ def ap_status_json():
         "ssid": ssid,            # SSID of the AP (if active)
     })
 
+def _ap_status_quick():
+    """Return a compact AP status dict for the template."""
+    try:
+        on = ap_is_on()
+    except Exception:
+        on = False
+    dev = _ap_active_device() if on else ""
+    try:
+        ssid = _ap_ssid(dev) if on else None
+    except Exception:
+        ssid = None
+    return {"on": on, "ssid": ssid}
+
 @app.route("/", methods=["GET"])
 def index():
     # flags for live view
@@ -726,6 +739,7 @@ def index():
         # NEW flags used by the template for live view
         encoding_active=encoding_active,
         idle_now=idle_now,
+        ap_status=_ap_status_quick(),
     )
 
 @app.route("/start", methods=["POST"])
@@ -1380,7 +1394,21 @@ TPL_INDEX = r"""
 </style>
 
 <header>
-  <h1>📸 Pi Timelapse - Mouse Eye 🐭</h1>
+  <h1>📸 Pi Timelapse - Mouse Eye 🐭 </h1>
+  {% set ap = ap_status %}
+    <div id="ap-indicator">
+    {% if ap.on %}
+        <span style="color: green;">📶 Hotspot ON (SSID: {{ ap.ssid }})</span>
+        <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
+        <button type="submit">Disable</button>
+        </form>
+    {% else %}
+        <span style="color: red;">📡 Hotspot OFF</span>
+        <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
+        <button type="submit">Enable</button>
+        </form>
+    {% endif %}
+    </div>
 </header>
 
 <main>

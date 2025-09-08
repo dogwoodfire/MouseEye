@@ -61,6 +61,19 @@ AP_TOGGLE_URL = f"{LOCAL}/ap/toggle"
 AP_ON_URL     = f"{LOCAL}/ap/on"
 AP_OFF_URL    = f"{LOCAL}/ap/off"
 
+# Cache for AP status (to draw overlay without spamming the backend)
+_AP_CACHE = {"on": False, "ts": 0.0}
+
+def _ap_poll_cache(period=1.0):
+    """Refresh AP status cache at most once per `period` seconds."""
+    now = time.time()
+    if now - _AP_CACHE["ts"] < period:
+        return _AP_CACHE["on"]
+    j = _http_json(AP_STATUS_URL) or {}
+    _AP_CACHE["on"] = bool(j.get("on"))
+    _AP_CACHE["ts"] = now
+    return _AP_CACHE["on"]
+
 # ----------------- Preferences (rotation) -----------------
 PREFS_FILE = "/home/pi/timelapse/lcd_prefs.json"
 def _load_prefs():
@@ -299,6 +312,11 @@ class UI:
         self._need_hard_clear = False
 
     def _present(self, img):
+        # Always draw hotspot overlay before showing the image
+        try:
+            self._overlay_ap(img)
+        except Exception:
+            pass
         frame = img.rotate(-90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
         with self._draw_lock:
             self.device.display(frame)
@@ -373,6 +391,29 @@ class UI:
         drw.text(((WIDTH-int(tw))//2, 40), msg, font=F_TITLE, fill=YELL)
         drw.text(((WIDTH-int(sw))//2, 62), sp,  font=F_TITLE, fill=YELL)
         self._present(img)
+
+    def _overlay_ap(self, base_img):
+        """Draw a tiny Wi-Fi badge in the top-right if AP is ON.
+        Mutates `base_img` in place.
+        """
+        try:
+            ap_on = _ap_poll_cache()
+        except Exception:
+            ap_on = False
+        if not ap_on:
+            return
+        try:
+            drw = ImageDraw.Draw(base_img)
+            # top-right with small padding
+            pad = 3
+            x1, y1 = WIDTH - 1 - pad, 1 + pad
+            # three arcs + a dot = minimalist Wi-Fi glyph
+            drw.arc((x1-14, y1-2, x1-2,  y1+10), 220, 320, fill=WHITE, width=1)
+            drw.arc((x1-12, y1,   x1-4,  y1+8 ), 220, 320, fill=WHITE, width=1)
+            drw.arc((x1-10, y1+2, x1-6,  y1+6 ), 220, 320, fill=WHITE, width=1)
+            drw.ellipse((x1-3, y1+8, x1-1, y1+10), fill=WHITE)
+        except Exception:
+            pass
 
     # ---------- status ----------
     def _status(self):
@@ -1041,54 +1082,4 @@ class UI:
 
             self._clear()
         except Exception as e:
-            log("render error:", repr(e))
-
-    # show "sleeping" for a beat, then turn panel off
-    def _draw_center_sleep_then_off(self):
-        prev_state = self.state
-        self.state = None
-        self._clear()
-        self._draw_center("Screen off", "Press any key\n to wake up")
-        time.sleep(2.5)
-        self._sleep_screen()
-        self.state = prev_state
-
-# ----------------- main loop -----------------
-def main():
-    ui = UI()
-    last_poll = 0
-    while True:
-        now = time.time()
-
-        if ui._screen_off or ui._busy or ui.state == ui.MODAL:
-            time.sleep(0.1); continue
-
-        # poll /lcd_status occasionally
-        if now - last_poll > 0.5:
-            st = _http_json(STATUS_URL) or {}
-            ui._last_status = st
-
-            if st.get("encoding"):
-                ui.state = UI.ENCODING
-                ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
-                ui._draw_encoding(ui._spin_idx)
-            else:
-                if ui.state == UI.ENCODING:
-                    ui.state = ui.HOME
-                    ui.menu_idx = 0
-                    ui._request_hard_clear()
-                if ui.state == ui.HOME:
-                    ui._render_home()
-            last_poll = now
-
-        if ui.state == ui.HOME:
-            ui.render()
-
-        time.sleep(0.2)
-
-if __name__ == "__main__":
-    try:
-        if DEBUG: print("DEBUG on", file=sys.stderr, flush=True)
-        main()
-    except KeyboardInterrupt:
-        pass
+            log("render error:",
