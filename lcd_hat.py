@@ -350,7 +350,7 @@ class UI:
         if title:
             drw.text((2,y), title, font=F_TITLE, fill=WHITE); y += 18
         for i, txt in enumerate(lines):
-            fill = CYAN if i in highlight_idxes else WHITE
+            fill = BLUE if i in highlight_idxes else WHITE
             drw.text((2,y), txt, font=F_TEXT, fill=fill); y += 14
             if dividers:
                 if divider_after:
@@ -378,7 +378,7 @@ class UI:
         img = self._blank(); drw = ImageDraw.Draw(img)
         drw.text((2, 2), title, font=F_TITLE, fill=WHITE)
         val_str = str(value); tw = self._text_w(F_VALUE, val_str)
-        drw.text(((WIDTH - int(tw))//2, 40), val_str, font=F_VALUE, fill=CYAN)
+        drw.text(((WIDTH - int(tw))//2, 40), val_str, font=F_VALUE, fill=BLUE)
         y = 80
         for line in (tips or []):
             drw.text((2, y), line, font=F_SMALL, fill=GRAY); y += 12
