@@ -3,7 +3,7 @@
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-import os, sys, time, json, threading
+import os, sys, time, json, threading, subprocess
 from datetime import datetime, timedelta, date
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
@@ -65,13 +65,17 @@ AP_OFF_URL    = f"{LOCAL}/ap/off"
 _AP_CACHE = {"on": False, "ts": 0.0}
 
 def _ap_poll_cache(period=1.0):
-    """Refresh AP status cache at most once per `period` seconds."""
+    """Refresh AP status cache at most once per `period` seconds.
+    If the backend is unreachable, keep the last known state.
+    """
     now = time.time()
     if now - _AP_CACHE["ts"] < period:
         return _AP_CACHE["on"]
-    j = _http_json(AP_STATUS_URL, timeout=0.35) or {}
-    _AP_CACHE["on"] = bool(j.get("on"))
-    _AP_CACHE["ts"] = now
+    j = _http_json(AP_STATUS_URL, timeout=0.8)
+    if isinstance(j, dict) and "on" in j:
+        _AP_CACHE["on"] = bool(j.get("on"))
+        _AP_CACHE["ts"] = now
+    # If request failed, do NOT advance timestamp; we'll retry soon.
     return _AP_CACHE["on"]
 
 # ----------------- Preferences (rotation) -----------------
@@ -144,6 +148,7 @@ def _http_json(url, timeout=0.4):
     except Exception:
         return None
 
+
 def _http_post_form(url, data: dict, timeout=3.5):
     try:
         body = urlencode(data).encode("utf-8")
@@ -154,6 +159,40 @@ def _http_post_form(url, data: dict, timeout=3.5):
         return True
     except Exception:
         return False
+
+# ----------------- Local network helpers -----------------
+def _local_ipv4s():
+    try:
+        out = subprocess.check_output(["hostname", "-I"], text=True, stderr=subprocess.DEVNULL).strip()
+        return [ip for ip in out.split() if "." in ip]
+    except Exception:
+        return []
+
+def _current_wifi_ssid():
+    # Try a few nmcli invocations; return first non-empty SSID.
+    cmds = [
+        ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],   # lines like "yes:MySSID"
+        ["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,ACTIVE", "con", "show", "--active"],  # "HomeNet:wifi:wlan0:yes"
+    ]
+    for cmd in cmds:
+        try:
+            out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=0.8)
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if cmd[2] == "dev":
+                    if line.startswith("yes:"):
+                        ssid = line.split(":", 1)[1]
+                        if ssid:
+                            return ssid
+                else:
+                    parts = line.split(":")
+                    if len(parts) >= 4 and parts[1] in ("wifi", "802-11-wireless") and parts[-1] in ("yes", "activated", "activated (externally)"):
+                        return parts[0]
+        except Exception:
+            continue
+    return ""
 
 # ----------------- Schedules (read: prefer backend JSON) -----------------
 def _read_schedules():
@@ -405,20 +444,18 @@ class UI:
         try:
             drw = ImageDraw.Draw(base_img)
             # top-right with small padding
-            pad = 2
+            pad = 3
             x1, y1 = WIDTH - 1 - pad, 1 + pad
 
-            # Draw three evenly spaced arcs around a common center so lines don't merge.
-            # Center a bit left of the right edge; place the "dot" under the arcs.
-            cx = x1 - 7   # center x
-            cy = y1 + 8   # center y (baseline for the dot)
+            # Clearer, thicker arcs sharing a common center so they don't merge
+            cx = x1 - 8   # center x a touch further left
+            cy = y1 + 9   # center y
 
-            # outer → inner radii; smaller sweep for a compact, legible glyph
-            for r in (6, 4, 2):
-                drw.arc((cx - r, cy - r, cx + r, cy + r), 215, 325, fill=WHITE, width=1)
+            for r in (7, 5, 3):
+                drw.arc((cx - r, cy - r, cx + r, cy + r), 215, 325, fill=WHITE, width=2)
 
-            # dot at the base of the arcs
-            drw.ellipse((cx - 1, cy - 1, cx + 1, cy + 1), fill=WHITE)
+            # base dot
+            drw.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), fill=WHITE)
         except Exception:
             pass
 
@@ -474,24 +511,36 @@ class UI:
         # keep joystick driving menus (rotation-aware)
         self._rebind_joystick()
     def show_ap_info(self):
-        """Show the AP connect screen on demand (KEY2)."""
+        """Show connect info on demand (KEY2).
+        If AP is ON, show hotspot SSID + its IP.
+        If AP is OFF, show current Wi‑Fi SSID (if any) and local IP so you can reach Flask.
+        """
         if self._busy:
             return
         self._busy = True
         try:
             st = _http_json(AP_STATUS_URL) or {}
-            if st.get("on"):
+            ap_on = bool(st.get("on"))
+            if ap_on:
                 ssid = st.get("ssid") or st.get("name") or "Hotspot"
                 ip   = st.get("ip") or ""
                 ips  = st.get("ips") or []
+                # Poll IP briefly if not yet assigned
+                if not ip:
+                    deadline = time.time() + 4.0
+                    while time.time() < deadline and not ip:
+                        time.sleep(0.3)
+                        st2 = _http_json(AP_STATUS_URL) or {}
+                        ip = st2.get("ip") or ""
+                        if not ips:
+                            ips = st2.get("ips") or []
                 self._show_connect_url_modal(ssid, ip, ips)
-                # _show_connect_url_modal switches to MODAL and rebinds inputs,
-                # so we return early and let the modal manage dismissal.
                 return
-            else:
-                # brief notice if hotspot is off
-                self._draw_center("Hotspot is OFF")
-                time.sleep(0.8)
+            # AP is OFF → show current Wi‑Fi network and LAN IP
+            ssid = _current_wifi_ssid() or "Wi‑Fi"
+            ips  = st.get("ips") or _local_ipv4s()
+            ip   = ips[0] if ips else ""
+            self._show_connect_url_modal(ssid, ip, ips)
         finally:
             self._busy = False
             if self.state != self.MODAL:
@@ -1090,4 +1139,96 @@ class UI:
 
                 if self.menu_idx >= 2:
                     sched_i = self.menu_idx - 2
-                    to
+                    top = 2 + sched_i*2
+                    if top < len(lines):
+                        highlight.update({top, top+1})
+                hi_ok = {0} if self.menu_idx == 0 else ({1} if self.menu_idx == 1 else highlight)
+
+                self._draw_lines(
+                    lines, title="Schedules",
+                    footer="OK select • Back=first item",
+                    highlight_idxes=hi_ok,
+                    dividers=True,
+                    divider_after=divider_after
+                )
+                return
+
+            if self.state == self.SCHED_DEL_CONFIRM:
+                yes = "[Yes]" if self.confirm_idx == 0 else " Yes "
+                no  = "[No] " if self.confirm_idx == 1 else " No  "
+                lines = ["Delete this schedule?", "", f"{yes}    {no}"]
+                self._draw_lines(lines, title="Confirm delete",
+                                 footer="UP/DOWN choose, OK select",
+                                 highlight_idxes=set(), dividers=False)
+                return
+
+            self._clear()
+        except Exception as e:
+            log("render error:", repr(e))
+
+    # show "sleeping" for a beat, then turn panel off
+    def _draw_center_sleep_then_off(self):
+        prev_state = self.state
+        self.state = None
+        self._clear()
+        self._draw_center("Screen off", "Press any key\n to wake up")
+        time.sleep(2.5)
+        self._sleep_screen()
+        self.state = prev_state
+
+# ----------------- main loop -----------------
+def main():
+    ui = UI()
+    last_poll = 0.0
+    while True:
+        now = time.time()
+
+        # Skip drawing while busy / sleeping / modal
+        if ui._screen_off or ui._busy or ui.state == ui.MODAL:
+            time.sleep(0.1)
+            continue
+
+        # Poll backend status and AP cache
+        if (now - last_poll) > 0.5:
+            st = _http_json(STATUS_URL) or {}
+            ui._last_status = st
+            # Keep AP cache warm for tiny overlay; do not trigger modal here.
+            try:
+                # If backend is up, this updates; if down, it leaves last value so badge won't flap.
+                _ap_poll_cache(period=1.0)
+            except Exception:
+                pass
+
+            if st.get("encoding"):
+                ui.state = UI.ENCODING
+                ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+                ui._draw_encoding(ui._spin_idx)
+            else:
+                if ui.state == UI.ENCODING:
+                    ui.state = ui.HOME
+                    ui.menu_idx = 0
+                    ui._request_hard_clear()
+                if ui.state == UI.HOME:
+                    ui._render_home()
+            last_poll = now
+
+        if ui.state == ui.HOME:
+            ui.render()
+
+        time.sleep(0.2)
+
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            print("DEBUG on", file=sys.stderr, flush=True)
+        # Ensure stdout/stderr are not buffered under systemd
+        try:
+            import sys as _sys
+            _sys.stdout.reconfigure(line_buffering=True)
+            _sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+        main()
+    except KeyboardInterrupt:
+        pass
