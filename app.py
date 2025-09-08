@@ -358,9 +358,6 @@ def _timestamped_session():
 def _any_encoding_active():
     return any(v.get("status") in ("queued", "encoding") for v in _jobs.values())
 
-_schedules = {}        # {sid: {...state...}}
-_sched_timers = {}     # {sid: {'start': Timer|None, 'stop': Timer|None}}
-
 def _cancel_schedule_locked(sid: str):
     """Assumes _sched_lock is held."""
     timers = _sched_timers.pop(sid, {})
