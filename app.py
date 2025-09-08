@@ -1413,14 +1413,14 @@ TPL_INDEX = r"""
 
 <main>
   {% set ap = ap_status %}
-    <div id="ap-indicator">
+    <div class="card" id="ap-indicator">
     {% if ap.on %}
         <span style="color: green;">📶 Hotspot ON (SSID: {{ ap.ssid }})</span>
         <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
         <button type="submit">Disable</button>
         </form>
     {% else %}
-        <span style="color: red;">📡 Hotspot OFF</span>
+        <span style="color: grey;">📡 Hotspot OFF</span>
         <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
         <button type="submit">Enable</button>
         </form>
