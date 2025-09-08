@@ -1089,4 +1089,4 @@ class UI:
 
             self._clear()
         except Exception as e:
-            log("render error:",
+            log("render error:",)
