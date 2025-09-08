@@ -454,7 +454,7 @@ class UI:
         lines += ["", "Press any key…"]
 
         self.state = self.MODAL
-        self._draw_center("Connect in browser", "\n".join(lines))
+        self._draw_center("Open in browser", "\n".join(lines))
         # Bind all inputs to dismiss
         self._bind_modal_inputs(self._modal_ack)
 
