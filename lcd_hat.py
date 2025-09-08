@@ -848,7 +848,7 @@ class UI:
                     # Show sticky modal with URL until key press
                     self._show_connect_url_modal(ssid, ip, ips)
                 else:
-                    self._draw_center("Hotspot OFF", "Client mode")
+                    self._draw_center("Hotspot OFF")
                     time.sleep(0.8)
             finally:
                 # Allow input again (modal will rebind on show)
