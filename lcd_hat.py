@@ -833,7 +833,7 @@ class UI:
                     time.sleep(0.2)
 
                 if st.get("on"):
-                    ssid = st.get("name") or "Hotspot"
+                    ssid = st.get("ssid") or st.get("name") or "Hotspot"
                     # Poll IP briefly if not yet assigned
                     ip = st.get("ip") or ""
                     ips = st.get("ips") or []

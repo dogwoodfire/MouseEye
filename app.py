@@ -22,6 +22,28 @@ def _nmcli(*args, timeout=6):
         return False, str(e)
 import re
 
+def _ap_ssid(dev: str | None) -> str | None:
+    # 1) From the connection profile (most reliable)
+    ok, out = _nmcli("-g", "802-11-wireless.ssid", "con", "show", HOTSPOT_NAME)
+    if ok and out.strip():
+        return out.strip()
+
+    # 2) From the live device (fallback)
+    if dev:
+        try:
+            p = subprocess.run(
+                ["iw", "dev", dev, "info"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, check=False
+            )
+            for ln in p.stdout.splitlines():
+                ln = ln.strip()
+                if ln.lower().startswith("ssid "):
+                    return ln.split(None, 1)[1].strip()
+        except Exception:
+            pass
+    return None
+
 def _ap_active_device():
     """Return the device name (e.g. wlan0) for the active AP, or ''."""
     ok, out = _nmcli("con", "show", "--active")
@@ -644,12 +666,14 @@ def ap_status_json():
     on = ap_is_on()
     dev = _ap_active_device() if on else ""
     ip  = _ipv4_for_device(dev) if dev else ""
+    ssid = _ap_ssid(dev) if on else None
     return jsonify({
         "on": on,
         "name": HOTSPOT_NAME,
         "device": dev,
         "ip": ip,                # single best IP for the AP interface
         "ips": _all_ipv4_local() # all local IPv4s (fallback/diagnostic)
+        "ssid": ssid,            # SSID of the AP (if active)
     })
 
 @app.route("/", methods=["GET"])
