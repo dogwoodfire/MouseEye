@@ -358,9 +358,6 @@ def _timestamped_session():
 def _any_encoding_active():
     return any(v.get("status") in ("queued", "encoding") for v in _jobs.values())
 
-_schedules = {}        # {sid: {...state...}}
-_sched_timers = {}     # {sid: {'start': Timer|None, 'stop': Timer|None}}
-
 def _cancel_schedule_locked(sid: str):
     """Assumes _sched_lock is held."""
     timers = _sched_timers.pop(sid, {})
@@ -1412,6 +1409,9 @@ TPL_INDEX = r"""
 
 <header>
   <h1>📸 Pi Timelapse - Mouse Eye 🐭 </h1>
+</header>
+
+<main>
   {% set ap = ap_status %}
     <div id="ap-indicator">
     {% if ap.on %}
@@ -1426,9 +1426,6 @@ TPL_INDEX = r"""
         </form>
     {% endif %}
     </div>
-</header>
-
-<main>
   <form class="card" action="{{ url_for('start') }}" method="post">
     <div class="row">
       <label>⏱ Interval (s):</label>
