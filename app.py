@@ -1412,6 +1412,9 @@ TPL_INDEX = r"""
 
 <header>
   <h1>📸 Pi Timelapse - Mouse Eye 🐭 </h1>
+</header>
+
+<main>
   {% set ap = ap_status %}
     <div id="ap-indicator">
     {% if ap.on %}
@@ -1426,9 +1429,6 @@ TPL_INDEX = r"""
         </form>
     {% endif %}
     </div>
-</header>
-
-<main>
   <form class="card" action="{{ url_for('start') }}" method="post">
     <div class="row">
       <label>⏱ Interval (s):</label>
