@@ -115,12 +115,29 @@ def ap_disable():
     return ("not active" in txt) or ("unknown connection" in txt)
 
 
-# ---------- Paths & config ----------
-BASE         = "/home/pi/timelapse"
-SESSIONS_DIR = os.path.join(BASE, "sessions")
-IMAGES_DIR   = os.path.join(BASE, "images")      # legacy; not used for new sessions
-os.makedirs(SESSIONS_DIR, exist_ok=True)
-os.makedirs(IMAGES_DIR,   exist_ok=True)
+
+# Allow override at runtime; default to Pi path
+BASE = os.environ.get("TL_BASE", "/home/pi/timelapse")
+
+def _ensure_dirs(base_root: str):
+    """Ensure sessions/images directories exist. If creation fails (e.g. not running on Pi),
+    fall back to a local ./timelapse directory so the app can still start."""
+    sess = os.path.join(base_root, "sessions")
+    imgs = os.path.join(base_root, "images")  # legacy; not used for new sessions
+    try:
+        os.makedirs(sess, exist_ok=True)
+        os.makedirs(imgs, exist_ok=True)
+        return base_root, sess, imgs
+    except Exception:
+        # Fallback to a local, user-writable directory (works on dev desktops)
+        fallback_root = os.path.abspath(os.environ.get("TL_FALLBACK_BASE", "./timelapse"))
+        fb_sess = os.path.join(fallback_root, "sessions")
+        fb_imgs = os.path.join(fallback_root, "images")
+        os.makedirs(fb_sess, exist_ok=True)
+        os.makedirs(fb_imgs, exist_ok=True)
+        return fallback_root, fb_sess, fb_imgs
+
+BASE, SESSIONS_DIR, IMAGES_DIR = _ensure_dirs(BASE)
 
 CAMERA_STILL = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
 FFMPEG       = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
