@@ -1105,6 +1105,10 @@ class UI:
 def main():
     ui = UI()
     last_poll = 0.0
+    try:
+        last_ap_on = _ap_poll_cache(period=0.0)
+    except Exception:
+        last_ap_on = False
     while True:
         now = time.time()
 
@@ -1118,9 +1122,21 @@ def main():
             st = _http_json(STATUS_URL) or {}
             ui._last_status = st
             try:
-                _ap_poll_cache(period=1.0)
+                ap_on = _ap_poll_cache(period=1.0)
             except Exception:
-                pass
+                ap_on = False
+
+            # If AP just turned on (regardless of who toggled it), show the
+            # connect-info modal once with SSID/IP from the backend.
+            if ap_on and not last_ap_on:
+                st_ap = _http_json(AP_STATUS_URL) or {}
+                ssid = st_ap.get("ssid") or st_ap.get("name") or "Hotspot"
+                ip   = st_ap.get("ip") or ""
+                ips  = st_ap.get("ips") or []
+                ui._show_connect_url_modal(ssid, ip, ips)
+
+            # remember for next iteration
+            last_ap_on = ap_on
 
             if st.get("encoding"):
                 ui.state = UI.ENCODING
