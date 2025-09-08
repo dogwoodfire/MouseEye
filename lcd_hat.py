@@ -1088,4 +1088,83 @@ class UI:
                 return
 
             self._clear()
-        except Exception as 
+        except Exception as e:
+            log("render error:", repr(e))
+
+    # show "sleeping" for a beat, then turn panel off
+    def _draw_center_sleep_then_off(self):
+        prev_state = self.state
+        self.state = None
+        self._clear()
+        self._draw_center("Screen off", "Press any key\n to wake up")
+        time.sleep(2.5)
+        self._sleep_screen()
+        self.state = prev_state
+
+# ----------------- main loop -----------------
+def main():
+    ui = UI()
+    last_poll = 0.0
+    last_ap_on = False  # avoid blocking network call during startup
+    while True:
+        now = time.time()
+
+        # Skip drawing while busy / sleeping / modal
+        if ui._screen_off or ui._busy or ui.state == ui.MODAL:
+            time.sleep(0.1)
+            continue
+
+        # Poll backend status and AP cache
+        if (now - last_poll) > 0.5:
+            st = _http_json(STATUS_URL) or {}
+            ui._last_status = st
+            try:
+                ap_on = _ap_poll_cache(period=1.0)
+            except Exception:
+                ap_on = False
+
+            # If AP just turned on (regardless of who toggled it), show the
+            # connect-info modal once with SSID/IP from the backend.
+            if ap_on and not last_ap_on:
+                st_ap = _http_json(AP_STATUS_URL) or {}
+                ssid = st_ap.get("ssid") or st_ap.get("name") or "Hotspot"
+                ip   = st_ap.get("ip") or ""
+                ips  = st_ap.get("ips") or []
+                ui._show_connect_url_modal(ssid, ip, ips)
+
+            # remember for next iteration
+            last_ap_on = ap_on
+
+            if st.get("encoding"):
+                ui.state = UI.ENCODING
+                ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+                ui._draw_encoding(ui._spin_idx)
+            else:
+                if ui.state == UI.ENCODING:
+                    ui.state = ui.HOME
+                    ui.menu_idx = 0
+                    ui._request_hard_clear()
+                if ui.state == UI.HOME:
+                    ui._render_home()
+            last_poll = now
+
+        if ui.state == ui.HOME:
+            ui.render()
+
+        time.sleep(0.2)
+
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            print("DEBUG on", file=sys.stderr, flush=True)
+        # Ensure stdout/stderr are not buffered under systemd
+        try:
+            import sys as _sys
+            _sys.stdout.reconfigure(line_buffering=True)
+            _sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+        main()
+    except KeyboardInterrupt:
+        pass
