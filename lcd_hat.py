@@ -404,21 +404,14 @@ class UI:
             return
         try:
             drw = ImageDraw.Draw(base_img)
-            # Bigger Wi‑Fi glyph in the top-right with small padding
-            pad = 2
-            right = WIDTH - 1 - pad
-            top = pad
-
-            # Three larger arcs + a bigger dot
-            # Outer arc (about 20x20 box)
-            drw.arc((right-22, top-2, right-2, top+18), 215, 325, fill=WHITE, width=2)
-            # Middle arc
-            drw.arc((right-18, top+2, right-6, top+14), 215, 325, fill=WHITE, width=2)
-            # Inner arc
-            drw.arc((right-14, top+6, right-10, top+10), 215, 325, fill=WHITE, width=2)
-            # Dot
-            cx, cy, r = right-6, top+14, 2
-            drw.ellipse((cx-r, cy-r, cx+r, cy+r), fill=WHITE)
+            # top-right with small padding
+            pad = 3
+            x1, y1 = WIDTH - 1 - pad, 1 + pad
+            # three arcs + a dot = minimalist Wi-Fi glyph
+            drw.arc((x1-14, y1-2, x1-2,  y1+10), 220, 320, fill=WHITE, width=1)
+            drw.arc((x1-12, y1,   x1-4,  y1+8 ), 220, 320, fill=WHITE, width=1)
+            drw.arc((x1-10, y1+2, x1-6,  y1+6 ), 220, 320, fill=WHITE, width=1)
+            drw.ellipse((x1-3, y1+8, x1-1, y1+10), fill=WHITE)
         except Exception:
             pass
 
@@ -1089,4 +1082,55 @@ class UI:
 
             self._clear()
         except Exception as e:
-            log("render error:",)
+            log("render error:", repr(e))
+
+    # show "sleeping" for a beat, then turn panel off
+    def _draw_center_sleep_then_off(self):
+        prev_state = self.state
+        self.state = None
+        self._clear()
+        self._draw_center("Screen off", "Press any key\n to wake up")
+        time.sleep(2.5)
+        self._sleep_screen()
+        self.state = prev_state
+
+# ----------------- main loop -----------------
+def main():
+    ui = UI()
+    last_poll = 0
+    while True:
+        now = time.time()
+
+        if ui._screen_off or ui._busy or ui.state == ui.MODAL:
+            time.sleep(0.1); continue
+
+        # poll /lcd_status occasionally
+        if now - last_poll > 0.5:
+            st = _http_json(STATUS_URL) or {}
+            ui._last_status = st
+                _ap_poll_cache(period=1.0)
+
+            if st.get("encoding"):
+                ui.state = UI.ENCODING
+                ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+                ui._draw_encoding(ui._spin_idx)
+            else:
+                if ui.state == UI.ENCODING:
+                    ui.state = ui.HOME
+                    ui.menu_idx = 0
+                    ui._request_hard_clear()
+                if ui.state == ui.HOME:
+                    ui._render_home()
+            last_poll = now
+
+        if ui.state == ui.HOME:
+            ui.render()
+
+        time.sleep(0.2)
+
+if __name__ == "__main__":
+    try:
+        if DEBUG: print("DEBUG on", file=sys.stderr, flush=True)
+        main()
+    except KeyboardInterrupt:
+        pass
