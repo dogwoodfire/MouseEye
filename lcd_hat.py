@@ -468,8 +468,34 @@ class UI:
         # KEY1 toggles hotspot
         if self.btn_key1:
             self.btn_key1.when_pressed = self._wrap_wake(self.toggle_hotspot)
+        # KEY2 shows AP connect info on demand
+        if self.btn_key2:
+            self.btn_key2.when_pressed = self._wrap_wake(self.show_ap_info)
         # keep joystick driving menus (rotation-aware)
         self._rebind_joystick()
+    def show_ap_info(self):
+        """Show the AP connect screen on demand (KEY2)."""
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            st = _http_json(AP_STATUS_URL) or {}
+            if st.get("on"):
+                ssid = st.get("ssid") or st.get("name") or "Hotspot"
+                ip   = st.get("ip") or ""
+                ips  = st.get("ips") or []
+                self._show_connect_url_modal(ssid, ip, ips)
+                # _show_connect_url_modal switches to MODAL and rebinds inputs,
+                # so we return early and let the modal manage dismissal.
+                return
+            else:
+                # brief notice if hotspot is off
+                self._draw_center("Hotspot is OFF")
+                time.sleep(0.8)
+        finally:
+            self._busy = False
+            if self.state != self.MODAL:
+                self.render(force=True)
 
     # ---------- MODAL helpers (show URL until any key pressed) ----------
     def _bind_modal_inputs(self, handler):
@@ -1105,7 +1131,6 @@ class UI:
 def main():
     ui = UI()
     last_poll = 0.0
-    last_ap_on = False  # avoid blocking network call during startup
     while True:
         now = time.time()
 
@@ -1118,22 +1143,11 @@ def main():
         if (now - last_poll) > 0.5:
             st = _http_json(STATUS_URL) or {}
             ui._last_status = st
+            # Keep AP cache warm for tiny overlay; do not trigger modal here.
             try:
-                ap_on = _ap_poll_cache(period=1.0)
+                _ap_poll_cache(period=1.0)
             except Exception:
-                ap_on = False
-
-            # If AP just turned on (regardless of who toggled it), show the
-            # connect-info modal once with SSID/IP from the backend.
-            if ap_on and not last_ap_on:
-                st_ap = _http_json(AP_STATUS_URL) or {}
-                ssid = st_ap.get("ssid") or st_ap.get("name") or "Hotspot"
-                ip   = st_ap.get("ip") or ""
-                ips  = st_ap.get("ips") or []
-                ui._show_connect_url_modal(ssid, ip, ips)
-
-            # remember for next iteration
-            last_ap_on = ap_on
+                pass
 
             if st.get("encoding"):
                 ui.state = UI.ENCODING
