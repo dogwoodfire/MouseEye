@@ -69,7 +69,7 @@ def _ap_poll_cache(period=1.0):
     now = time.time()
     if now - _AP_CACHE["ts"] < period:
         return _AP_CACHE["on"]
-    j = _http_json(AP_STATUS_URL) or {}
+    j = _http_json(AP_STATUS_URL, timeout=0.35) or {}
     _AP_CACHE["on"] = bool(j.get("on"))
     _AP_CACHE["ts"] = now
     return _AP_CACHE["on"]
@@ -137,7 +137,7 @@ def _ap_status():
     j = _http_json(AP_STATUS_URL)
     return bool(j and j.get("on"))
 
-def _http_json(url, timeout=1.6):
+def _http_json(url, timeout=0.4):
     try:
         with urlopen(Request(url, headers={"Cache-Control":"no-store"}), timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "ignore"))
@@ -1105,10 +1105,7 @@ class UI:
 def main():
     ui = UI()
     last_poll = 0.0
-    try:
-        last_ap_on = _ap_poll_cache(period=0.0)
-    except Exception:
-        last_ap_on = False
+    last_ap_on = False  # avoid blocking network call during startup
     while True:
         now = time.time()
 
