@@ -3,7 +3,6 @@ import os, time, threading, subprocess, shutil, glob, json, mimetypes
 from datetime import datetime
 from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, render_template_string
 
-import subprocess  # add this if not already present
 
 # ---------- Hotspot / AP control (NetworkManager) ----------
 HOTSPOT_NAME = os.environ.get("HOTSPOT_NAME", "Pi-Hotspot")
@@ -22,7 +21,7 @@ def _nmcli(*args, timeout=6):
         return False, str(e)
 import re
 
-def _ap_ssid(dev: str | None) -> str | None:
+def _ap_ssid(dev):
     # 1) From the connection profile (most reliable)
     ok, out = _nmcli("-g", "802-11-wireless.ssid", "con", "show", HOTSPOT_NAME)
     if ok and out.strip():
@@ -355,7 +354,7 @@ def _cancel_schedule_locked(sid: str):
             pass
     _schedules.pop(sid, None)
     try:
-        _save_schedules()     # or your existing persistence function
+        _save_sched_state()
     except Exception:
         pass
 
@@ -1157,7 +1156,7 @@ def live_mjpg():
         "Content-Type": "multipart/x-mixed-replace; boundary=frame",
         "Cache-Control": "no-store",
     }
-    return app.response_class(gen(), headers=headers
+    return app.response_class(gen(), headers=headers)
 
 
 @app.get("/live_diag")
@@ -2030,7 +2029,7 @@ SCHED_TPL = '''<!doctype html>
     <div><b>End:</b>   {{ sc.end_h }}</div>
     <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
     <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
-    <form class="row" method="post" action="{{ url_for('schedule_cancel_one', sid=sid) }}" onsubmit="return confirm('Cancel this schedule?')">
+    <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Cancel this schedule?')">
       <button class="danger" type="submit">Cancel</button>
     </form>
   </div>
