@@ -1194,8 +1194,8 @@ def main():
             ui._last_status = st
             # Keep AP cache warm for tiny overlay; do not trigger modal here.
             try:
-                # If backend is up, this updates; if down, it leaves last value so badge won't flap.
-                #_ap_poll_cache(period=1.0)
+                # Intentionally disabled to reduce load.
+                pass
             except Exception:
                 pass
 
