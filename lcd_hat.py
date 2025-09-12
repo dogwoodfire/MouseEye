@@ -64,14 +64,14 @@ AP_OFF_URL    = f"{LOCAL}/ap/off"
 # Cache for AP status (to draw overlay without spamming the backend)
 _AP_CACHE = {"on": False, "ts": 0.0}
 
-def _ap_poll_cache(period=1.0):
+def _ap_poll_cache(period=30.0):
     """Refresh AP status cache at most once per `period` seconds.
     If the backend is unreachable, keep the last known state.
     """
     now = time.time()
     if now - _AP_CACHE["ts"] < period:
         return _AP_CACHE["on"]
-    j = _http_json(AP_STATUS_URL, timeout=0.8)
+    j = _http_json(AP_STATUS_URL, timeout=0.2)
     if isinstance(j, dict) and "on" in j:
         _AP_CACHE["on"] = bool(j.get("on"))
         _AP_CACHE["ts"] = now
@@ -1195,7 +1195,7 @@ def main():
             # Keep AP cache warm for tiny overlay; do not trigger modal here.
             try:
                 # If backend is up, this updates; if down, it leaves last value so badge won't flap.
-                _ap_poll_cache(period=1.0)
+                #_ap_poll_cache(period=1.0)
             except Exception:
                 pass
 
@@ -1215,7 +1215,7 @@ def main():
         if ui.state == ui.HOME:
             ui.render()
 
-        time.sleep(0.2)
+        time.sleep(0.4)
 
 
 if __name__ == "__main__":
