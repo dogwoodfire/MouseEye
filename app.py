@@ -2115,6 +2115,8 @@ def _sched_fire_start(interval, fps, sess_name=""):
             c.post('/start', data={'interval': interval, 'fps': fps, 'name': sess_name})
 
 def _sched_fire_stop(sess_name="", fps=24, auto_encode=False):
+    # This function runs in a separate thread from a Timer.
+    # We need to ensure the correct Flask app context is available.
     try:
         from flask import current_app
         app = current_app._get_current_object()
@@ -2122,14 +2124,23 @@ def _sched_fire_stop(sess_name="", fps=24, auto_encode=False):
         app = globals().get('app')
     if not app:
         return
+
     with app.app_context():
-        with app.test_client() as c:
-            c.post('/stop')
-            if auto_encode and sess_name:
-                try:
-                    c.post(f'/encode/{sess_name}', data={'fps': fps})
-                except Exception:
-                    pass
+        # Only stop if the scheduled session is the one currently active.
+        # This prevents a delayed timer from stopping a different, manually started session.
+        if _current_session and (not sess_name or _current_session == sess_name):
+            with app.test_client() as c:
+                c.post('/stop') # This will now correctly stop the active session.
+                
+                # After stopping, wait a moment for the state to clear before encoding.
+                time.sleep(1.0) 
+
+                if auto_encode and _current_session:
+                    try:
+                        # Use the session name that was just active.
+                        c.post(f'/encode/{_current_session}', data={'fps': fps})
+                    except Exception:
+                        pass
 
 @app.after_request
 def _no_store_for_diag(resp):
