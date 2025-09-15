@@ -337,12 +337,21 @@ class UI:
         self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display"]
         self._home_items = self.menu_items[:]
 
-        # bind + draw
-        self._draw_center("Booting…")
-        time.sleep(0.2)
-        self._need_home_clear = True
-        self._need_hard_clear = True
-        self.render(force=True)
+        try:
+            # Load and display a custom splash screen image
+            splash_path = "/home/pi/timelapse/splash.png"
+            splash_img = Image.open(splash_path).convert("RGB")
+            # Ensure it's the correct size for the display
+            if splash_img.size != (WIDTH, HEIGHT): #
+                splash_img = splash_img.resize((WIDTH, HEIGHT)) #
+            self._present(splash_img)
+        except Exception:
+            # Fallback to text if the image fails to load
+            self._draw_center("Booting…")
+        
+        # Keep splash visible for a few seconds before loading the full UI
+        time.sleep(3)
+        # --- END of new splash screen code ---
 
     # ---------- panel power helpers ----------
     def _panel_off(self):
