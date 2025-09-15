@@ -422,12 +422,10 @@ def _list_sessions():
     out.sort(key=lambda x: x["name"], reverse=True)
     return out
 
-# ===== Multiple Schedules =====
+# ===== Simplified Scheduler =====
 import uuid
 
-# schedules keyed by id: {"id": {"start_ts":int,"end_ts":int,"interval":int,"fps":int,"sess":str,"auto_encode":bool}}
-_schedules = {}                    # id -> dict (state)
-_sched_timers = {}                 # id -> {"start": Timer|None, "stop": Timer|None}
+_schedules = {}      # id -> dict (state)
 SCHED_FILE = os.path.join(BASE, "schedule.json")
 _sched_lock = threading.Lock()
 
@@ -436,17 +434,15 @@ def _save_sched_state():
         tmp = SCHED_FILE + ".tmp"
         with open(tmp, "w") as f:
             json.dump(_schedules, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, SCHED_FILE)  # atomic swap
+            f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, SCHED_FILE)
     except Exception:
         pass
 
 def _load_sched_state():
     try:
         if os.path.exists(SCHED_FILE):
-            with open(SCHED_FILE, "r") as f:
-                data = json.load(f)
+            with open(SCHED_FILE, "r") as f: data = json.load(f)
             if isinstance(data, dict):
                 _schedules.clear()
                 _schedules.update(data)
@@ -455,135 +451,56 @@ def _load_sched_state():
         pass
     return False
 
-def _cancel_timers_for(sid):
-    t = _sched_timers.get(sid)
-    if not t: return
-    for k in ("start","stop"):
-        try:
-            tm = t.get(k)
-            if tm: tm.cancel()
-        except Exception: pass
-    _sched_timers[sid] = {"start": None, "stop": None}
-
-def _arm_timers_for(sid, st):
-    """Arm start/stop timers for one schedule dict `st`."""
-    _cancel_timers_for(sid)
-
-    now = int(time.time())
-    start_ts   = int(st.get("start_ts", 0))
-    end_ts     = int(st.get("end_ts",   0))
-    interval   = int(st.get("interval", 10))
-    fps        = int(st.get("fps",      24))
-    sess_name  = st.get("sess", "") or ""
-    auto_encode = bool(st.get("auto_encode", False))
-    created_ts  = int(st.get("created_ts", start_ts))
-
-    # If already expired, drop it
-    if end_ts <= now:
+def _scheduler_thread():
+    """A single thread that wakes up periodically to manage all schedules."""
+    while True:
         with _sched_lock:
-            _schedules.pop(sid, None)
-            _save_sched_state()
-        return
+            now = time.time()
+            # Find the next or currently active schedule
+            next_sched = _get_next_schedule()
 
-    # Helper wrappers
-    def _fire_start():
-        if not _idle_now():
-            # retry while within window
-            if int(time.time()) < end_ts:
-                tm = threading.Timer(30, _fire_start)
-                tm.daemon = True
-                _sched_timers[sid]["start"] = tm
-                tm.start()
-            return
-        _sched_fire_start(interval, fps, sess_name)
+            # --- Stop Logic ---
+            # If a capture is running, check if it should be stopped.
+            if _current_session:
+                # If the active capture corresponds to a schedule that should have ended, stop it.
+                if next_sched and next_sched["active_now"] and next_sched["end_ts"] <= now:
+                    print(f"[scheduler] Active schedule '{next_sched['id']}' has ended. Stopping capture.")
+                    session_to_stop = _current_session
+                    stop_timelapse()
+                    if next_sched.get('auto_encode') and session_to_stop:
+                        time.sleep(1.5) # Give stop time to settle
+                        fps = next_sched.get('fps', 24)
+                        print(f"[scheduler] Auto-encoding session {session_to_stop} at {fps}fps")
+                        _encode_q.put((session_to_stop, fps))
 
-    def _fire_stop():
-        _sched_fire_stop(sess_name, fps, auto_encode)
-        _cancel_timers_for(sid)
+            # --- Start Logic ---
+            # If idle and a schedule should be active, start it.
+            elif _idle_now() and next_sched and next_sched["active_now"]:
+                print(f"[scheduler] Schedule '{next_sched['id']}' is active. Starting capture.")
+                # We need the full schedule dict to get all params
+                full_sched_dict = _schedules.get(next_sched['id'], {})
+                interval = full_sched_dict.get('interval', 10)
+                fps = full_sched_dict.get('fps', 24)
+                sess_name = full_sched_dict.get('sess', '')
+                
+                # Start the capture by calling the start() function's logic directly
+                # This avoids using the test_client which can be complex.
+                with app.app_context():
+                    # Set globals and start thread
+                    global _current_session, _capture_thread, _capture_start_ts
+                    _current_session = _safe_name(sess_name or _timestamped_session())
+                    _stop_event.clear()
+                    _capture_start_ts = time.time()
+                    sess_dir = _session_path(_current_session)
+                    os.makedirs(sess_dir, exist_ok=True)
+                    _capture_thread = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
+                    _capture_thread.start()
 
-    if start_ts <= now < end_ts:
-        # Only autostart immediately if this schedule was created recently
-        # (e.g., user just armed it). This prevents “old start-now” tasks
-        # from firing after a reboot.
-        GRACE = 90  # seconds
-        if (now - created_ts) <= GRACE:
-            _fire_start()
-        # Always ensure we stop at end_ts
-        delay_stop = max(0, end_ts - now)
-        tm_stop = threading.Timer(delay_stop, _fire_stop)
-        tm_stop.daemon = True
-        _sched_timers[sid] = {"start": None, "stop": tm_stop}
-        tm_stop.start()
-    else:
-        delay_start = max(0, start_ts - now)
-        delay_stop  = max(0, end_ts   - now)
-        tm_start = threading.Timer(delay_start, _fire_start)
-        tm_stop  = threading.Timer(delay_stop,  _fire_stop)
-        for tm in (tm_start, tm_stop):
-            tm.daemon = True
-        _sched_timers[sid] = {"start": tm_start, "stop": tm_stop}
-        tm_start.start()
-        tm_stop.start()
+        time.sleep(5) # Check schedules every 5 seconds
 
-def _arm_timers_all():
-    for sid, st in list(_schedules.items()):
-        _arm_timers_for(sid, st)
+# Start the single scheduler thread once
+threading.Thread(target=_scheduler_thread, daemon=True).start()
 
-def _arm_timers_from_state():
-    """(Re)arm timers according to _sched_state and current time."""
-    global _sched_start_t, _sched_stop_t
-
-    with _sched_lock:
-        # Cancel any existing timers
-        if _sched_start_t:
-            try: _sched_start_t.cancel()
-            except: pass
-            _sched_start_t = None
-        if _sched_stop_t:
-            try: _sched_stop_t.cancel()
-            except: pass
-            _sched_stop_t = None
-
-        if not _sched_state:
-            return
-
-        now        = int(time.time())
-        start_ts   = int(_sched_state.get("start_ts", 0))
-        end_ts     = int(_sched_state.get("end_ts",   0))
-        interval   = int(_sched_state.get("interval", 10))
-        fps        = int(_sched_state.get("fps",      24))
-        sess_name  = _sched_state.get("sess", "") or ""
-        auto_encode = bool(_sched_state.get("auto_encode", False))
-
-        # If schedule already ended, clear it
-        if end_ts <= now:
-            _sched_state.clear()
-            _save_sched_state()
-            return
-
-        # If we are in the window, start immediately and schedule stop
-        if start_ts <= now < end_ts:
-            _sched_fire_start(interval, fps, sess_name)
-            delay_stop = max(0, end_ts - now)
-            _sched_stop_t = threading.Timer(delay_stop, _sched_fire_stop,
-                                            args=(sess_name, fps, auto_encode))
-            _sched_stop_t.daemon = True
-            _sched_stop_t.start()
-            return
-
-        # Otherwise schedule future start and stop
-        delay_start = max(0, start_ts - now)
-        delay_stop  = max(0, end_ts   - now)
-        _sched_start_t = threading.Timer(delay_start, _sched_fire_start,
-                                         args=(interval, fps, sess_name))
-        _sched_stop_t  = threading.Timer(delay_stop,  _sched_fire_stop,
-                                         args=(sess_name, fps, auto_encode))
-        _sched_start_t.daemon = True
-        _sched_stop_t.daemon  = True
-        _sched_start_t.start()
-        _sched_stop_t.start()
-
-# ---------- Capture thread ----------
 # ---------- Capture thread ----------
 def _capture_loop(sess_dir, interval):
     global _stop_event, _last_frame_ts
