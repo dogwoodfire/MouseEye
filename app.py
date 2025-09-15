@@ -583,58 +583,51 @@ def _arm_timers_from_state():
         _sched_stop_t.start()
 
 # ---------- Capture thread ----------
+# ---------- Capture thread ----------
 def _capture_loop(sess_dir, interval):
     global _stop_event, _last_frame_ts
-    # start from the last existing frame index
-    existing = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
-    i = int(os.path.splitext(os.path.basename(existing[-1]))[0]) if existing else 0
+    
+    # Use rpicam-still's built-in timelapse mode. It's far more efficient.
+    # We name files with a format string that the camera process will use.
+    jpg_pattern = os.path.join(sess_dir, "%06d.jpg")
+    
+    # Timeout for the camera process itself. Set to a very large number (effectively infinite).
+    # We will stop it cleanly using the _stop_event.
+    # A short timeout here is not what we want.
+    total_run_time_ms = 24 * 3600 * 1000 # 24 hours in ms
 
-    timeout_s = max(2, min(5, int(interval)))  # a little more tolerant
+    cmd = [
+        CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)),
+        "-o", jpg_pattern,
+        "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+        "--quality", CAPTURE_QUALITY,
+        "--nopreview",
+        "--timelapse", str(int(interval * 1000)), # interval in milliseconds
+        "-t", str(total_run_time_ms)
+    ]
 
-    while not _stop_event.is_set():
-        target_idx = i + 1
-        jpg = os.path.join(sess_dir, f"{target_idx:06d}.jpg")
-        cmd = [
-            CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", jpg,
-            "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
-            "--quality", CAPTURE_QUALITY,
-            "--immediate", "--nopreview"
-        ]
-        try:
-            subprocess.run(
-                cmd, check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=timeout_s
-            )
-            # only now advance the counter (no gaps)
-            i = target_idx
-            _last_frame_ts = time.time()
+    proc = None
+    try:
+        # Start the camera process once.
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            if GENERATE_THUMBS:
-                thumbs_dir = os.path.join(sess_dir, "thumbs")
-                os.makedirs(thumbs_dir, exist_ok=True)
-                try:
-                    _make_thumb(jpg, os.path.join(thumbs_dir, os.path.basename(jpg)))
-                except Exception:
-                    pass
-
-        except subprocess.TimeoutExpired:
-            # camera stalled — skip quickly; do NOT increment i
-            time.sleep(0.5)
-        except Exception:
-            # transient failure — short backoff; do NOT increment i
-            time.sleep(min(2, interval))
-
-        # sleep between frames but allow early stop
-        sleep_left = float(interval)
-        step = 0.1
-        while sleep_left > 0 and not _stop_event.is_set():
-            # soft watchdog: if no good frame for > 3*interval, break early
-            if _last_frame_ts and (time.time() - _last_frame_ts) > (3 * interval):
+        # Wait for the stop event, polling the process to ensure it's still running.
+        while not _stop_event.wait(timeout=1.0): # More efficient wait
+            if proc.poll() is not None:
+                # Process exited unexpectedly
                 break
-            t = min(step, sleep_left)
-            time.sleep(t)
-            sleep_left -= t
+    
+    finally:
+        # When the loop ends (due to stop_event or process crash),
+        # ensure the camera process is terminated.
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2) # Give it time to shut down
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            except Exception:
+                pass
 
 # ---------- Stop helper (idempotent) ----------
 # def stop_timelapse():
@@ -828,28 +821,33 @@ def _stop_live_proc():
                 pass
         LIVE_PROC = None
 
-def _finalize_stop_background():
-    global _capture_thread, _stop_event, _current_session, _capture_stop_timer, _capture_end_ts
-    try:
-        t = _capture_thread
-        if t and getattr(t, "is_alive", lambda: False)():
-            t.join(timeout=10)
-    except Exception:
-        pass
-    finally:
-        _capture_thread = None
-        _stop_event = threading.Event()
-        _current_session = None
-        if _capture_stop_timer:
-            try: _capture_stop_timer.cancel()
-            except Exception: pass
-            _capture_stop_timer = None
-        _capture_end_ts = None
 
 def stop_timelapse():
-    try: _stop_event.set()
-    except Exception: pass
-    threading.Thread(target=_finalize_stop_background, daemon=True).start()
+    global _stop_event, _capture_thread, _current_session
+    global _capture_stop_timer, _capture_end_ts
+
+    # Signal the capture thread to stop
+    _stop_event.set()
+
+    # Clean up the auto-stop timer if it exists
+    if _capture_stop_timer:
+        try:
+            _capture_stop_timer.cancel()
+        except Exception:
+            pass
+        _capture_stop_timer = None
+
+    # Let the thread join itself. We can wait for it if needed,
+    # but the client-side polling handles the UI update.
+    # A short join here can be a good compromise.
+    if _capture_thread and _capture_thread.is_alive():
+        _capture_thread.join(timeout=5.0)
+
+    # Reset state
+    _capture_thread = None
+    _current_session = None
+    _capture_end_ts = None
+    _stop_event = threading.Event()
 
 @app.route("/stop", methods=["GET","POST"], endpoint="stop_route")
 def stop_route():
@@ -1052,133 +1050,94 @@ def live_debug():
 
 @app.get("/live.mjpg")
 def live_mjpg():
-    def _trace(msg):
-        try:
-            _live_last_stderr.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
-        except Exception:
-            pass
-
+    global LIVE_PROC
+    
     _trace("ENTER /live.mjpg")
 
-    # Only stream when idle, otherwise 503
     if not _idle_now():
         abort(503, "Busy")
 
-    # Per-request process (no globals)
     vid_bin = shutil.which("libcamera-vid") or shutil.which("rpicam-vid")
     if not vid_bin:
         abort(500, "No camera video binary found (libcamera-vid/rpicam-vid).")
 
-    # Optional: free stragglers before starting (safe + fast)
-    _force_release_camera()
+    with LIVE_LOCK:
+        # If the process doesn't exist or has exited, start a new one.
+        if LIVE_PROC is None or LIVE_PROC.poll() is not None:
+            _force_release_camera() # Clean up any stale processes first
 
-    def build_cmd(w, h):
-        base = os.path.basename(vid_bin)
-        rot = _rot_flags_for(vid_bin)
-        if base.startswith("libcamera-"):
-            return [
-                vid_bin, "-n",
-                "--codec", "mjpeg",
-                "--width", str(w), "--height", str(h),
-                "--framerate", "30",
-                *rot,
-                "-t", "0",
-                "-o", "-",
-            ]
-        else:
-            return [
-                vid_bin, "--nopreview",
-                "--codec", "mjpeg",
-                "--width", str(w), "--height", str(h),
-                "--framerate", "30",
-                *rot,
-                "-t", "0",
-                "-o", "-",
-            ]
+            def build_cmd(w, h):
+                base = os.path.basename(vid_bin)
+                rot = _rot_flags_for(vid_bin)
+                if base.startswith("libcamera-"):
+                    return [
+                        vid_bin, "-n", "--codec", "mjpeg", "--width", str(w), "--height", str(h),
+                        "--framerate", "30", *rot, "-t", "0", "-o", "-",
+                    ]
+                else:
+                    return [
+                        vid_bin, "--nopreview", "--codec", "mjpeg", "--width", str(w), "--height", str(h),
+                        "--framerate", "30", *rot, "-t", "0", "-o", "-",
+                    ]
+            
+            cmd = build_cmd(CAPTURE_WIDTH, CAPTURE_HEIGHT)
+            env = dict(os.environ)
+            env.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")
+            
+            _trace("SPAWN single shared camera proc")
+            if not _can_spawn_live(): abort(429)
 
-    # Start the local process
-    cmd = build_cmd(CAPTURE_WIDTH, CAPTURE_HEIGHT)
-    env = dict(os.environ)
-    env.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")
-    env.setdefault("RPI_LOG_LEVEL", "error")
+            LIVE_PROC = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                bufsize=0, env=env
+            )
+            _trace(f"SPAWNED pid={LIVE_PROC.pid}")
 
-    _trace("SPAWN camera proc")
-    if not _can_spawn_live(): abort(429)  # Too Many Requests
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        bufsize=0, env=env, start_new_session=True,
-    )
-    _trace(f"SPAWNED pid={proc.pid}")
-
-    # Drain stderr to avoid blocking; keep last lines for /live_debug
-    def _drain_stderr(p):
-        try:
-            if p.stderr:
-                for raw in iter(lambda: p.stderr.readline(), b""):
-                    try:
-                        line = raw.decode("utf-8", "ignore").strip()
-                    except Exception:
-                        line = ""
-                    if line:
-                        _live_last_stderr.append(line)
-        except Exception:
-            pass
-        finally:
-            try:
-                p.stderr and p.stderr.close()
-            except Exception:
-                pass
-
-    threading.Thread(target=_drain_stderr, args=(proc,), daemon=True).start()
-
-    boundary = b"--frame"
-
-    def cleanup():
-        try:
-            _trace("CLEANUP proc")
-            proc.terminate()
-            try:
-                proc.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=1.0)
-        except Exception:
-            pass
-        try:
-            if proc.stdout:
-                proc.stdout.close()
-        except Exception:
-            pass
+            # Start a thread to drain stderr to prevent the process from blocking
+            def _drain_stderr(p):
+                try:
+                    for line in iter(p.stderr.readline, b''):
+                        if line: _live_last_stderr.append(line.decode('utf-8', 'ignore').strip())
+                except Exception: pass
+            
+            threading.Thread(target=_drain_stderr, args=(LIVE_PROC,), daemon=True).start()
 
     def gen():
         _trace("GEN start")
-        buf = b""
-        # 🚫 remove the text preamble, start with JPEG frames only
+        # This generator reads from the single shared LIVE_PROC stdout
         try:
             while True:
-                if not _idle_now():
+                if not _idle_now() or LIVE_PROC.poll() is not None:
                     break
-                if proc.poll() is not None:
-                    break
-
-                chunk = proc.stdout.read(4096)
-                if not chunk:
-                    break
-
-                buf += chunk
+                
+                # Find JPEG start and end markers (SOI, EOI)
+                # This is more robust for streaming MJPEG
+                soi = LIVE_PROC.stdout.read(2)
+                if soi != b'\xff\xd8':
+                    continue
+                
+                # Find the EOI marker
+                # Read chunks until we find the EOI
+                jpeg_data = soi
                 while True:
-                    soi = buf.find(b"\xff\xd8")
-                    if soi == -1: break
-                    eoi = buf.find(b"\xff\xd9", soi + 2)
-                    if eoi == -1: break
-                    frame = buf[soi:eoi+2]
-                    buf = buf[eoi+2:]
-                    yield (b"--frame\r\n"
-                          b"Content-Type: image/jpeg\r\n"
-                          b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
-                          + frame + b"\r\n")
+                    chunk = LIVE_PROC.stdout.read(1024)
+                    jpeg_data += chunk
+                    eoi_pos = jpeg_data.find(b'\xff\xd9')
+                    if eoi_pos != -1:
+                        frame = jpeg_data[:eoi_pos+2]
+                        # Any data after EOI is part of the next frame, but we discard it
+                        # and resync to the next SOI for simplicity.
+                        break
+                
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n"
+                       b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
+                       + frame + b"\r\n")
         finally:
-            cleanup()
+            _trace("GEN cleanup - client disconnected")
+            # Note: We DO NOT kill the process here.
+            # It stays alive for other clients. It will be killed by _stop_live_proc()
+            # when a timelapse starts or via the /live_kill endpoint.
 
     headers = {
         "Content-Type": "multipart/x-mixed-replace; boundary=frame",

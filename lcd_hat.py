@@ -7,6 +7,8 @@ import os, sys, time, json, threading, subprocess
 from datetime import datetime, timedelta, date
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
+from collections import deque
+import threading # Ensure threading is imported
 
 DEBUG = os.environ.get("DEBUG") == "1"
 def log(*a):
@@ -63,6 +65,29 @@ AP_OFF_URL    = f"{LOCAL}/ap/off"
 
 # Cache for AP status (to draw overlay without spamming the backend)
 _AP_CACHE = {"on": False, "ts": 0.0}
+_STATUS_CACHE = {}
+_STATUS_LOCK = threading.Lock()
+
+def _poll_status_worker():
+    """
+    A daemon thread that polls the backend and updates the shared _STATUS_CACHE.
+    """
+    global _STATUS_CACHE
+    while True:
+        try:
+            status = _http_json(STATUS_URL, timeout=0.8)
+            ap_on = _ap_poll_cache(period=5.0) # Refresh AP status less frequently
+
+            with _STATUS_LOCK:
+                if status: # Only update if poll was successful
+                    _STATUS_CACHE = status
+                _STATUS_CACHE['ap_on'] = ap_on
+
+        except Exception as e:
+            log(f"Poll worker error: {e}")
+        
+        # Poll less frequently to reduce load
+        time.sleep(1.5)
 
 def _ap_poll_cache(period=30.0):
     """Refresh AP status cache at most once per `period` seconds.
@@ -461,7 +486,9 @@ class UI:
 
     # ---------- status ----------
     def _status(self):
-        st = _http_json(STATUS_URL) or {}
+        # This now reads from the non-blocking cache
+        with _STATUS_LOCK:
+            st = _STATUS_CACHE.copy()
         self._last_status = st
         return st
 
@@ -1179,44 +1206,40 @@ class UI:
 # ----------------- main loop -----------------
 def main():
     ui = UI()
-    last_poll = 0.0
+
+    # Start the background polling thread
+    poll_thread = threading.Thread(target=_poll_status_worker, daemon=True)
+    poll_thread.start()
+    
+    # Give the first poll a moment to complete
+    time.sleep(1.0)
+
     while True:
-        now = time.time()
-
-        # Skip drawing while busy / sleeping / modal
-        if ui._screen_off or ui._busy or ui.state == ui.MODAL:
-            time.sleep(0.1)
-            continue
-
-        # Poll backend status and AP cache
-        if (now - last_poll) > 0.5:
-            st = _http_json(STATUS_URL) or {}
-            ui._last_status = st
-            # Keep AP cache warm for tiny overlay; do not trigger modal here.
-            try:
-                # Intentionally disabled to reduce load.
-                pass
-            except Exception:
-                pass
-
-            if st.get("encoding"):
+        # The main loop is now much simpler. It just renders the current state.
+        # It no longer performs any blocking network I/O.
+        if not (ui._screen_off or ui._busy or ui.state == ui.MODAL):
+            st = ui._status()
+            
+            # Logic to switch to/from ENCODING state based on cached status
+            is_encoding = st.get("encoding", False)
+            if is_encoding and ui.state != UI.ENCODING:
                 ui.state = UI.ENCODING
-                ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
-                ui._draw_encoding(ui._spin_idx)
-            else:
-                if ui.state == UI.ENCODING:
-                    ui.state = ui.HOME
-                    ui.menu_idx = 0
-                    ui._request_hard_clear()
-                if ui.state == UI.HOME:
-                    ui._render_home()
-            last_poll = now
+                ui._need_home_clear = True
+            elif not is_encoding and ui.state == UI.ENCODING:
+                ui.state = ui.HOME
+                ui.menu_idx = 0
+                ui._request_hard_clear()
 
-        if ui.state == ui.HOME:
+            # The render method will handle the different states
             ui.render()
+            
+            # Spin the spinner if encoding
+            if ui.state == UI.ENCODING:
+                ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
 
-        time.sleep(0.4)
-
+        # The loop can now sleep for a shorter period for a smoother UI,
+        # as it's no longer doing heavy work.
+        time.sleep(0.25)
 
 if __name__ == "__main__":
     try:
