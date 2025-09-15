@@ -56,6 +56,7 @@ SCHED_DEL_URLS  = [
 ]
 SCHED_LIST_URL  = f"{LOCAL}/schedule/list"   # preferred if available
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"  # legacy fallback
+QR_INFO_URL     = f"{LOCAL}/qr_info"
 
 # AP endpoints (Flask backend should return {"on","name","device","ip","ips":[]})
 AP_STATUS_URL = f"{LOCAL}/ap/status"
@@ -118,6 +119,10 @@ def _save_prefs(p):
             json.dump(p, f)
     except Exception:
         pass
+
+# ----------------- Import for QR code ---------------
+import qrcode
+
 
 # ----------------- Imports for LCD & IO -----------------
 from PIL import Image, ImageDraw, ImageFont
@@ -589,23 +594,51 @@ class UI:
         self.render(force=True)
 
     def _show_connect_url_modal(self, ssid, ip, ips):
-        """Show SSID + IP + full Flask URL until a key is pressed."""
-        # Build message
-        lines = [f"SSID: {ssid or 'Hotspot'}"]
-        if ip:
-            lines += [f"IP: {ip}", f"http://{ip}:5050"]
-        else:
+        """Show SSID, IP, and a scannable QR code until a key is pressed."""
+        # First, determine the IP address to use.
+        connect_ip = ip
+        if not connect_ip:
             # try a fallback hint if ips list exists
             hint = (ips[0] if isinstance(ips, list) and ips else "")
             if hint:
-                lines += [f"IP: {hint}", f"http://{hint}:5050"]
-            else:
-                lines += ["IP: (acquiring…)", "http://<ip>:5050"]
-        lines += ["", "Press any key…"]
+                connect_ip = hint
 
+        # If we have an IP, generate a QR code. Otherwise, show an error.
+        if connect_ip:
+            url = f"http://{connect_ip}:5050"
+
+            # Generate QR code image using the qrcode library
+            qr_img = qrcode.make(url)
+            # Resize it to fit nicely on the 128x128 screen, leaving room for text
+            qr_img = qr_img.resize((96, 96), Image.NEAREST)
+
+            # Create a new blank image to draw on
+            img = self._blank()
+            img.paste(qr_img, (16, 2)) # Paste QR code near the top-center
+
+            # Draw the human-readable text underneath
+            drw = ImageDraw.Draw(img)
+            ssid_text = f"SSID: {ssid or 'Hotspot'}"
+            ip_text = f"IP: {connect_ip}"
+            prompt_text = "Press any key..."
+
+            w_ssid = self._text_w(F_SMALL, ssid_text)
+            w_ip = self._text_w(F_SMALL, ip_text)
+            w_prompt = self._text_w(F_SMALL, prompt_text)
+
+            drw.text(((WIDTH - w_ssid) // 2, 100), ssid_text, font=F_SMALL, fill=WHITE)
+            drw.text(((WIDTH - w_ip) // 2, 110), ip_text, font=F_SMALL, fill=WHITE)
+            drw.text(((WIDTH - w_prompt) // 2, 120), prompt_text, font=F_SMALL, fill=GRAY)
+            
+            self._present(img)
+
+        else:
+            # If no IP is available, just show the text-based error as before
+            lines = [f"SSID: {ssid or 'Not Connected'}", "IP: (unavailable)", "", "Press any key…"]
+            self._draw_center("No Connection", "\n".join(lines))
+
+        # Set the modal state and bind inputs to dismiss the screen
         self.state = self.MODAL
-        self._draw_center("Open in browser", "\n".join(lines))
-        # Bind all inputs to dismiss
         self._bind_modal_inputs(self._modal_ack)
 
     # ---------- logical joystick actions ----------

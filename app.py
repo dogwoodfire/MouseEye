@@ -1992,6 +1992,32 @@ def _sched_http_post(path, data=None, timeout=5):
         return True
     except Exception:
         return False
+    
+
+@app.get("/qr_info")
+def qr_info():
+    """Provides network info for QR code generation."""
+    try:
+        is_ap = ap_is_on() #
+        if is_ap:
+            dev = _ap_active_device() #
+            ssid = _ap_ssid(dev) or HOTSPOT_NAME #
+            ip = _ipv4_for_device(dev) #
+            mode = "AP"
+        else:
+            ssid = _current_wifi_ssid() #
+            ips = _all_ipv4_local() #
+            ip = ips[0] if ips else ""
+            mode = "Wi-Fi"
+        
+        return jsonify({
+            "mode": mode,
+            "ssid": ssid or "Unknown",
+            "ip": ip or "Not Connected",
+            "url": f"http://{ip}:5050" if ip else ""
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 
