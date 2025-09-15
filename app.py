@@ -219,6 +219,7 @@ def _can_spawn_live(period=1.0):
 # --- Encode queue/worker (back-pressure + low priority) ---
 import queue
 _encode_q = queue.Queue()
+_action_q = queue.Queue()
 
 def _start_encode_worker_once():
     if getattr(_start_encode_worker_once, "_started", False):
@@ -452,7 +453,7 @@ def _load_sched_state():
     return False
 
 def _scheduler_thread():
-    """A single thread that wakes up periodically to manage all schedules."""
+    """A single thread that wakes up periodically and puts start/stop actions on a queue."""
     time.sleep(10) # Wait for app to be ready
 
     while True:
@@ -460,39 +461,18 @@ def _scheduler_thread():
             with _sched_lock:
                 now = time.time()
                 next_sched = _get_next_schedule()
-                
-                # --- ADDED DIAGNOSTICS ---
-                is_idle = _idle_now()
                 is_capturing_state = bool(_current_session)
-                next_sched_active = next_sched.get("active_now") if next_sched else False
-                print(f"[scheduler-diag] Check: IsIdle={is_idle}, IsCapturing={is_capturing_state}, NextSchedActive={next_sched_active}")
-                # --- END DIAGNOSTICS ---
 
                 # --- Stop Logic ---
                 if is_capturing_state:
                     if next_sched and next_sched["active_now"] and next_sched["end_ts"] <= now:
-                        session_to_stop = _current_session
-                        print(f"[scheduler] Active schedule '{next_sched['id']}' for session '{session_to_stop}' has ended. Stopping.")
-                        stop_timelapse()
-                        
-                        if next_sched.get('auto_encode') and session_to_stop:
-                            time.sleep(1.5)
-                            fps = next_sched.get('fps', 24)
-                            print(f"[scheduler] Auto-encoding session {session_to_stop} at {fps}fps")
-                            _encode_q.put((session_to_stop, fps))
+                        print(f"[scheduler] Schedule '{next_sched['id']}' has ended. Queueing STOP action.")
+                        _action_q.put(('stop', {'schedule': next_sched}))
 
                 # --- Start Logic ---
-                elif is_idle and next_sched and next_sched_active:
-                    print(f"[scheduler] Conditions met. Starting capture for schedule '{next_sched['id']}'.")
-                    full_sched_dict = _schedules.get(next_sched['id'], {})
-                    interval = full_sched_dict.get('interval', 10)
-                    fps = full_sched_dict.get('fps', 24)
-                    sess_name = full_sched_dict.get('sess', '')
-
-                    with app.app_context():
-                        with app.test_client() as c:
-                            data = {'interval': interval, 'fps': fps, 'name': sess_name}
-                            c.post('/start', data=data)
+                elif _idle_now() and next_sched and next_sched["active_now"]:
+                    print(f"[scheduler] Schedule '{next_sched['id']}' is active. Queueing START action.")
+                    _action_q.put(('start', {'schedule': next_sched}))
         
         except Exception as e:
             print(f"[scheduler] Error in scheduler thread: {e}")
@@ -501,6 +481,66 @@ def _scheduler_thread():
 
 # Start the single scheduler thread once
 threading.Thread(target=_scheduler_thread, daemon=True).start()
+
+def _action_processor_thread():
+    """
+    This thread is the ONLY place that starts or stops captures.
+    It reads commands from _action_q to ensure all actions are serialized and safe.
+    """
+    while True:
+        action, payload = _action_q.get()
+
+        if action == 'start':
+            # This is the core logic from the original /start route
+            if not _idle_now():
+                print("[processor] Ignoring START command, not idle.")
+                continue
+
+            print("[processor] Processing START command.")
+            _stop_live_proc()
+            
+            # Get params either from a schedule or a manual request
+            if 'schedule' in payload:
+                sched = _schedules.get(payload['schedule']['id'], {})
+                interval = sched.get('interval', 10)
+                sess_name = sched.get('sess', '')
+            else: # Manual start
+                interval = payload.get('interval', 10)
+                sess_name = payload.get('name', '')
+                if 'duration_min' in payload:
+                    global _capture_end_ts, _capture_stop_timer
+                    _capture_end_ts = time.time() + payload['duration_min'] * 60
+                    _capture_stop_timer = threading.Timer(payload['duration_min'] * 60, stop_timelapse)
+                    _capture_stop_timer.daemon = True
+                    _capture_stop_timer.start()
+
+            # Set globals and start the capture thread
+            global _current_session, _capture_thread, _capture_start_ts
+            _current_session = _safe_name(sess_name or _timestamped_session())
+            _stop_event.clear()
+            _capture_start_ts = time.time()
+            sess_dir = _session_path(_current_session)
+            os.makedirs(sess_dir, exist_ok=True)
+            _capture_thread = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
+            _capture_thread.start()
+            
+        elif action == 'stop':
+            # This is the core logic from the original /stop route
+            print("[processor] Processing STOP command.")
+            session_to_stop = _current_session
+            stop_timelapse()
+            
+            # Handle auto-encoding for schedules
+            schedule = payload.get('schedule')
+            if schedule and schedule.get('auto_encode') and session_to_stop:
+                time.sleep(1.5)
+                fps = schedule.get('fps', 24)
+                print(f"[processor] Auto-encoding session {session_to_stop} at {fps}fps")
+                _encode_q.put((session_to_stop, fps))
+
+# Start the action processor thread once
+threading.Thread(target=_action_processor_thread, daemon=True).start()
+
 
 # ---------- Capture thread ----------
 def _capture_loop(sess_dir, interval):
@@ -681,90 +721,24 @@ def index():
 
 @app.route("/start", methods=["POST"])
 def start():
-    global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts, _capture_start_ts
-
-    # --- Override logic for active schedules (leave this in) ---
-    now = time.time()
-    with _sched_lock:
-        active_sid_to_cancel = None
-        for sid, sched in _schedules.items():
-            start_ts = sched.get("start_ts", 0)
-            end_ts = sched.get("end_ts", 0)
-            if start_ts <= now < end_ts:
-                active_sid_to_cancel = sid
-                break 
-        
-        if active_sid_to_cancel:
-            print(f"[INFO] Manual start is overriding and cancelling active schedule: {active_sid_to_cancel}")
-            _cancel_schedule_locked(active_sid_to_cancel)
-
-    # Block starting while an encode is active
-    if _any_encoding_active():
+    # This route now just puts a start command on the queue for the processor thread.
+    if not _idle_now():
         return redirect(url_for("index"))
 
-    if _capture_thread and _capture_thread.is_alive():
-        return redirect(url_for("index"))
-
-    # --- read form values ---
-    name = _safe_name(request.form.get("name") or _timestamped_session())
-    try:
-        interval = max(1, int(request.form.get("interval", str(CAPTURE_INTERVAL_SEC))))
-    except Exception:
-        interval = CAPTURE_INTERVAL_SEC
-
-    # --- ADDED DIAGNOSTICS for duration parsing ---
+    interval = int(request.form.get("interval", str(CAPTURE_INTERVAL_SEC)))
+    name = _safe_name(request.form.get("name") or "")
+    
     hr_str = request.form.get("duration_hours", "0") or "0"
     mn_str = request.form.get("duration_minutes", "0") or "0"
-    print(f"[DIAG] Received duration strings: hours='{hr_str}', minutes='{mn_str}'")
-    try: 
-        hr_val = int(hr_str.strip())
-    except Exception: 
-        hr_val = 0
-    try: 
-        mn_val = int(mn_str.strip())
-    except Exception: 
-        mn_val = 0
-    duration_min = hr_val * 60 + mn_val
-    print(f"[DIAG] Calculated duration_min: {duration_min}")
-    # --- END DIAGNOSTICS ---
+    duration_min = int(hr_str) * 60 + int(mn_str)
 
-    # refuse to start if low on disk
-    if not _enough_space(50):
-        abort(507, "Low Storage")
-
-    # --- IMPORTANT: ensure live view isn’t holding the camera ---
-    _stop_live_proc()
-
-    # Set up the session
-    sess_dir = _session_path(name)
-    os.makedirs(sess_dir, exist_ok=True)
-    _current_session = name
-    _stop_event.clear()
-    _capture_start_ts = time.time()
-
-    t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
-    _capture_thread = t
-    t.start()
-
-    # Cancel any pre-existing timer
-    if _capture_stop_timer:
-        try: 
-            _capture_stop_timer.cancel()
-        except Exception: 
-            pass
-        _capture_stop_timer = None
-        _capture_end_ts = None
-
-    # Auto-stop timer with ADDED DIAGNOSTICS
-    if duration_min and duration_min > 0:
-        print(f"[DIAG] TIMER IS BEING SET for {duration_min} minutes!")
-        _capture_end_ts = time.time() + duration_min * 60
-        _capture_stop_timer = threading.Timer(duration_min * 60, stop_timelapse)
-        _capture_stop_timer.daemon = True
-        _capture_stop_timer.start()
-    else:
-        print("[DIAG] Timer condition was false. No timer will be set.")
-
+    payload = {'interval': interval, 'name': name}
+    if duration_min > 0:
+        payload['duration_min'] = duration_min
+    
+    _action_q.put(('start', payload))
+    
+    # Redirect immediately. The UI will update via polling.
     return redirect(url_for("index"))
 
 def _stop_live_proc():
