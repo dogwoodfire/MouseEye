@@ -453,40 +453,42 @@ def _load_sched_state():
 
 def _scheduler_thread():
     """A single thread that wakes up periodically to manage all schedules."""
-    # Wait a few seconds on first startup to allow the Flask app to be fully ready.
-    time.sleep(10)
+    time.sleep(10) # Wait for app to be ready
 
     while True:
         try:
             with _sched_lock:
                 now = time.time()
                 next_sched = _get_next_schedule()
+                
+                # --- ADDED DIAGNOSTICS ---
+                is_idle = _idle_now()
+                is_capturing_state = bool(_current_session)
+                next_sched_active = next_sched.get("active_now") if next_sched else False
+                print(f"[scheduler-diag] Check: IsIdle={is_idle}, IsCapturing={is_capturing_state}, NextSchedActive={next_sched_active}")
+                # --- END DIAGNOSTICS ---
 
                 # --- Stop Logic ---
-                # If a capture is running, check if it should be stopped.
-                if _current_session:
+                if is_capturing_state:
                     if next_sched and next_sched["active_now"] and next_sched["end_ts"] <= now:
                         session_to_stop = _current_session
                         print(f"[scheduler] Active schedule '{next_sched['id']}' for session '{session_to_stop}' has ended. Stopping.")
                         stop_timelapse()
                         
                         if next_sched.get('auto_encode') and session_to_stop:
-                            time.sleep(1.5) # Give stop() time to settle
+                            time.sleep(1.5)
                             fps = next_sched.get('fps', 24)
                             print(f"[scheduler] Auto-encoding session {session_to_stop} at {fps}fps")
                             _encode_q.put((session_to_stop, fps))
 
-                # --- Start Logic (Corrected) ---
-                # If idle and a schedule should be active, start it.
-                elif _idle_now() and next_sched and next_sched["active_now"]:
-                    print(f"[scheduler] Schedule '{next_sched['id']}' is active. Starting capture.")
+                # --- Start Logic ---
+                elif is_idle and next_sched and next_sched_active:
+                    print(f"[scheduler] Conditions met. Starting capture for schedule '{next_sched['id']}'.")
                     full_sched_dict = _schedules.get(next_sched['id'], {})
                     interval = full_sched_dict.get('interval', 10)
                     fps = full_sched_dict.get('fps', 24)
                     sess_name = full_sched_dict.get('sess', '')
 
-                    # Use the app's test_client to safely make an internal POST request to /start.
-                    # This correctly re-uses all the logic and safety checks in your start() route.
                     with app.app_context():
                         with app.test_client() as c:
                             data = {'interval': interval, 'fps': fps, 'name': sess_name}
@@ -495,7 +497,7 @@ def _scheduler_thread():
         except Exception as e:
             print(f"[scheduler] Error in scheduler thread: {e}")
 
-        time.sleep(5) # Check schedules every 5 seconds
+        time.sleep(5)
 
 # Start the single scheduler thread once
 threading.Thread(target=_scheduler_thread, daemon=True).start()
