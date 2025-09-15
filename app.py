@@ -764,29 +764,41 @@ def index():
 def start():
     global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts
 
-    print("[DEBUG] /start route entered.") # Added print
+    # --- NEW: Override logic for active schedules ---
+    # Check if a schedule is currently active. If so, cancel and remove it,
+    # assuming this manual start is meant to override it.
+    now = time.time()
+    with _sched_lock:
+        active_sid_to_cancel = None
+        for sid, sched in _schedules.items():
+            start_ts = sched.get("start_ts", 0)
+            end_ts = sched.get("end_ts", 0)
+            if start_ts <= now < end_ts:
+                active_sid_to_cancel = sid
+                break # Found one, no need to check others
+        
+        if active_sid_to_cancel:
+            print(f"[INFO] Manual start is overriding and cancelling active schedule: {active_sid_to_cancel}")
+            _cancel_schedule_locked(active_sid_to_cancel) #
 
     # Block starting while an encode is active
-    if _any_encoding_active():
-        print("[DEBUG] Start blocked: An encoding job is active.") # Added print
+    if _any_encoding_active(): #
         return redirect(url_for("index"))
 
     if _capture_thread and _capture_thread.is_alive():
-        print("[DEBUG] Start blocked: A capture thread is already alive.") # Added print
         return redirect(url_for("index"))
 
     # --- read form values ---
-    name = _safe_name(request.form.get("name") or _timestamped_session())
-    interval_raw = request.form.get("interval", str(CAPTURE_INTERVAL_SEC))
+    name = _safe_name(request.form.get("name") or _timestamped_session()) #
+    interval_raw = request.form.get("interval", str(CAPTURE_INTERVAL_SEC)) #
     try:
         interval = max(1, int(interval_raw))
     except Exception:
-        interval = CAPTURE_INTERVAL_SEC
+        interval = CAPTURE_INTERVAL_SEC #
 
     # refuse to start if low on disk
-    if not _enough_space(50):
-        print("[DEBUG] Start blocked: Not enough disk space.") # Added print
-        abort(507, "Low Storage")  # Insufficient Storage
+    if not _enough_space(50): #
+        abort(507, "Low Storage")
 
     # optional duration for automatic stop
     hr_str = request.form.get("duration_hours", "0") or "0"
@@ -800,33 +812,29 @@ def start():
         duration_min = None
 
     # --- IMPORTANT: ensure live view isn’t holding the camera ---
-    print("[DEBUG] Stopping live proc...") # Added print
-    _stop_live_proc()
+    _stop_live_proc() #
 
     # Set up the session
-    sess_dir = _session_path(name)
+    sess_dir = _session_path(name) #
     os.makedirs(sess_dir, exist_ok=True)
-    _current_session = name
-    _stop_event.clear()
+    _current_session = name #
+    _stop_event.clear() #
 
-    print("[DEBUG] Creating and starting the capture thread...") # Added print
-    t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
-    _capture_thread = t
+    t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True) #
+    _capture_thread = t #
     t.start()
-    print("[DEBUG] Capture thread started successfully.") # Added print
 
     # Auto-stop timer (if duration provided)
-    if _capture_stop_timer:
+    if _capture_stop_timer: #
         try: _capture_stop_timer.cancel()
         except Exception: pass
-        _capture_stop_timer = None
-        _capture_end_ts = None
+        _capture_stop_timer = None #
+        _capture_end_ts = None #
 
     if duration_min:
-        print(f"[DEBUG] Setting auto-stop timer for {duration_min} minutes.") # Added print
-        _capture_end_ts = time.time() + duration_min * 60
-        _capture_stop_timer = threading.Timer(duration_min * 60, stop_timelapse)
-        _capture_stop_timer.daemon = True
+        _capture_end_ts = time.time() + duration_min * 60 #
+        _capture_stop_timer = threading.Timer(duration_min * 60, stop_timelapse) #
+        _capture_stop_timer.daemon = True #
         _capture_stop_timer.start()
 
     return redirect(url_for("index"))
