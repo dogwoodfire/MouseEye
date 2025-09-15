@@ -831,10 +831,12 @@ def start():
         _capture_stop_timer = None #
         _capture_end_ts = None #
 
-    if duration_min:
-        _capture_end_ts = time.time() + duration_min * 60 #
-        _capture_stop_timer = threading.Timer(duration_min * 60, stop_timelapse) #
-        _capture_stop_timer.daemon = True #
+    # Auto-stop timer (if duration provided)
+    if duration_min and duration_min > 0:
+        print(f"[DEBUG] Setting auto-stop timer for {duration_min} minutes.")
+        _capture_end_ts = time.time() + duration_min * 60
+        _capture_stop_timer = threading.Timer(duration_min * 60, stop_timelapse)
+        _capture_stop_timer.daemon = True
         _capture_stop_timer.start()
 
     return redirect(url_for("index"))
@@ -865,9 +867,7 @@ def stop_timelapse():
             pass
         _capture_stop_timer = None
 
-    # Let the thread join itself. We can wait for it if needed,
-    # but the client-side polling handles the UI update.
-    # A short join here can be a good compromise.
+    # Add a check to ensure the thread exists before trying to join it
     if _capture_thread and _capture_thread.is_alive():
         _capture_thread.join(timeout=5.0)
 
