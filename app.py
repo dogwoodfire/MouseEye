@@ -2112,17 +2112,16 @@ def schedule_arm():
         start_ts = int(time.time()) + 60
     end_ts = start_ts + duration_min * 60
 
-    sid = uuid.uuid4().hex[:8]  # short id
+    sid = uuid.uuid4().hex[:8]
     now_ts = int(time.time())
     with _sched_lock:
         _schedules[sid] = dict(
             start_ts=start_ts, end_ts=end_ts,
             interval=interval, fps=fps,
             sess=sess_name, auto_encode=auto_encode,
-            created_ts=now_ts,          # <-- add this line
+            created_ts=now_ts,
         )
         _save_sched_state()
-        _arm_timers_for(sid, _schedules[sid])
     return redirect(url_for("schedule_page"))
 
 @app.post("/schedule/cancel/<sid>")
