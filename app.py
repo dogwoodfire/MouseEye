@@ -453,48 +453,46 @@ def _load_sched_state():
 
 def _scheduler_thread():
     """A single thread that wakes up periodically to manage all schedules."""
+    # Wait a few seconds on first startup to allow the Flask app to be ready
+    time.sleep(10)
+
     while True:
-        with _sched_lock:
-            now = time.time()
-            # Find the next or currently active schedule
-            next_sched = _get_next_schedule()
+        try:
+            with _sched_lock:
+                now = time.time()
+                # Find the next or currently active schedule
+                next_sched = _get_next_schedule()
 
-            # --- Stop Logic ---
-            # If a capture is running, check if it should be stopped.
-            if _current_session:
-                # If the active capture corresponds to a schedule that should have ended, stop it.
-                if next_sched and next_sched["active_now"] and next_sched["end_ts"] <= now:
-                    print(f"[scheduler] Active schedule '{next_sched['id']}' has ended. Stopping capture.")
-                    session_to_stop = _current_session
-                    stop_timelapse()
-                    if next_sched.get('auto_encode') and session_to_stop:
-                        time.sleep(1.5) # Give stop time to settle
-                        fps = next_sched.get('fps', 24)
-                        print(f"[scheduler] Auto-encoding session {session_to_stop} at {fps}fps")
-                        _encode_q.put((session_to_stop, fps))
+                # --- Stop Logic ---
+                if _current_session:
+                    if next_sched and next_sched["active_now"] and next_sched["end_ts"] <= now:
+                        print(f"[scheduler] Active schedule '{next_sched['id']}' has ended. Stopping capture.")
+                        session_to_stop = _current_session
+                        stop_timelapse()
+                        
+                        if next_sched.get('auto_encode') and session_to_stop:
+                            time.sleep(1.5)
+                            fps = next_sched.get('fps', 24)
+                            print(f"[scheduler] Auto-encoding session {session_to_stop} at {fps}fps")
+                            _encode_q.put((session_to_stop, fps))
 
-            # --- Start Logic ---
-            # If idle and a schedule should be active, start it.
-            elif _idle_now() and next_sched and next_sched["active_now"]:
-                print(f"[scheduler] Schedule '{next_sched['id']}' is active. Starting capture.")
-                # We need the full schedule dict to get all params
-                full_sched_dict = _schedules.get(next_sched['id'], {})
-                interval = full_sched_dict.get('interval', 10)
-                fps = full_sched_dict.get('fps', 24)
-                sess_name = full_sched_dict.get('sess', '')
-                
-                # Start the capture by calling the start() function's logic directly
-                # This avoids using the test_client which can be complex.
-                with app.app_context():
-                    # Set globals and start thread
-                    global _current_session, _capture_thread, _capture_start_ts
-                    _current_session = _safe_name(sess_name or _timestamped_session())
-                    _stop_event.clear()
-                    _capture_start_ts = time.time()
-                    sess_dir = _session_path(_current_session)
-                    os.makedirs(sess_dir, exist_ok=True)
-                    _capture_thread = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
-                    _capture_thread.start()
+                # --- Start Logic (Corrected) ---
+                elif _idle_now() and next_sched and next_sched["active_now"]:
+                    print(f"[scheduler] Schedule '{next_sched['id']}' is active. Starting capture.")
+                    full_sched_dict = _schedules.get(next_sched['id'], {})
+                    interval = full_sched_dict.get('interval', 10)
+                    fps = full_sched_dict.get('fps', 24)
+                    sess_name = full_sched_dict.get('sess', '')
+
+                    # Use the app's test_client to safely make an internal POST request to /start
+                    # This correctly re-uses all the logic and safety checks in your start() route.
+                    with app.app_context():
+                        with app.test_client() as c:
+                            data = {'interval': interval, 'fps': fps, 'name': sess_name}
+                            c.post('/start', data=data)
+        
+        except Exception as e:
+            print(f"[scheduler] Error in scheduler thread: {e}")
 
         time.sleep(5) # Check schedules every 5 seconds
 
