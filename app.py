@@ -764,11 +764,15 @@ def index():
 def start():
     global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts
 
+    print("[DEBUG] /start route entered.") # Added print
+
     # Block starting while an encode is active
     if _any_encoding_active():
+        print("[DEBUG] Start blocked: An encoding job is active.") # Added print
         return redirect(url_for("index"))
 
     if _capture_thread and _capture_thread.is_alive():
+        print("[DEBUG] Start blocked: A capture thread is already alive.") # Added print
         return redirect(url_for("index"))
 
     # --- read form values ---
@@ -781,6 +785,7 @@ def start():
 
     # refuse to start if low on disk
     if not _enough_space(50):
+        print("[DEBUG] Start blocked: Not enough disk space.") # Added print
         abort(507, "Low Storage")  # Insufficient Storage
 
     # optional duration for automatic stop
@@ -795,6 +800,7 @@ def start():
         duration_min = None
 
     # --- IMPORTANT: ensure live view isn’t holding the camera ---
+    print("[DEBUG] Stopping live proc...") # Added print
     _stop_live_proc()
 
     # Set up the session
@@ -803,9 +809,11 @@ def start():
     _current_session = name
     _stop_event.clear()
 
+    print("[DEBUG] Creating and starting the capture thread...") # Added print
     t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
     _capture_thread = t
     t.start()
+    print("[DEBUG] Capture thread started successfully.") # Added print
 
     # Auto-stop timer (if duration provided)
     if _capture_stop_timer:
@@ -815,6 +823,7 @@ def start():
         _capture_end_ts = None
 
     if duration_min:
+        print(f"[DEBUG] Setting auto-stop timer for {duration_min} minutes.") # Added print
         _capture_end_ts = time.time() + duration_min * 60
         _capture_stop_timer = threading.Timer(duration_min * 60, stop_timelapse)
         _capture_stop_timer.daemon = True
