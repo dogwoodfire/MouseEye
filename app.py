@@ -988,44 +988,47 @@ def download(sess):
     if not os.path.exists(p): abort(404)
     return send_file(p, as_attachment=True, download_name=f"{sess}.mp4")
 
+# In app.py, replace the existing lcd_status function with this one.
+
 @app.get("/lcd_status")
 def lcd_status():
     try:
         active = bool(_current_session)
         frames = 0
+        start_ts = None
+        end_ts = None
+
         if active:
+            # If a capture is active, get the frame count
             sd = _session_path(_current_session)
             if os.path.isdir(sd):
                 frames = len(glob.glob(os.path.join(sd, "*.jpg")))
-        
-        start_ts = None
-        end_ts = None
-        
-        nxt = _get_next_schedule() #
-        next_sched = None
-        if nxt:
-            # If a schedule is active, use its timestamps
-            if nxt.get("active_now"):
-                sched_data = _schedules.get(nxt["id"], {})
-                start_ts = sched_data.get("start_ts")
-                end_ts = sched_data.get("end_ts")
 
-            next_sched = { "id": nxt["id"], "start_ts": int(nxt.get("start_ts",0)), "end_ts": int(nxt.get("end_ts",0)) }
-        
-        # If it's a manual capture, use the manual timer timestamps
-        if active and not start_ts:
+            # The actual start time is always recorded in _capture_start_ts
             start_ts = _capture_start_ts
-            end_ts = _capture_end_ts
+
+            # Now determine the end time. Check for an active schedule first.
+            nxt = _get_next_schedule()
+            if nxt and nxt.get("active_now"):
+                # It's a scheduled capture, get the end time from the schedule
+                sched_data = _schedules.get(nxt["id"], {})
+                end_ts = sched_data.get("end_ts")
+            else:
+                # It must be a manual capture, get the end time from the timer
+                end_ts = _capture_end_ts
+        
+        # Get next schedule info for the main screen, regardless of active state
+        next_sched_info = _get_next_schedule()
 
         return jsonify({
             "active": active,
             "session": _current_session or "",
             "frames": frames,
-            "start_ts": start_ts,         # null if not set
-            "end_ts": end_ts,             # null if not set
+            "start_ts": start_ts,
+            "end_ts": end_ts,
             "encoding": _any_encoding_active(),
             "disk": _disk_stats(),
-            "next_sched": next_sched,
+            "next_sched": next_sched_info,
             "live_idle": _idle_now(),
         })
     except Exception:
