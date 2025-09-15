@@ -1809,9 +1809,12 @@ _sched_stop_t  = None   # handle to the scheduled stop timer
 def _get_next_schedule():
     """Return a dict for the next (or currently active) schedule, or None."""
     now = int(time.time())
-    # only schedules that haven't ended yet
+    
+    # Only consider schedules that haven't ended more than 60 seconds ago.
+    # This grace period gives the stop logic a chance to fire.
     upcoming = [(sid, st) for sid, st in _schedules.items()
-                if int(st.get("end_ts", 0)) > now]
+                if int(st.get("end_ts", 0)) > now - 60]
+    
     if not upcoming:
         return None
 
