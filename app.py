@@ -496,7 +496,12 @@ def _action_processor_thread():
     This thread is the ONLY place that starts or stops captures.
     It reads commands from _action_q to ensure all actions are serialized and safe.
     """
-    global _active_schedule_id # <-- Add this to globals
+    # --- THIS IS THE FIX ---
+    # All global variables that are assigned to in this function MUST be declared at the top.
+    global _active_schedule_id, _capture_end_ts, _capture_stop_timer
+    global _current_session, _capture_thread, _capture_start_ts
+    # --- END OF FIX ---
+
     while True:
         action, payload = _action_q.get()
 
@@ -508,25 +513,23 @@ def _action_processor_thread():
             print("[processor] Processing START command.")
             _stop_live_proc()
             
-            # If the start command came from a schedule, record its ID
+            # Get params either from a schedule or a manual request
             if 'schedule' in payload:
                 sched = _schedules.get(payload['schedule']['id'], {})
                 interval = sched.get('interval', 10)
                 sess_name = sched.get('sess', '')
-                _active_schedule_id = payload['schedule']['id'] # <--- SET the tracking ID
+                _active_schedule_id = payload['schedule']['id']
             else: # Manual start
                 interval = payload.get('interval', 10)
                 sess_name = payload.get('name', '')
-                _active_schedule_id = None # <--- CLEAR the tracking ID for manual starts
+                _active_schedule_id = None
                 if 'duration_min' in payload:
-                    global _capture_end_ts, _capture_stop_timer
                     _capture_end_ts = time.time() + payload['duration_min'] * 60
                     _capture_stop_timer = threading.Timer(payload['duration_min'] * 60, stop_timelapse)
                     _capture_stop_timer.daemon = True
                     _capture_stop_timer.start()
 
             # Set globals and start the capture thread
-            global _current_session, _capture_thread, _capture_start_ts
             _current_session = _safe_name(sess_name or _timestamped_session())
             _stop_event.clear()
             _capture_start_ts = time.time()
@@ -541,7 +544,7 @@ def _action_processor_thread():
             schedule_that_stopped = _schedules.get(_active_schedule_id) if _active_schedule_id else None
             
             stop_timelapse()
-            _active_schedule_id = None # <--- CLEAR the tracking ID when any capture stops
+            _active_schedule_id = None
 
             # Handle auto-encoding for schedules
             if schedule_that_stopped and schedule_that_stopped.get('auto_encode') and session_to_stop:
@@ -549,6 +552,7 @@ def _action_processor_thread():
                 fps = schedule_that_stopped.get('fps', 24)
                 print(f"[processor] Auto-encoding session {session_to_stop} at {fps}fps")
                 _encode_q.put((session_to_stop, fps))
+
 
 # Start the action processor thread once
 threading.Thread(target=_action_processor_thread, daemon=True).start()
