@@ -597,7 +597,7 @@ def _capture_loop(sess_dir, interval):
         "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
         "--quality", CAPTURE_QUALITY,
         "--nopreview",
-        "--immediate",  # Added this flag back from your original code
+        # "--immediate",  # Added this flag back from your original code
         "--timelapse", str(int(interval * 1000)),
         "-t", str(total_run_time_ms)
     ]
