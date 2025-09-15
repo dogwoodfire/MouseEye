@@ -283,7 +283,7 @@ class UI:
     # States
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
     SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
-    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL = range(18)
+    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING = range(20)
 
     def __init__(self):
         # prefs
@@ -505,7 +505,58 @@ class UI:
             st = _STATUS_CACHE.copy()
         self._last_status = st
         return st
+    
+    # ------- Capturing Screen ------
+    def _draw_capturing_screen(self):
+        """Draws the active timelapse status screen."""
+        st = self._status()
+        if not st: return
 
+        img = self._blank()
+        drw = ImageDraw.Draw(img)
+
+        # 1. Get data from status
+        frames = st.get("frames", 0)
+        start_ts = st.get("start_ts")
+        end_ts = st.get("end_ts")
+
+        # 2. Calculate progress and remaining time
+        time_left_str = ""
+        progress_pct = 0
+        if start_ts and end_ts:
+            now = time.time()
+            total_duration = end_ts - start_ts
+            elapsed = now - start_ts
+            progress_pct = min(1.0, elapsed / total_duration) if total_duration > 0 else 0
+            
+            remaining_sec = int(end_ts - now)
+            if remaining_sec > 0:
+                mins, secs = divmod(remaining_sec, 60)
+                time_left_str = f"{mins}m {secs:02d}s left"
+
+        # 3. Draw UI elements
+        drw.text((2, 2), "Capturing...", font=F_TITLE, fill=WHITE)
+        drw.text((2, 20), f"Frames: {frames}", font=F_TEXT, fill=WHITE)
+        if time_left_str:
+            drw.text((2, 34), time_left_str, font=F_TEXT, fill=WHITE)
+        
+        # Draw Progress Bar
+        if progress_pct > 0:
+            bar_y = 52
+            bar_width = int((WIDTH - 4) * progress_pct)
+            drw.rectangle((2, bar_y, WIDTH - 2, bar_y + 8), outline=GRAY, fill=None)
+            drw.rectangle((2, bar_y, 2 + bar_width, bar_y + 8), outline=None, fill=GREEN)
+
+        # 4. Draw Menu Options
+        options = ["Screen off", "Stop Timelapse"]
+        y = 80
+        for i, opt in enumerate(options):
+            fill = BLUE if i == self.menu_idx else WHITE
+            prefix = "> " if i == self.menu_idx else "  "
+            drw.text((10, y), prefix + opt, font=F_TEXT, fill=fill)
+            y += 16
+            
+        self._present(img)
     # ---------- wake wrapper ----------
     def _wrap_wake(self, fn):
         def inner():
@@ -665,6 +716,9 @@ class UI:
     def _logical_up(self):
         if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.nav(-1)
+        elif self.state == self.CAPTURING:
+            self.menu_idx = (self.menu_idx - 1 + 2) % 2
+            self.render()
         elif self.state == self.SCH_DATE:
             self.sch_date = self.sch_date + timedelta(days=1); self.render()
         else:
@@ -672,6 +726,9 @@ class UI:
     def _logical_down(self):
         if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
             self.nav(+1)
+        elif self.state == self.CAPTURING:
+            self.menu_idx = (self.menu_idx + 1) % 2
+            self.render()
         elif self.state == self.SCH_DATE:
             self.sch_date = self.sch_date - timedelta(days=1); self.render()
         else:
@@ -766,7 +823,14 @@ class UI:
     def ok(self):
         if self._busy or self._screen_off or self.state == self.ENCODING or self.state == self.MODAL:
             return
-
+        
+        if self.state == self.CAPTURING:
+            if self.menu_idx == 0: # Screen off
+                self._draw_center_sleep_then_off()
+            elif self.menu_idx == 1: # Stop Timelapse
+                self.stop_capture()
+            return
+        
         if self.state == self.HOME:
             items = getattr(self, "_home_items", self.menu_items)
             sel = items[self.menu_idx] if items else None
@@ -1173,6 +1237,9 @@ class UI:
         if self._screen_off or self._busy or self.state == self.MODAL:
             return
         try:
+            if self.state == self.CAPTURING:
+                self._draw_capturing_screen()
+                return
             if self.state == self.ENCODING:
                 self._draw_encoding(self._spin_idx); return
 
@@ -1264,35 +1331,40 @@ def main():
     poll_thread = threading.Thread(target=_poll_status_worker, daemon=True)
     poll_thread.start()
     
-    # Give the first poll a moment to complete
-    time.sleep(1.0)
+    time.sleep(1.0) # Give first poll time to complete
 
     while True:
-        # The main loop is now much simpler. It just renders the current state.
-        # It no longer performs any blocking network I/O.
-        if not (ui._screen_off or ui._busy or ui.state == ui.MODAL):
-            st = ui._status()
-            
-            # Logic to switch to/from ENCODING state based on cached status
-            is_encoding = st.get("encoding", False)
-            if is_encoding and ui.state != UI.ENCODING:
+        if ui._screen_off or ui._busy or ui.state == ui.MODAL:
+            time.sleep(0.1)
+            continue
+
+        st = ui._status() # Get latest status from cache
+        is_active = st.get("active", False)
+        is_encoding = st.get("encoding", False)
+
+        # --- Automatic State Machine ---
+        if is_encoding:
+            if ui.state != UI.ENCODING:
                 ui.state = UI.ENCODING
-                ui._need_home_clear = True
-            elif not is_encoding and ui.state == UI.ENCODING:
-                ui.state = ui.HOME
-                ui.menu_idx = 0
-                ui._request_hard_clear()
+        elif is_active:
+            if ui.state != UI.CAPTURING:
+                ui.state = UI.CAPTURING
+                ui.menu_idx = 0 # Reset menu for the new screen
+        elif ui.state in (UI.CAPTURING, UI.ENCODING):
+             # If we were capturing or encoding, and now we are not, go home
+             ui.state = UI.HOME
+             ui.menu_idx = 0
+        # --- End of State Machine ---
+        
+        # Render the current state
+        ui.render()
+        
+        # Spin the spinner if encoding
+        if ui.state == UI.ENCODING:
+            ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
 
-            # The render method will handle the different states
-            ui.render()
-            
-            # Spin the spinner if encoding
-            if ui.state == UI.ENCODING:
-                ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
-
-        # The loop can now sleep for a shorter period for a smoother UI,
-        # as it's no longer doing heavy work.
-        time.sleep(0.25)
+        # Update screen at a regular interval
+        time.sleep(1.0)
 
 if __name__ == "__main__":
     try:

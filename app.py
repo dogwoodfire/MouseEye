@@ -315,6 +315,7 @@ def _warmup_camera():
 # Globals for timed captures
 _capture_stop_timer = None
 _capture_end_ts     = None
+_capture_start_ts   = None 
 
 # ---------- Session status API ----------
 # This endpoint returns whether the session is active, the number of frames
@@ -762,7 +763,7 @@ def index():
 
 @app.route("/start", methods=["POST"])
 def start():
-    global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts
+    global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts, _capture_start_ts
 
     # --- Override logic for active schedules (leave this in) ---
     now = time.time()
@@ -821,6 +822,7 @@ def start():
     os.makedirs(sess_dir, exist_ok=True)
     _current_session = name
     _stop_event.clear()
+    _capture_start_ts = time.time()
 
     t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
     _capture_thread = t
@@ -860,7 +862,7 @@ def _stop_live_proc():
 
 def stop_timelapse():
     global _stop_event, _capture_thread, _current_session
-    global _capture_stop_timer, _capture_end_ts
+    global _capture_stop_timer, _capture_end_ts, _capture_start_ts
 
     # Signal the capture thread to stop
     _stop_event.set()
@@ -881,6 +883,7 @@ def stop_timelapse():
     _capture_thread = None
     _current_session = None
     _capture_end_ts = None
+    _capture_start_ts = None
     _stop_event = threading.Event()
 
 @app.route("/stop", methods=["GET","POST"], endpoint="stop_route")
@@ -990,38 +993,36 @@ def lcd_status():
     try:
         active = bool(_current_session)
         frames = 0
-        if _current_session:
+        if active:
             sd = _session_path(_current_session)
             if os.path.isdir(sd):
                 frames = len(glob.glob(os.path.join(sd, "*.jpg")))
-        remaining = None
-        if active and _capture_end_ts:
-            rem = int(_capture_end_ts - time.time())
-            if rem > 0: remaining = rem
-
-        nxt = _get_next_schedule()
+        
+        start_ts = None
+        end_ts = None
+        
+        nxt = _get_next_schedule() #
         next_sched = None
         if nxt:
-            # keep it small & machine-friendly
-            # (use timestamps so the HAT can render human text itself)
-            # you already compute active_now; keep it.
-            # include id so a future LCD menu could cancel by id if wanted.
-            next_sched = {
-                "id": nxt["id"],
-                "start_ts": int(_schedules[nxt["id"]]["start_ts"]) if nxt["id"] in _schedules else None,
-                "end_ts":   int(_schedules[nxt["id"]]["end_ts"])   if nxt["id"] in _schedules else None,
-                "interval": nxt["interval"],
-                "fps": nxt["fps"],
-                "name": nxt.get("sess"),
-                "active_now": bool(nxt["active_now"]),
-                "auto_encode": bool(nxt["auto_encode"]),
-            }
+            # If a schedule is active, use its timestamps
+            if nxt.get("active_now"):
+                sched_data = _schedules.get(nxt["id"], {})
+                start_ts = sched_data.get("start_ts")
+                end_ts = sched_data.get("end_ts")
+
+            next_sched = { "id": nxt["id"], "start_ts": int(nxt.get("start_ts",0)), "end_ts": int(nxt.get("end_ts",0)) }
+        
+        # If it's a manual capture, use the manual timer timestamps
+        if active and not start_ts:
+            start_ts = _capture_start_ts
+            end_ts = _capture_end_ts
 
         return jsonify({
             "active": active,
             "session": _current_session or "",
             "frames": frames,
-            "remaining_sec": remaining,     # null if not set
+            "start_ts": start_ts,         # null if not set
+            "end_ts": end_ts,             # null if not set
             "encoding": _any_encoding_active(),
             "disk": _disk_stats(),
             "next_sched": next_sched,
@@ -1031,7 +1032,7 @@ def lcd_status():
         # never crash the LCD
         return jsonify({
             "active": False, "session": "", "frames": 0,
-            "remaining_sec": None, "encoding": False,
+            "start_ts": None, "end_ts": None, "encoding": False,
             "disk": _disk_stats(), "next_sched": None, "live_idle": True
         })
 
