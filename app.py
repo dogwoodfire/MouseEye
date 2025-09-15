@@ -883,9 +883,8 @@ def encode(sess):
 @app.post("/schedule/cancel")
 def schedule_cancel_compat():
     with _sched_lock:
-        ids = list(_schedules.keys())
-        for sid in ids:
-            _cancel_schedule_locked(sid)
+        _schedules.clear()  # Simply clear the entire dictionary
+        _save_sched_state()
     return redirect(url_for("schedule_page"))
 
 @app.get("/jobs")
@@ -2127,7 +2126,6 @@ def schedule_arm():
 @app.post("/schedule/cancel/<sid>")
 def schedule_cancel_id(sid):
     with _sched_lock:
-        _cancel_timers_for(sid)
         _schedules.pop(sid, None)
         _save_sched_state()
     return redirect(url_for("schedule_page"))
