@@ -2115,32 +2115,31 @@ def _sched_fire_start(interval, fps, sess_name=""):
             c.post('/start', data={'interval': interval, 'fps': fps, 'name': sess_name})
 
 def _sched_fire_stop(sess_name="", fps=24, auto_encode=False):
-    # This function runs in a separate thread from a Timer.
-    # We need to ensure the correct Flask app context is available.
-    try:
-        from flask import current_app
-        app = current_app._get_current_object()
-    except Exception:
-        app = globals().get('app')
-    if not app:
+    # This function runs in a background timer thread.
+    # It's more reliable to call our app's functions directly
+    # than to simulate HTTP requests.
+
+    # First, get the name of the session that is currently running.
+    session_to_stop = _current_session
+
+    # Only proceed if there is an active session.
+    if not session_to_stop:
         return
 
-    with app.app_context():
-        # Only stop if the scheduled session is the one currently active.
-        # This prevents a delayed timer from stopping a different, manually started session.
-        if _current_session and (not sess_name or _current_session == sess_name):
-            with app.test_client() as c:
-                c.post('/stop') # This will now correctly stop the active session.
-                
-                # After stopping, wait a moment for the state to clear before encoding.
-                time.sleep(1.0) 
+    # Now, stop the timelapse.
+    stop_timelapse()
 
-                if auto_encode and _current_session:
-                    try:
-                        # Use the session name that was just active.
-                        c.post(f'/encode/{_current_session}', data={'fps': fps})
-                    except Exception:
-                        pass
+    # Wait a moment for the stop to fully process.
+    time.sleep(1.5)
+
+    # If auto-encode is enabled for this schedule, queue the job.
+    if auto_encode:
+        # Check if the session that was stopped is the one we expected
+        # or if a session name was passed from the schedule.
+        session_to_encode = session_to_stop or sess_name
+        if session_to_encode:
+            print(f"[schedule] Auto-encoding session {session_to_encode} at {fps}fps")
+            _encode_q.put((session_to_encode, fps))
 
 @app.after_request
 def _no_store_for_diag(resp):
