@@ -607,28 +607,39 @@ class UI:
         if connect_ip:
             url = f"http://{connect_ip}:5050"
 
-            # Generate QR code image using the qrcode library
-            qr_img = qrcode.make(url)
-            # Resize it to fit nicely on the 128x128 screen, leaving room for text
+            # 1. Create a QRCode object with a smaller border (default is 4)
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=2, # <-- Reduced border
+            )
+            qr.add_data(url)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="black", back_color="white")
+            
+            # Resize it to fit nicely on the 128x128 screen
             qr_img = qr_img.resize((96, 96), Image.NEAREST)
 
             # Create a new blank image to draw on
             img = self._blank()
-            img.paste(qr_img, (16, 2)) # Paste QR code near the top-center
+            img.paste(qr_img, (16, 0)) # Paste QR code at the very top
 
             # Draw the human-readable text underneath
             drw = ImageDraw.Draw(img)
             ssid_text = f"SSID: {ssid or 'Hotspot'}"
-            ip_text = f"IP: {connect_ip}"
+            # 2. Add the port number to the displayed IP address
+            ip_text = f"IP: {connect_ip}:5050"
             prompt_text = "Press any key..."
 
             w_ssid = self._text_w(F_SMALL, ssid_text)
             w_ip = self._text_w(F_SMALL, ip_text)
             w_prompt = self._text_w(F_SMALL, prompt_text)
 
-            drw.text(((WIDTH - w_ssid) // 2, 100), ssid_text, font=F_SMALL, fill=WHITE)
-            drw.text(((WIDTH - w_ip) // 2, 110), ip_text, font=F_SMALL, fill=WHITE)
-            drw.text(((WIDTH - w_prompt) // 2, 120), prompt_text, font=F_SMALL, fill=GRAY)
+            # 3. Adjust Y-coordinates to move text up slightly
+            drw.text(((WIDTH - w_ssid) // 2, 98), ssid_text, font=F_SMALL, fill=WHITE)
+            drw.text(((WIDTH - w_ip) // 2, 108), ip_text, font=F_SMALL, fill=WHITE)
+            drw.text(((WIDTH - w_prompt) // 2, 118), prompt_text, font=F_SMALL, fill=GRAY)
             
             self._present(img)
 
