@@ -588,12 +588,7 @@ def _capture_loop(sess_dir, interval):
     global _stop_event, _last_frame_ts
     
     # Use rpicam-still's built-in timelapse mode. It's far more efficient.
-    # We name files with a format string that the camera process will use.
     jpg_pattern = os.path.join(sess_dir, "%06d.jpg")
-    
-    # Timeout for the camera process itself. Set to a very large number (effectively infinite).
-    # We will stop it cleanly using the _stop_event.
-    # A short timeout here is not what we want.
     total_run_time_ms = 24 * 3600 * 1000 # 24 hours in ms
 
     cmd = [
@@ -602,32 +597,48 @@ def _capture_loop(sess_dir, interval):
         "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
         "--quality", CAPTURE_QUALITY,
         "--nopreview",
-        "--timelapse", str(int(interval * 1000)), # interval in milliseconds
+        "--immediate",  # Added this flag back from your original code
+        "--timelapse", str(int(interval * 1000)),
         "-t", str(total_run_time_ms)
     ]
 
     proc = None
-    try:
-        # Start the camera process once.
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    log_path = os.path.join(BASE, "timelapse_capture.log") # Log file path
 
-        # Wait for the stop event, polling the process to ensure it's still running.
-        while not _stop_event.wait(timeout=1.0): # More efficient wait
-            if proc.poll() is not None:
-                # Process exited unexpectedly
-                break
+    try:
+        # Open a log file to capture errors from the camera process
+        with open(log_path, "w") as log_file:
+            log_file.write(f"Starting capture at {datetime.now()}\n")
+            log_file.write(f"Command: {' '.join(cmd)}\n\n")
+            log_file.flush()
+
+            # Start the camera process, redirecting stderr to our log file
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_file)
+
+            # Wait for the stop event, polling the process to ensure it's still running.
+            while not _stop_event.wait(timeout=1.0):
+                if proc.poll() is not None:
+                    # Process exited unexpectedly. The error should be in the log.
+                    log_file.write(f"\nProcess exited unexpectedly with code: {proc.returncode}\n")
+                    break
     
+    except Exception as e:
+        # Log any Python-level errors that occur before or during Popen
+        with open(log_path, "a") as log_file:
+            log_file.write(f"\nAn error occurred in the capture thread: {e}\n")
+
     finally:
-        # When the loop ends (due to stop_event or process crash),
-        # ensure the camera process is terminated.
         if proc and proc.poll() is None:
             try:
                 proc.terminate()
-                proc.wait(timeout=2) # Give it time to shut down
+                proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 proc.kill()
             except Exception:
                 pass
+        
+        with open(log_path, "a") as log_file:
+            log_file.write(f"Capture loop finished at {datetime.now()}\n")
 
 # ---------- Stop helper (idempotent) ----------
 # def stop_timelapse():
