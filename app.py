@@ -764,9 +764,7 @@ def index():
 def start():
     global _current_session, _capture_thread, _capture_stop_timer, _capture_end_ts
 
-    # --- NEW: Override logic for active schedules ---
-    # Check if a schedule is currently active. If so, cancel and remove it,
-    # assuming this manual start is meant to override it.
+    # --- Override logic for active schedules (leave this in) ---
     now = time.time()
     with _sched_lock:
         active_sid_to_cancel = None
@@ -775,69 +773,77 @@ def start():
             end_ts = sched.get("end_ts", 0)
             if start_ts <= now < end_ts:
                 active_sid_to_cancel = sid
-                break # Found one, no need to check others
+                break 
         
         if active_sid_to_cancel:
             print(f"[INFO] Manual start is overriding and cancelling active schedule: {active_sid_to_cancel}")
-            _cancel_schedule_locked(active_sid_to_cancel) #
+            _cancel_schedule_locked(active_sid_to_cancel)
 
     # Block starting while an encode is active
-    if _any_encoding_active(): #
+    if _any_encoding_active():
         return redirect(url_for("index"))
 
     if _capture_thread and _capture_thread.is_alive():
         return redirect(url_for("index"))
 
     # --- read form values ---
-    name = _safe_name(request.form.get("name") or _timestamped_session()) #
-    interval_raw = request.form.get("interval", str(CAPTURE_INTERVAL_SEC)) #
+    name = _safe_name(request.form.get("name") or _timestamped_session())
     try:
-        interval = max(1, int(interval_raw))
+        interval = max(1, int(request.form.get("interval", str(CAPTURE_INTERVAL_SEC))))
     except Exception:
-        interval = CAPTURE_INTERVAL_SEC #
+        interval = CAPTURE_INTERVAL_SEC
 
-    # refuse to start if low on disk
-    if not _enough_space(50): #
-        abort(507, "Low Storage")
-
-    # optional duration for automatic stop
+    # --- ADDED DIAGNOSTICS for duration parsing ---
     hr_str = request.form.get("duration_hours", "0") or "0"
     mn_str = request.form.get("duration_minutes", "0") or "0"
-    try: hr_val = int(hr_str.strip())
-    except Exception: hr_val = 0
-    try: mn_val = int(mn_str.strip())
-    except Exception: mn_val = 0
+    print(f"[DIAG] Received duration strings: hours='{hr_str}', minutes='{mn_str}'")
+    try: 
+        hr_val = int(hr_str.strip())
+    except Exception: 
+        hr_val = 0
+    try: 
+        mn_val = int(mn_str.strip())
+    except Exception: 
+        mn_val = 0
     duration_min = hr_val * 60 + mn_val
-    if duration_min <= 0:
-        duration_min = None
+    print(f"[DIAG] Calculated duration_min: {duration_min}")
+    # --- END DIAGNOSTICS ---
+
+    # refuse to start if low on disk
+    if not _enough_space(50):
+        abort(507, "Low Storage")
 
     # --- IMPORTANT: ensure live view isn’t holding the camera ---
-    _stop_live_proc() #
+    _stop_live_proc()
 
     # Set up the session
-    sess_dir = _session_path(name) #
+    sess_dir = _session_path(name)
     os.makedirs(sess_dir, exist_ok=True)
-    _current_session = name #
-    _stop_event.clear() #
+    _current_session = name
+    _stop_event.clear()
 
-    t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True) #
-    _capture_thread = t #
+    t = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
+    _capture_thread = t
     t.start()
 
-    # Auto-stop timer (if duration provided)
-    if _capture_stop_timer: #
-        try: _capture_stop_timer.cancel()
-        except Exception: pass
-        _capture_stop_timer = None #
-        _capture_end_ts = None #
+    # Cancel any pre-existing timer
+    if _capture_stop_timer:
+        try: 
+            _capture_stop_timer.cancel()
+        except Exception: 
+            pass
+        _capture_stop_timer = None
+        _capture_end_ts = None
 
-    # Auto-stop timer (if duration provided)
+    # Auto-stop timer with ADDED DIAGNOSTICS
     if duration_min and duration_min > 0:
-        print(f"[DEBUG] Setting auto-stop timer for {duration_min} minutes.")
+        print(f"[DIAG] TIMER IS BEING SET for {duration_min} minutes!")
         _capture_end_ts = time.time() + duration_min * 60
         _capture_stop_timer = threading.Timer(duration_min * 60, stop_timelapse)
         _capture_stop_timer.daemon = True
         _capture_stop_timer.start()
+    else:
+        print("[DIAG] Timer condition was false. No timer will be set.")
 
     return redirect(url_for("index"))
 
