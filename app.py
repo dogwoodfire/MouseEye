@@ -317,6 +317,7 @@ def _warmup_camera():
 _capture_stop_timer = None
 _capture_end_ts     = None
 _capture_start_ts   = None 
+_active_schedule_id = None
 
 # ---------- Session status API ----------
 # This endpoint returns whether the session is active, the number of frames
@@ -453,26 +454,34 @@ def _load_sched_state():
     return False
 
 def _scheduler_thread():
-    """A single thread that wakes up periodically and puts start/stop actions on a queue."""
-    time.sleep(10) # Wait for app to be ready
+    """A single thread that wakes up periodically to manage all schedules."""
+    time.sleep(10)
 
     while True:
         try:
             with _sched_lock:
                 now = time.time()
-                next_sched = _get_next_schedule()
-                is_capturing_state = bool(_current_session)
-
-                # --- Stop Logic ---
-                if is_capturing_state:
-                    if next_sched and next_sched["active_now"] and next_sched["end_ts"] <= now:
-                        print(f"[scheduler] Schedule '{next_sched['id']}' has ended. Queueing STOP action.")
-                        _action_q.put(('stop', {'schedule': next_sched}))
+                
+                # --- Stop Logic (now using the tracking variable) ---
+                if _current_session and _active_schedule_id:
+                    active_schedule = _schedules.get(_active_schedule_id)
+                    if active_schedule and active_schedule.get("end_ts", 0) <= now:
+                        print(f"[scheduler] Active schedule '{_active_schedule_id}' has ended. Queueing STOP action.")
+                        _action_q.put(('stop', {})) # Just send a simple stop command
 
                 # --- Start Logic ---
-                elif _idle_now() and next_sched and next_sched["active_now"]:
-                    print(f"[scheduler] Schedule '{next_sched['id']}' is active. Queueing START action.")
-                    _action_q.put(('start', {'schedule': next_sched}))
+                elif _idle_now():
+                    # Find a schedule that should be active now
+                    schedule_to_start = None
+                    for sid, sched_data in _schedules.items():
+                        if sched_data.get("start_ts", 0) <= now < sched_data.get("end_ts", 0):
+                            schedule_to_start = sched_data
+                            schedule_to_start['id'] = sid
+                            break
+                    
+                    if schedule_to_start:
+                        print(f"[scheduler] Schedule '{schedule_to_start['id']}' is active. Queueing START action.")
+                        _action_q.put(('start', {'schedule': schedule_to_start}))
         
         except Exception as e:
             print(f"[scheduler] Error in scheduler thread: {e}")
@@ -487,11 +496,11 @@ def _action_processor_thread():
     This thread is the ONLY place that starts or stops captures.
     It reads commands from _action_q to ensure all actions are serialized and safe.
     """
+    global _active_schedule_id # <-- Add this to globals
     while True:
         action, payload = _action_q.get()
 
         if action == 'start':
-            # This is the core logic from the original /start route
             if not _idle_now():
                 print("[processor] Ignoring START command, not idle.")
                 continue
@@ -499,14 +508,16 @@ def _action_processor_thread():
             print("[processor] Processing START command.")
             _stop_live_proc()
             
-            # Get params either from a schedule or a manual request
+            # If the start command came from a schedule, record its ID
             if 'schedule' in payload:
                 sched = _schedules.get(payload['schedule']['id'], {})
                 interval = sched.get('interval', 10)
                 sess_name = sched.get('sess', '')
+                _active_schedule_id = payload['schedule']['id'] # <--- SET the tracking ID
             else: # Manual start
                 interval = payload.get('interval', 10)
                 sess_name = payload.get('name', '')
+                _active_schedule_id = None # <--- CLEAR the tracking ID for manual starts
                 if 'duration_min' in payload:
                     global _capture_end_ts, _capture_stop_timer
                     _capture_end_ts = time.time() + payload['duration_min'] * 60
@@ -525,16 +536,17 @@ def _action_processor_thread():
             _capture_thread.start()
             
         elif action == 'stop':
-            # This is the core logic from the original /stop route
             print("[processor] Processing STOP command.")
             session_to_stop = _current_session
-            stop_timelapse()
+            schedule_that_stopped = _schedules.get(_active_schedule_id) if _active_schedule_id else None
             
+            stop_timelapse()
+            _active_schedule_id = None # <--- CLEAR the tracking ID when any capture stops
+
             # Handle auto-encoding for schedules
-            schedule = payload.get('schedule')
-            if schedule and schedule.get('auto_encode') and session_to_stop:
+            if schedule_that_stopped and schedule_that_stopped.get('auto_encode') and session_to_stop:
                 time.sleep(1.5)
-                fps = schedule.get('fps', 24)
+                fps = schedule_that_stopped.get('fps', 24)
                 print(f"[processor] Auto-encoding session {session_to_stop} at {fps}fps")
                 _encode_q.put((session_to_stop, fps))
 
