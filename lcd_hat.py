@@ -1185,17 +1185,21 @@ class UI:
         if st.get("encoding"): status = "Encoding"
         elif st.get("active"): status = "Capturing"
 
-        # --- NEW: Add current time to the menu items ---
-        items = [f"Time: {datetime.now().strftime('%H:%M:%S')}"]
-        
+        # Dynamically build the menu items
+        items = []
         if st.get("active"): items.append("Stop capture")
         items += ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display"]
         self._home_items = items
 
         if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
 
+        # Create the new footer with the current time
+        now_str = datetime.now().strftime("%H:%M:%S")
+        footer_text = f"Time: {now_str}"
+
+        # Draw the menu with the new footer
         self._draw_lines(items, title=status,
-                         footer="UP/DOWN move, OK select",
+                         footer=footer_text,
                          highlight_idxes={self.menu_idx},
                          dividers=False)
 
