@@ -1176,14 +1176,22 @@ class UI:
         now_str = datetime.now().strftime("%H:%M:%S")
         self.draw.text((5, 5), f"Time: {now_str}", font=_font_sm, fill="white")
 
-        # Display the main menu items
-        y_pos = 20
+        # Draw the AP Status
+        ap_ssid = self._last_status.get("ap_ssid", "N/A")
+        self.draw.text((5, 20), f"AP: {ap_ssid}", font=_font_sm, fill="white")
+        
+        # Draw the capture status
+        status_text = 'Active' if self._last_status.get('capture_is_running') else 'Idle'
+        self.draw.text((5, 35), f"Status: {status_text}", font=_font_sm, fill="white")
+
+        # Draw the main menu items
+        y_pos = 50
         menu_items = self.menu_items
         for i, item in enumerate(menu_items):
             fill = "blue" if i == self.menu_idx else "white"
             prefix = "> " if i == self.menu_idx else "  "
             self.draw.text((5, y_pos), prefix + item, font=_font_sm, fill=fill)
-            y_pos += 15 # Move down for the next line
+            y_pos += 15
 
         self._present(self.blank_img)
 
