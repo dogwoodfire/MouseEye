@@ -2,6 +2,7 @@
 import os, time, threading, subprocess, shutil, glob, json, mimetypes
 from datetime import datetime
 from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, render_template_string
+import pytz
 
 
 # ---------- Hotspot / AP control (NetworkManager) ----------
@@ -2082,41 +2083,30 @@ def schedule_page():
         schedules=items
     )
 
-import pytz
-
 @app.post("/schedule/arm")
 def schedule_arm():
-    start_local_str = request.form.get("start_local", "").strip()
-    hr_str = request.form.get("duration_hr", "0") or "0"
-    min_str = request.form.get("duration_min", "60") or "60"
-    
-    try:
-        dur_hr = int(hr_str.strip())
-    except ValueError:
-        dur_hr = 0
-    try:
-        dur_min = int(min_str.strip())
-    except ValueError:
-        dur_min = 0
+    start_local = request.form.get("start_local", "").strip()
+    hr_str  = request.form.get("duration_hr",  "0") or "0"
+    min_str = request.form.get("duration_min", "0") or "0" # <-- THE FIX IS HERE
+
+    try: dur_hr = int(hr_str.strip())
+    except: dur_hr = 0
+    try: dur_min = int(min_str.strip())
+    except: dur_min = 0
     duration_min = max(1, dur_hr * 60 + dur_min)
 
-    try:
-        interval = int(request.form.get("interval", "10") or 10)
-    except ValueError:
-        interval = 10
-    try:
-        fps = int(request.form.get("fps", "24") or 24)
-    except ValueError:
-        fps = 24
+    try: interval = int(request.form.get("interval", "10") or 10)
+    except: interval = 10
+    try: fps = int(request.form.get("fps", "24") or 24)
+    except: fps = 24
     
     auto_encode = bool(request.form.get("auto_encode"))
     sess_name = (request.form.get("sess_name") or "").strip()
 
     try:
         # Use a timezone-aware conversion to avoid DST bugs
-        # Replace 'Europe/London' with your local timezone if different
         local_tz = pytz.timezone('Europe/London')
-        start_dt = local_tz.localize(datetime.strptime(start_local_str, "%Y-%m-%dT%H:%M"))
+        start_dt = local_tz.localize(datetime.strptime(start_local, "%Y-%m-%dT%H:%M"))
         start_ts = int(start_dt.timestamp())
         end_ts = start_ts + duration_min * 60
     except Exception:
