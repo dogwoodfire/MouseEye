@@ -539,7 +539,6 @@ def _action_processor_thread():
             _capture_thread.start()
             
         elif action == 'stop':
-            print("[processor] Processing STOP command.")
             session_to_stop = _current_session
             schedule_that_stopped = _schedules.get(_active_schedule_id) if _active_schedule_id else None
             
@@ -2083,32 +2082,51 @@ def schedule_page():
         schedules=items
     )
 
+import pytz
+
 @app.post("/schedule/arm")
 def schedule_arm():
-    start_local = request.form.get("start_local", "").strip()
-    hr_str  = request.form.get("duration_hr",  "0") or "0"
+    start_local_str = request.form.get("start_local", "").strip()
+    hr_str = request.form.get("duration_hr", "0") or "0"
     min_str = request.form.get("duration_min", "60") or "60"
-    try: dur_hr  = int(hr_str.strip())
-    except: dur_hr = 0
-    try: dur_min = int(min_str.strip())
-    except: dur_min = 0
+    
+    try:
+        dur_hr = int(hr_str.strip())
+    except ValueError:
+        dur_hr = 0
+    try:
+        dur_min = int(min_str.strip())
+    except ValueError:
+        dur_min = 0
     duration_min = max(1, dur_hr * 60 + dur_min)
 
-    try: interval = int(request.form.get("interval", "10") or 10)
-    except: interval = 10
-    try: fps = int(request.form.get("fps", "24") or 24)
-    except: fps = 24
+    try:
+        interval = int(request.form.get("interval", "10") or 10)
+    except ValueError:
+        interval = 10
+    try:
+        fps = int(request.form.get("fps", "24") or 24)
+    except ValueError:
+        fps = 24
+    
     auto_encode = bool(request.form.get("auto_encode"))
     sess_name = (request.form.get("sess_name") or "").strip()
 
     try:
-        start_ts = int(datetime.strptime(start_local, "%Y-%m-%dT%H:%M").timestamp())
+        # Use a timezone-aware conversion to avoid DST bugs
+        # Replace 'Europe/London' with your local timezone if different
+        local_tz = pytz.timezone('Europe/London')
+        start_dt = local_tz.localize(datetime.strptime(start_local_str, "%Y-%m-%dT%H:%M"))
+        start_ts = int(start_dt.timestamp())
+        end_ts = start_ts + duration_min * 60
     except Exception:
+        # Fallback to current time + 1 minute if there is an error
         start_ts = int(time.time()) + 60
-    end_ts = start_ts + duration_min * 60
+        end_ts = start_ts + duration_min * 60
 
     sid = uuid.uuid4().hex[:8]
     now_ts = int(time.time())
+    
     with _sched_lock:
         _schedules[sid] = dict(
             start_ts=start_ts, end_ts=end_ts,
@@ -2117,6 +2135,7 @@ def schedule_arm():
             created_ts=now_ts,
         )
         _save_sched_state()
+
     return redirect(url_for("schedule_page"))
 
 @app.post("/schedule/cancel/<sid>")
