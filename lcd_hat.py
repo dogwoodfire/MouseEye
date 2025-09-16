@@ -1170,32 +1170,22 @@ class UI:
         return line1, line2
 
     def _render_home(self):
-        self._maybe_hard_clear()
-        if self._need_home_clear:
-            self._hard_clear()
-            self._need_home_clear = False
+        self.draw.rectangle((0, 0, 128, 128), fill="black")
 
-        st = self._status() or {}
-        if st.get("encoding"):
-            self.state = self.ENCODING
-            self._draw_encoding(self._spin_idx)
-            return
+        # Display the current time at the top
+        now_str = datetime.now().strftime("%H:%M:%S")
+        self.draw.text((5, 5), f"Time: {now_str}", font=_font_sm, fill="white")
 
-        status = "Idle"
-        if st.get("encoding"): status = "Encoding"
-        elif st.get("active"): status = "Capturing"
+        # Display the main menu items
+        y_pos = 20
+        menu_items = self.menu_items
+        for i, item in enumerate(menu_items):
+            fill = "blue" if i == self.menu_idx else "white"
+            prefix = "> " if i == self.menu_idx else "  "
+            self.draw.text((5, y_pos), prefix + item, font=_font_sm, fill=fill)
+            y_pos += 15 # Move down for the next line
 
-        items = []
-        if st.get("active"): items.append("Stop capture")
-        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display"]
-        self._home_items = items
-
-        if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
-
-        self._draw_lines(items, title=status,
-                         footer="UP/DOWN move, OK select",
-                         highlight_idxes={self.menu_idx},
-                         dividers=False)
+        self._present(self.blank_img)
 
     def _render_wz(self):
         self._maybe_hard_clear()
