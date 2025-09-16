@@ -438,7 +438,12 @@ class UI:
                     if i < len(lines) - 1:
                         drw.line((2, y-2, WIDTH-2, y-2), fill=DIM)
         if footer:
-            drw.text((2, HEIGHT-12), footer, font=F_SMALL, fill=GRAY)
+                    # Calculate the width of the footer text
+                    footer_w = self._text_w(F_SMALL, footer)
+                    # Center the text by calculating the starting x-coordinate
+                    x_pos = (WIDTH - int(footer_w)) // 2
+                    # Draw the footer with the new centered position and white color
+                    drw.text((x_pos, HEIGHT-12), footer, font=F_SMALL, fill=WHITE)
         self._present(img)
 
     def _draw_center(self, msg, sub=None):
@@ -1195,7 +1200,7 @@ class UI:
 
         # Create the new footer with the current time
         now_str = datetime.now().strftime("%H:%M:%S")
-        footer_text = f"Time: {now_str}"
+        footer_text = f"{now_str}"
 
         # Draw the menu with the new footer
         self._draw_lines(items, title=status,
