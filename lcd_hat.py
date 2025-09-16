@@ -1188,7 +1188,7 @@ class UI:
         y_pos = 50
         menu_items = self.menu_items
         for i, item in enumerate(menu_items):
-            fill = "blue" if i == self.menu_idx else "white"
+            fill = BLUE if i == self.menu_idx else WHITE
             prefix = "> " if i == self.menu_idx else "  "
             self.draw.text((5, y_pos), prefix + item, font=_font_sm, fill=fill)
             y_pos += 15
