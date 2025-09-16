@@ -1170,30 +1170,34 @@ class UI:
         return line1, line2
 
     def _render_home(self):
-        self.draw.rectangle((0, 0, 128, 128), fill="black")
+        self._maybe_hard_clear()
+        if self._need_home_clear:
+            self._hard_clear()
+            self._need_home_clear = False
 
-        # Display the current time at the top
-        now_str = datetime.now().strftime("%H:%M:%S")
-        self.draw.text((5, 5), f"Time: {now_str}", font=_font_sm, fill="white")
+        st = self._status() or {}
+        if st.get("encoding"):
+            self.state = self.ENCODING
+            self._draw_encoding(self._spin_idx)
+            return
 
-        # Draw the AP Status
-        ap_ssid = self._last_status.get("ap_ssid", "N/A")
-        self.draw.text((5, 20), f"AP: {ap_ssid}", font=_font_sm, fill="white")
+        status = "Idle"
+        if st.get("encoding"): status = "Encoding"
+        elif st.get("active"): status = "Capturing"
+
+        # --- NEW: Add current time to the menu items ---
+        items = [f"Time: {datetime.now().strftime('%H:%M:%S')}"]
         
-        # Draw the capture status
-        status_text = 'Active' if self._last_status.get('capture_is_running') else 'Idle'
-        self.draw.text((5, 35), f"Status: {status_text}", font=_font_sm, fill="white")
+        if st.get("active"): items.append("Stop capture")
+        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display"]
+        self._home_items = items
 
-        # Draw the main menu items
-        y_pos = 50
-        menu_items = self.menu_items
-        for i, item in enumerate(menu_items):
-            fill = BLUE if i == self.menu_idx else WHITE
-            prefix = "> " if i == self.menu_idx else "  "
-            self.draw.text((5, y_pos), prefix + item, font=_font_sm, fill=fill)
-            y_pos += 15
+        if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
 
-        self._present(self.blank_img)
+        self._draw_lines(items, title=status,
+                         footer="UP/DOWN move, OK select",
+                         highlight_idxes={self.menu_idx},
+                         dividers=False)
 
     def _render_wz(self):
         self._maybe_hard_clear()
