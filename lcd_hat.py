@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, date
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 from collections import deque
-import threading # Ensure threading is imported
+import threading
+import io
 
 DEBUG = os.environ.get("DEBUG") == "1"
 def log(*a):
@@ -120,6 +121,19 @@ def _save_prefs(p):
     except Exception:
         pass
 
+# --------- Still Images --------
+def _http_post_and_get_image(url, timeout=12.0):
+    """Sends a POST request and returns the raw response body (e.g., an image)."""
+    try:
+        req = Request(url, data=b'', method="POST")
+        with urlopen(req, timeout=timeout) as r:
+            if r.status == 200:
+                return r.read()
+            return None
+    except Exception as e:
+        log(f"HTTP Post/Get Image Error: {e}")
+        return None
+    
 # ----------------- Import for QR code ---------------
 import qrcode
 
@@ -510,7 +524,41 @@ class UI:
             st = _STATUS_CACHE.copy()
         self._last_status = st
         return st
-    
+    # ---------- Still images ----------
+    def take_still_photo(self):
+        """Handler for KEY3 to capture and display a single photo."""
+        if self._busy or self.state != self.HOME:
+            return
+
+        self._busy = True
+        try:
+            self._draw_center("Capturing...", sub="Please wait")
+
+            # Call the new endpoint in the Flask app
+            image_data = _http_post_and_get_image(f"{LOCAL}/capture_still")
+
+            if image_data:
+                # Success! Display the captured image.
+                self._draw_center("Success!", sub="Showing image...")
+                time.sleep(0.5)
+
+                # Load the image data into PIL
+                img = Image.open(io.BytesIO(image_data))
+
+                # Resize to fit the screen and display it
+                img = img.resize((WIDTH, HEIGHT), Image.LANCZOS)
+                self._present(img)
+                time.sleep(5) # Display for 5 seconds
+            else:
+                # Failure
+                self._draw_center("Capture Failed")
+                time.sleep(2)
+
+        finally:
+            self._busy = False
+            # Return to the home screen and force a redraw
+            self.state = self.HOME
+            self.render(force=True)
     # ------- Capturing Screen ------
     def _draw_capturing_screen(self):
         """Draws the active timelapse status screen."""
@@ -605,6 +653,9 @@ class UI:
         # KEY2 shows AP connect info on demand
         if self.btn_key2:
             self.btn_key2.when_pressed = self._wrap_wake(self.show_ap_info)
+        # KEY3 takes still photo
+        if self.btn_key3:
+                self.btn_key3.when_pressed = self._wrap_wake(self.take_still_photo) # Add this line
         # keep joystick driving menus (rotation-aware)
         self._rebind_joystick()
     def show_ap_info(self):

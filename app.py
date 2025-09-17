@@ -119,21 +119,22 @@ def _ensure_dirs(base_root: str):
     """Ensure sessions/images directories exist. If creation fails (e.g. not running on Pi),
     fall back to a local ./timelapse directory so the app can still start."""
     sess = os.path.join(base_root, "sessions")
-    imgs = os.path.join(base_root, "images")  # legacy; not used for new sessions
+    stills = os.path.join(base_root, "stills")  # legacy; not used for new sessions
     try:
         os.makedirs(sess, exist_ok=True)
-        os.makedirs(imgs, exist_ok=True)
+        os.makedirs(stills, exist_ok=True)
         return base_root, sess, imgs
     except Exception:
         # Fallback to a local, user-writable directory (works on dev desktops)
         fallback_root = os.path.abspath(os.environ.get("TL_FALLBACK_BASE", "./timelapse"))
         fb_sess = os.path.join(fallback_root, "sessions")
-        fb_imgs = os.path.join(fallback_root, "images")
+        fb_imgs = os.path.join(fallback_root, "stills")
         os.makedirs(fb_sess, exist_ok=True)
         os.makedirs(fb_imgs, exist_ok=True)
         return fallback_root, fb_sess, fb_imgs
 
 BASE, SESSIONS_DIR, IMAGES_DIR = _ensure_dirs(BASE)
+STILLS_DIR = os.path.join(BASE, "stills")
 
 CAMERA_STILL = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
 FFMPEG       = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
@@ -869,6 +870,62 @@ def shutdown_device():
         print(f"[SHUTDOWN] Error initiating shutdown: {e}")
         return jsonify({"error": "Failed to initiate shutdown", "message": str(e)}), 500
 
+@app.post("/capture_still")
+def capture_still():
+    """Captures a single high-quality photo and saves it."""
+    if not _idle_now():
+        return jsonify({"error": "Camera is busy"}), 503
+
+    try:
+        # Create a unique filename based on the current timestamp
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"still-{ts}.jpg"
+        path = os.path.join(STILLS_DIR, filename)
+
+        # Build and run the capture command
+        cmd = [
+            CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", path,
+            "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+            "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
+        ]
+        subprocess.run(cmd, check=True, timeout=10)
+
+        # Return the captured image directly for the LCD to display
+        return send_file(path, mimetype='image/jpeg')
+    except Exception as e:
+        return jsonify({"error": "Failed to capture still", "message": str(e)}), 500
+
+@app.get("/stills")
+def stills_gallery():
+    """Displays a gallery of all captured stills."""
+    try:
+        files = sorted(
+            [f for f in os.listdir(STILLS_DIR) if f.lower().endswith('.jpg')],
+            reverse=True
+        )
+    except FileNotFoundError:
+        files = []
+    return render_template_string(TPL_STILLS, stills=files)
+
+@app.get("/stills/<filename>")
+def serve_still(filename):
+    """Serves a single still image file."""
+    # Basic security: prevent directory traversal attacks
+    if ".." in filename or "/" in filename:
+        abort(400)
+    return send_file(os.path.join(STILLS_DIR, filename), mimetype='image/jpeg')
+
+@app.post("/stills/delete/<filename>")
+def delete_still(filename):
+    """Deletes a still image."""
+    if ".." in filename or "/" in filename:
+        abort(400)
+    try:
+        os.remove(os.path.join(STILLS_DIR, filename))
+    except Exception as e:
+        print(f"Error deleting still {filename}: {e}")
+    return redirect(url_for("stills_gallery"))
+
 @app.post("/rename/<sess>")
 def rename(sess):
     # Disable rename for active session
@@ -1396,7 +1453,10 @@ TPL_INDEX = r"""
             <span style="color: grey;">📡 Hotspot OFF</span>
           {% endif %}
         </span>
-        <button class="btn" onclick="toggleSettings()">⚙️ Settings</button>
+        <span>
+            <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
+            <button class="btn" onclick="toggleSettings()">⚙️ Settings</button>
+        </span>
       </div>
 
       <div id="settings-panel" style="display: none; margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
@@ -1945,7 +2005,49 @@ function applyBusyFromJobs(jobs) {
 </script>
 """
 
-
+TPL_STILLS = r"""
+<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stills Gallery</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background:#f8fafc; color: #111827;}
+  header { background:#fff; border-bottom:1px solid #e5e7eb; padding: 10px 12px; display:flex; gap:10px; align-items:center; }
+  header h1 { margin: 0; font-size: 18px; }
+  main { padding: 12px; max-width: 1200px; margin: 0 auto; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .photo-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+  .photo-card img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; }
+  .photo-card .info { padding: 8px; }
+  .photo-card .info a { color: #111827; text-decoration: none; }
+  .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; }
+  .btn-del { background-color:#fee2e2; border-color:#fecaca; color:#991b1b; }
+</style>
+<header>
+  <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
+  <h1>📷 Stills Gallery</h1>
+</header>
+<main>
+  {% if not stills %}
+    <p>No stills captured yet. Press KEY3 on the device to take one.</p>
+  {% else %}
+    <div class="gallery">
+    {% for filename in stills %}
+      <div class="photo-card">
+        <a href="{{ url_for('serve_still', filename=filename) }}" target="_blank">
+          <img src="{{ url_for('serve_still', filename=filename) }}" alt="{{ filename }}" loading="lazy">
+        </a>
+        <div class="info">
+          <div style="font-size: 12px; margin-bottom: 8px;">{{ filename }}</div>
+          <form action="{{ url_for('delete_still', filename=filename) }}" method="post" onsubmit="return confirm('Delete this image?');">
+            <button class="btn btn-del" type="submit">Delete</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+  {% endif %}
+</main>
+"""
 
 # ======== Simple Scheduler ========
 import threading, time, urllib.request, urllib.parse
@@ -2186,4 +2288,153 @@ def _sched_fire_stop(sess_name="", fps=24, auto_encode=False):
 
 @app.after_request
 def _no_store_for_diag(resp):
-    if request.path in ("/l
+    if request.path in ("/live_diag", "/live_status", "/live_debug"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.get("/disk")
+def disk():
+    return jsonify(_disk_stats())
+
+@app.get("/schedule")
+def schedule_page():
+    # build view model
+    items = []
+    for sid, st in sorted(_schedules.items(), key=lambda kv: kv[1].get("start_ts", 0)):
+        try:
+            start_h = datetime.fromtimestamp(int(st["start_ts"])).strftime("%a %Y-%m-%d %H:%M")
+            end_h   = datetime.fromtimestamp(int(st["end_ts"])).strftime("%a %Y-%m-%d %H:%M")
+        except Exception:
+            start_h = end_h = "?"
+        vm = dict(st)
+        vm["start_h"] = start_h
+        vm["end_h"]   = end_h
+        items.append((sid, type("S", (), vm)))
+    return render_template_string(
+        SCHED_TPL,
+        fps_choices=globals().get("FPS_CHOICES", [10, 24, 30]),
+        default_fps=globals().get("DEFAULT_FPS", 24),
+        interval_default=globals().get("CAPTURE_INTERVAL_SEC", 10),
+        schedules=items
+    )
+
+@app.post("/schedule/arm")
+def schedule_arm():
+    start_local = request.form.get("start_local", "").strip()
+    hr_str  = request.form.get("duration_hr",  "0") or "0"
+    min_str = request.form.get("duration_min", "0") or "0" # <-- THE FIX IS HERE
+
+    try: dur_hr = int(hr_str.strip())
+    except: dur_hr = 0
+    try: dur_min = int(min_str.strip())
+    except: dur_min = 0
+    duration_min = max(1, dur_hr * 60 + dur_min)
+
+    try: interval = int(request.form.get("interval", "10") or 10)
+    except: interval = 10
+    try: fps = int(request.form.get("fps", "24") or 24)
+    except: fps = 24
+    
+    auto_encode = bool(request.form.get("auto_encode"))
+    sess_name = (request.form.get("sess_name") or "").strip()
+
+    try:
+        # Use a timezone-aware conversion to avoid DST bugs
+        local_tz = pytz.timezone('Europe/London')
+        start_dt = local_tz.localize(datetime.strptime(start_local, "%Y-%m-%dT%H:%M"))
+        start_ts = int(start_dt.timestamp())
+        end_ts = start_ts + duration_min * 60
+    except Exception:
+        # Fallback to current time + 1 minute if there is an error
+        start_ts = int(time.time()) + 60
+        end_ts = start_ts + duration_min * 60
+
+    sid = uuid.uuid4().hex[:8]
+    now_ts = int(time.time())
+    
+    with _sched_lock:
+        _schedules[sid] = dict(
+            start_ts=start_ts, end_ts=end_ts,
+            interval=interval, fps=fps,
+            sess=sess_name, auto_encode=auto_encode,
+            created_ts=now_ts,
+        )
+        _save_sched_state()
+
+    return redirect(url_for("schedule_page"))
+
+@app.post("/schedule/cancel/<sid>")
+def schedule_cancel_id(sid):
+    with _sched_lock:
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return redirect(url_for("schedule_page"))
+
+@app.get("/schedule/list")
+def schedule_list_json():
+    """
+    Compact JSON for the LCD:
+    [
+      {"id": "abcd1234", "start_ts": 123, "end_ts": 456, "interval": 10, "fps": 24,
+       "sess": "", "auto_encode": true, "created_ts": 123}
+    ]
+    """
+    now = int(time.time())
+    items = []
+    for sid, st in _schedules.items():
+        try:
+            d = dict(st)
+            d["id"] = sid
+            # normalize types
+            d["start_ts"] = int(d.get("start_ts", 0))
+            d["end_ts"]   = int(d.get("end_ts", 0))
+            d["interval"] = int(d.get("interval", 10))
+            d["fps"]      = int(d.get("fps", 24))
+            d["auto_encode"] = bool(d.get("auto_encode", False))
+            d["created_ts"]  = int(d.get("created_ts", d["start_ts"]))
+        except Exception:
+            continue
+        items.append(d)
+
+    items.sort(key=lambda d: d.get("start_ts", 0))
+    resp = jsonify(items)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.post("/schedule/delete")
+def schedule_delete_json():
+    """
+    Delete a schedule by id. Accepts form or JSON:
+      - form: id=<sid>
+      - json: {"id": "<sid>"}
+    Returns 204 on success (even if id didn’t exist), 400 if no id supplied.
+    """
+    sid = request.form.get("id") or (request.json or {}).get("id")
+    if not sid:
+        return ("missing id", 400)
+
+    with _sched_lock:
+        # stop timers and remove
+        _cancel_timers_for(sid)
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return ("", 204)
+
+# ================== /Simple Scheduler ==================
+# Load persisted schedule and re-arm timers on process start
+try:
+    if _load_sched_state():
+        _arm_timers_all()
+except Exception:
+    pass
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", "5050"))
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+
+
+
+# # ---------- Main ----------
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5050) 
