@@ -666,7 +666,7 @@ def ap_toggle():
     if ap_is_on():
         ok, message = ap_disable()
     else:
-        ok, message = ap_enabl
+        ok, message = ap_enable()
     
     if ok:
         return jsonify({"on": ap_is_on(), "message": "Success"})
