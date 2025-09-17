@@ -110,10 +110,10 @@ def _set_system_time():
         print(f"Error setting system time: {e}", file=sys.stderr)
 
 def ap_enable():
-    _set_system_time() # Call the new function to set the time
     # ensure Wi-Fi radio is on first
     _nmcli("radio", "wifi", "on")
     ok, out = _nmcli("con", "up", HOTSPOT_NAME)
+    
     return ok
 
 def ap_disable():
