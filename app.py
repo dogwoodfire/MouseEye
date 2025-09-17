@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 import os, time, threading, subprocess, shutil, glob, json, mimetypes
 from datetime import datetime
-from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, render_template_string, io, zipfile
+from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, render_template_string
 import pytz
 import subprocess
-
+import io, zipfile
 
 # ---------- Hotspot / AP control (NetworkManager) ----------
 HOTSPOT_NAME = os.environ.get("HOTSPOT_NAME", "Pi-Hotspot")
