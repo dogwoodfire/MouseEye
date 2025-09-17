@@ -1374,4 +1374,45 @@ def main():
             time.sleep(0.1)
             continue
 
-        s
+        st = ui._status() # Get latest status from cache
+        is_active = st.get("active", False)
+        is_encoding = st.get("encoding", False)
+
+        # --- Automatic State Machine ---
+        if is_encoding:
+            if ui.state != UI.ENCODING:
+                ui.state = UI.ENCODING
+        elif is_active:
+            if ui.state != UI.CAPTURING:
+                ui.state = UI.CAPTURING
+                ui.menu_idx = 0 # Reset menu for the new screen
+        elif ui.state in (UI.CAPTURING, UI.ENCODING):
+             # If we were capturing or encoding, and now we are not, go home
+             ui.state = UI.HOME
+             ui.menu_idx = 0
+        # --- End of State Machine ---
+        
+        # Render the current state
+        ui.render()
+        
+        # Spin the spinner if encoding
+        if ui.state == UI.ENCODING:
+            ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+
+        # Update screen at a regular interval
+        time.sleep(1.0)
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            print("DEBUG on", file=sys.stderr, flush=True)
+        # Ensure stdout/stderr are not buffered under systemd
+        try:
+            import sys as _sys
+            _sys.stdout.reconfigure(line_buffering=True)
+            _sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+        main()
+    except KeyboardInterrupt:
+        pass

@@ -1386,23 +1386,40 @@ TPL_INDEX = r"""
 </header>
 
 <main>
-  {% set ap = ap_status %}
+{% set ap = ap_status %}
     <div class="card" id="ap-indicator">
-    {% if ap.on %}
-        <span style="color: green;">📶 Hotspot ON (SSID: {{ ap.ssid }})</span></br>
-        <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
-        <button type="submit">Disable</button>
-        <a class="btn" href="#" onclick="syncTime(event)">🕰️ Sync Time</a>
-        </form>
-    {% else %}
-        <span style="color: grey;">📡 Hotspot OFF</span>
-        <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
-        <button type="submit">Enable</button>
-        </form>
-    {% endif %}
-            <form action="{{ url_for('shutdown_device') }}" method="post" onsubmit="return confirm('Are you sure you want to shut down the Raspberry Pi?');">
-                <button type="submit">🔌 Shutdown Camera</button>
+      <div class="row" style="justify-content: space-between;">
+        <span>
+          {% if ap.on %}
+            <span style="color: green;">📶 Hotspot ON (SSID: {{ ap.ssid }})</span>
+          {% else %}
+            <span style="color: grey;">📡 Hotspot OFF</span>
+          {% endif %}
+        </span>
+        <button class="btn" onclick="toggleSettings()">⚙️ Settings</button>
+      </div>
+
+      <div id="settings-panel" style="display: none; margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
+        <div class="row">
+          {% if ap.on %}
+            <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
+              <button type="submit">Disable Hotspot</button>
             </form>
+            <a class="btn" href="#" onclick="syncTime(event)">🕰️ Sync Time</a>
+          {% else %}
+            <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
+              <button type="submit">Enable Hotspot</button>
+            </form>
+          {% endif %}
+        </div>
+        <div class="row" style="margin-top: 10px;">
+            <form action="{{ url_for('shutdown_device') }}" method="post" onsubmit="return confirm('Are you sure you want to shut down the Raspberry Pi?');">
+                <button type="submit" style="background-color:#d9534f; color:white; border-color:#d43f3a;">
+                    🔌 Shutdown Camera
+                </button>
+            </form>
+        </div>
+      </div>
     </div>
   <form class="card" action="{{ url_for('start') }}" method="post">
     <div class="row">
@@ -1752,7 +1769,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       txt.textContent = `Storage: ${pctUsed}% used`;
     }
   }
-
+    function toggleSettings() {
+    const panel = document.getElementById('settings-panel');
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+    } else {
+        panel.style.display = 'none';
+    }
+    }
   async function pollDisk() {
     try {
       const r = await fetch("{{ url_for('disk') }}");
