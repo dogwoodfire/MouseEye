@@ -545,9 +545,26 @@ class UI:
                 # Load the image data into PIL
                 img = Image.open(io.BytesIO(image_data))
 
-                # Resize to fit the screen and display it
-                img = img.resize((WIDTH, HEIGHT), Image.LANCZOS)
-                self._present(img)
+                # --- Start of new resizing logic ---
+
+                # Create a proportionally scaled thumbnail. This modifies the image in-place.
+                img.thumbnail((WIDTH, HEIGHT), Image.LANCZOS)
+
+                # Create a new black background image of the correct screen size.
+                background = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
+
+                # Calculate the position to paste the thumbnail in the center.
+                paste_x = (WIDTH - img.width) // 2
+                paste_y = (HEIGHT - img.height) // 2
+
+                # Paste the thumbnail onto the black background.
+                background.paste(img, (paste_x, paste_y))
+
+                # Display the final composite image.
+                self._present(background)
+
+                # --- End of new resizing logic ---
+
                 time.sleep(5) # Display for 5 seconds
             else:
                 # Failure
