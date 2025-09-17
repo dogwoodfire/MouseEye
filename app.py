@@ -112,25 +112,7 @@ def _set_system_time():
 
 
 
-@app.post("/sync_time")
-def sync_time_route():
-    _set_system_time()
-    return ("", 204) # Return an empty success response
 
-def ap_enable():
-    _nmcli("radio", "wifi", "on")
-    ok, out = _nmcli("con", "up", HOTSPOT_NAME)
-    return ok, out
-
-def ap_disable():
-    ok, out = _nmcli("con", "down", HOTSPOT_NAME)
-    # treat “not active” as success so it’s idempotent
-    if ok:
-        return True, out
-    txt = (out or "").lower()
-    if ("not active" in txt) or ("unknown connection" in txt):
-       return True, out
-    return False, out
 
 
 
@@ -651,6 +633,26 @@ def _capture_loop(sess_dir, interval):
 #     _capture_end_ts = None
 
 # ---------- Routes ----------
+
+@app.post("/sync_time")
+def sync_time_route():
+    _set_system_time()
+    return ("", 204) # Return an empty success response
+
+def ap_enable():
+    _nmcli("radio", "wifi", "on")
+    ok, out = _nmcli("con", "up", HOTSPOT_NAME)
+    return ok, out
+
+def ap_disable():
+    ok, out = _nmcli("con", "down", HOTSPOT_NAME)
+    # treat “not active” as success so it’s idempotent
+    if ok:
+        return True, out
+    txt = (out or "").lower()
+    if ("not active" in txt) or ("unknown connection" in txt):
+       return True, out
+    return False, out
 
 @app.post("/ap/on")
 def ap_on():
