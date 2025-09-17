@@ -719,7 +719,7 @@ class UI:
 
     # ---------- logical joystick actions ----------
     def _logical_up(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
+        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
             self.nav(-1)
         elif self.state == self.CAPTURING:
             self.menu_idx = (self.menu_idx - 1 + 2) % 2
@@ -729,7 +729,7 @@ class UI:
         else:
             self.adjust(+1)
     def _logical_down(self):
-        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
+        if self.state in (self.HOME, self.SCHED_LIST, self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
             self.nav(+1)
         elif self.state == self.CAPTURING:
             self.menu_idx = (self.menu_idx + 1) % 2
@@ -745,7 +745,7 @@ class UI:
             self.adjust(-10)
         elif self.state == self.SCH_DATE:
             self.sch_date = self.sch_date - timedelta(days=10); self.render()
-        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
     def _logical_right(self):
         if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
@@ -754,7 +754,7 @@ class UI:
             self.adjust(+10)
         elif self.state == self.SCH_DATE:
             self.sch_date = self.sch_date + timedelta(days=10); self.render()
-        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM):
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
 
     # ---------- screen power ----------
