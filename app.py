@@ -1400,11 +1400,9 @@ TPL_INDEX = r"""
         <button type="submit">Enable</button>
         </form>
     {% endif %}
-        <div class="row" style="margin-top: 10px;">
             <form action="{{ url_for('shutdown_device') }}" method="post" onsubmit="return confirm('Are you sure you want to shut down the Raspberry Pi?');">
-                <button type="submit">🔌 Shutdown Pi</button>
+                <button type="submit">🔌 Shutdown Camera</button>
             </form>
-        </div>
     </div>
   <form class="card" action="{{ url_for('start') }}" method="post">
     <div class="row">
