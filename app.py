@@ -529,13 +529,12 @@ def _action_processor_thread():
             print("[processor] Processing START command.")
             _stop_live_proc()
             
-            # Get params either from a schedule or a manual request
             if 'schedule' in payload:
                 sched = _schedules.get(payload['schedule']['id'], {})
                 interval = sched.get('interval', 10)
                 sess_name = sched.get('sess', '')
                 _active_schedule_id = payload['schedule']['id']
-            else: # Manual start
+            else:
                 interval = payload.get('interval', 10)
                 sess_name = payload.get('name', '')
                 _active_schedule_id = None
@@ -545,7 +544,6 @@ def _action_processor_thread():
                     _capture_stop_timer.daemon = True
                     _capture_stop_timer.start()
 
-            # Set globals and start the capture thread
             _current_session = _safe_name(sess_name or _timestamped_session())
             _stop_event.clear()
             _capture_start_ts = time.time()
@@ -561,7 +559,6 @@ def _action_processor_thread():
             stop_timelapse()
             _active_schedule_id = None
 
-            # Handle auto-encoding for schedules
             if schedule_that_stopped and schedule_that_stopped.get('auto_encode') and session_to_stop:
                 time.sleep(1.5)
                 fps = schedule_that_stopped.get('fps', 24)
