@@ -102,19 +102,15 @@ def ap_is_on():
     except Exception:
         return False
 
-def _set_system_time():
-    """Sets the system time from the Python script's time."""
+def _set_system_time(time_str):
+    """Sets the system time from a string (e.g., ISO 8601 format)."""
     try:
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        subprocess.run(["sudo", "date", "-s", now_str], check=True)
+        # The 'date' command is smart enough to parse ISO 8601 format directly
+        subprocess.run(["sudo", "date", "-s", time_str], check=True)
     except Exception as e:
         print(f"Error setting system time: {e}", file=sys.stderr)
-
-
-
-
-
-
+        # Re-raise the exception so the calling function knows it failed
+        raise
 
 # Allow override at runtime; default to Pi path
 BASE = os.environ.get("TL_BASE", "/home/pi/timelapse")
@@ -636,16 +632,23 @@ def _capture_loop(sess_dir, interval):
 
 @app.post("/sync_time")
 def sync_time_route():
-    # First, set the system time as before
-    _set_system_time()
+    """Receives a timestamp from the client and updates the system time."""
+    data = request.json
+    client_iso_time = data.get('time') if data else None
     
-    # Now, restart the LCD service to force it to show the new time
+    if not client_iso_time:
+        return jsonify({"error": "Missing 'time' in request body"}), 400
+
     try:
+        # First, set the system time using the string from the browser
+        _set_system_time(client_iso_time)
+        
+        # Now, restart the LCD service to show the new time
         subprocess.run(["sudo", "systemctl", "restart", "timelapse-lcd.service"], check=True)
+        
     except Exception as e:
-        print(f"Error restarting LCD service: {e}")
-        # Return an error so the user knows something went wrong
-        return jsonify({"error": "Failed to restart LCD service", "message": str(e)}), 500
+        print(f"Error during time sync process: {e}")
+        return jsonify({"error": "Failed during sync process", "message": str(e)}), 500
 
     return ("", 204) # Return an empty success response
 
@@ -1635,15 +1638,36 @@ async function testCapture(){
   const LIVE_URL = "{{ url_for('live_mjpg') }}";
 const LIVE_STATUS_URL = "{{ url_for('live_status') }}";
 
-    function syncTime(evt) {
-    if (evt && evt.preventDefault) evt.preventDefault();
-    fetch("{{ url_for('sync_time_route') }}", { method: "POST" })
+      function syncTime(evt) {
+        if (evt && evt.preventDefault) evt.preventDefault();
+        
+        // Get the current time from the browser in a standard ISO format
+        const clientTimeISO = new Date().toISOString();
+
+        fetch("{{ url_for('sync_time_route') }}", { 
+            method: "POST",
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ time: clientTimeISO }) // Send the browser's time
+        })
+        .then(response => {
+            if (!response.ok) {
+                // If the server returned an error, show it
+                return response.json().then(err => Promise.reject(err));
+            }
+            return response.text(); // can be empty on success
+        })
         .then(() => {
-        alert('Time has been synced!');
-        location.reload();
+            alert('Time has been synced! The page will now reload.');
+            // Use a short delay to allow the LCD service to restart before reloading
+            setTimeout(() => {
+                location.reload();
+            }, 1500);
         })
         .catch((e) => {
-        alert('Failed to sync time: ' + e);
+            const errorMsg = e.message || 'Unknown error';
+            alert('Failed to sync time: ' + errorMsg);
         });
     }
 
