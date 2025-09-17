@@ -120,16 +120,17 @@ def sync_time_route():
 def ap_enable():
     _nmcli("radio", "wifi", "on")
     ok, out = _nmcli("con", "up", HOTSPOT_NAME)
-        
-    return ok
+    return ok, out
 
 def ap_disable():
     ok, out = _nmcli("con", "down", HOTSPOT_NAME)
     # treat “not active” as success so it’s idempotent
     if ok:
-        return True
+        return True, out
     txt = (out or "").lower()
-    return ("not active" in txt) or ("unknown connection" in txt)
+    if ("not active" in txt) or ("unknown connection" in txt):
+       return True, out
+    return False, out
 
 
 
@@ -661,10 +662,18 @@ def ap_off():
     ok = ap_disable()
     return (jsonify({"on": False}) if ok else (jsonify({"on": True, "error":"disable_failed"}), 500))
 
-@app.post("/ap/toggle")
 def ap_toggle():
-    ok = (ap_disable() if ap_is_on() else ap_enable())
-    return (jsonify({"on": ap_is_on()}) if ok else (jsonify({"on": ap_is_on(), "error":"toggle_failed"}), 500))
+    # The ap_enable/disable functions now need to return the output message on failure
+    if ap_is_on():
+        ok, out = ap_disable()
+    else:
+        ok, out = ap_enable()
+    
+    if ok:
+        return jsonify({"on": ap_is_on()})
+    else:
+        # Return the actual error message from nmcli
+        return jsonify({"on": ap_is_on(), "error": "toggle_failed", "message": out}), 500
 
 @app.get("/ap/status")
 def ap_status_json():
