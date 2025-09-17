@@ -3,6 +3,7 @@ import os, time, threading, subprocess, shutil, glob, json, mimetypes
 from datetime import datetime
 from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, render_template_string
 import pytz
+import subprocess
 
 
 # ---------- Hotspot / AP control (NetworkManager) ----------
@@ -108,6 +109,11 @@ def _set_system_time():
         subprocess.run(["sudo", "date", "-s", now_str], check=True)
     except Exception as e:
         print(f"Error setting system time: {e}", file=sys.stderr)
+
+@app.post("/sync_time")
+def sync_time_route():
+    _set_system_time()
+    return ("", 204) # Return an empty success response
 
 def ap_enable():
     # ensure Wi-Fi radio is on first
@@ -1331,6 +1337,7 @@ TPL_INDEX = r"""
         <span style="color: green;">📶 Hotspot ON (SSID: {{ ap.ssid }})</span>
         <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
         <button type="submit">Disable</button>
+        <a class="btn" href="#" onclick="syncTime(event)">Sync Time</a>
         </form>
     {% else %}
         <span style="color: grey;">📡 Hotspot OFF</span>
@@ -1588,6 +1595,18 @@ async function testCapture(){
   }
   const LIVE_URL = "{{ url_for('live_mjpg') }}";
 const LIVE_STATUS_URL = "{{ url_for('live_status') }}";
+
+    function syncTime(evt) {
+    if (evt && evt.preventDefault) evt.preventDefault();
+    fetch("{{ url_for('sync_time_route') }}", { method: "POST" })
+        .then(() => {
+        alert('Time has been synced!');
+        location.reload();
+        })
+        .catch((e) => {
+        alert('Failed to sync time: ' + e);
+        });
+    }
 
 async function updateLiveUIOnce() {
   const msgEl = document.getElementById('live-msg');
