@@ -283,7 +283,7 @@ class UI:
     # States
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
     SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
-    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING = range(20)
+    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING, SHUTDOWN_CONFIRM = range(21)
 
     def __init__(self):
         # prefs
@@ -334,7 +334,7 @@ class UI:
 
         self.state = self.HOME
         self.menu_idx = 0
-        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display"]
+        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display", "Shutdown Pi"]
         self._home_items = self.menu_items[:]
 
         try:
@@ -846,6 +846,10 @@ class UI:
             elif sel == "Schedules":           self.open_schedules()
             elif sel == "Screen off":          self._draw_center_sleep_then_off()
             elif sel.startswith("Rotate display"): self.toggle_rotation()
+            elif sel == "Shutdown Pi":
+                self.state = self.SHUTDOWN_CONFIRM
+                self.confirm_idx = 1 # Default to "No"
+                self.render()
             return
 
         # advance through TL or SCH wizard
@@ -916,6 +920,18 @@ class UI:
             # chose "No"
             self._selected_sched = None
             self._reload_schedules_view()
+            return
+        if self.state == self.SHUTDOWN_CONFIRM:
+            if self.confirm_idx == 0: # User selected "Yes"
+                self._draw_center("Shutting down...", "Please wait until the\nPi's green light stops\nblinking to unplug.")
+                time.sleep(1) # Give user time to read
+                # Send the shutdown command to the Flask server
+                _http_post_form(f"{LOCAL}/shutdown", {})
+                # The script will be terminated by the OS shutdown.
+                # We can just sleep here.
+                time.sleep(30) 
+            else: # User selected "No"
+                self._abort_to_home()
             return
 
     def _abort_to_home(self):
@@ -1318,6 +1334,15 @@ class UI:
                 self._draw_lines(lines, title="Confirm delete",
                                  footer="UP/DOWN choose, OK select",
                                  highlight_idxes=set(), dividers=False)
+                return
+            
+            if self.state == self.SHUTDOWN_CONFIRM:
+                yes = "[Yes]" if self.confirm_idx == 0 else " Yes "
+                no  = "[No] " if self.confirm_idx == 1 else " No  "
+                lines = ["Shut down the Pi?", "", f"{yes}    {no}"]
+                self._draw_lines(lines, title="Confirm shutdown",
+                                footer="OK select, L/R choose",
+                                highlight_idxes=set(), dividers=False)
                 return
 
             self._clear()
