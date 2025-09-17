@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os, time, threading, subprocess, shutil, glob, json, mimetypes
 from datetime import datetime
-from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, render_template_string
+from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, render_template_string, io, zipfile
 import pytz
 import subprocess
 
@@ -925,6 +925,38 @@ def delete_still(filename):
     except Exception as e:
         print(f"Error deleting still {filename}: {e}")
     return redirect(url_for("stills_gallery"))
+
+@app.get("/download_stills_zip")
+def download_stills_zip():
+    """Creates a ZIP archive of all stills and sends it for download."""
+    stills_path = STILLS_DIR # Using the global variable
+    try:
+        image_files = [f for f in os.listdir(stills_path) if f.lower().endswith('.jpg')]
+        if not image_files:
+            abort(404, "No still images found to download.")
+
+        # Create an in-memory binary stream
+        memory_file = io.BytesIO()
+
+        # Create a ZIP file in the memory stream
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for filename in image_files:
+                file_path = os.path.join(stills_path, filename)
+                # Add file to the zip archive. The second argument avoids creating a folder structure inside the zip.
+                zf.write(file_path, basename(file_path))
+        
+        # Move the stream's cursor to the beginning before sending
+        memory_file.seek(0)
+        
+        return send_file(
+            memory_file,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name='timelapse-stills.zip'
+        )
+    except Exception as e:
+        print(f"Error creating ZIP file: {e}")
+        abort(500, "Failed to create ZIP file.")
 
 @app.post("/rename/<sess>")
 def rename(sess):
@@ -2021,6 +2053,23 @@ TPL_STILLS = r"""
   .photo-card .info a { color: #111827; text-decoration: none; }
   .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; }
   .btn-del { background-color:#fee2e2; border-color:#fecaca; color:#991b1b; }
+  .footer {
+  position: sticky; bottom: 0; background:#fff;
+  border-top:1px solid var(--border); padding:10px 12px;
+  }
+  .footer .row { align-items:center; justify-content:space-between; }
+  .diskbar {
+    height:10px; background:#e5e7eb; border-radius:999px; overflow:hidden; width:300px;
+  }
+  .diskbar .fill {
+    height:100%; width:0%;
+    background:#5ca5d6; /* light blue */
+  }
+  .footer .label { color: var(--muted); font-size: 13px; }
+  .diskbar .fill { height:100%; width:0%; transition:width .25s ease; }
+  .diskbar .fill.ok   { background:#5ca5d6; } /* light blue */
+  .diskbar .fill.warn { background:#f59e0b; } /* amber */
+  .diskbar .fill.crit { background:#ef4444; } /* red */
 </style>
 <header>
   <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
@@ -2046,6 +2095,13 @@ TPL_STILLS = r"""
     {% endfor %}
     </div>
   {% endif %}
+  {% if stills %}
+  <div class="footer card">
+  <div class="row">
+    <a class="btn" href="{{ url_for('download_stills_zip') }}" style="margin-left: auto;">⬇️ Download All (.zip)</a>
+  </div>
+</div>
+{% endif %}
 </main>
 """
 
