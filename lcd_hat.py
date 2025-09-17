@@ -334,7 +334,7 @@ class UI:
 
         self.state = self.HOME
         self.menu_idx = 0
-        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display", "Shutdown Pi"]
+        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display", "Shutdown Camera"]
         self._home_items = self.menu_items[:]
 
         try:
@@ -846,7 +846,7 @@ class UI:
             elif sel == "Schedules":           self.open_schedules()
             elif sel == "Screen off":          self._draw_center_sleep_then_off()
             elif sel.startswith("Rotate display"): self.toggle_rotation()
-            elif sel == "Shutdown Pi":
+            elif sel == "Shutdown Camera":
                 self.state = self.SHUTDOWN_CONFIRM
                 self.confirm_idx = 1 # Default to "No"
                 self.render()
@@ -923,7 +923,7 @@ class UI:
             return
         if self.state == self.SHUTDOWN_CONFIRM:
             if self.confirm_idx == 0: # User selected "Yes"
-                self._draw_center("Shutting down...", "Please wait until the\nPi's green light stops\nblinking to unplug.")
+                self._draw_center("Shutting down...", "")
                 time.sleep(1) # Give user time to read
                 # Send the shutdown command to the Flask server
                 _http_post_form(f"{LOCAL}/shutdown", {})
@@ -1209,7 +1209,7 @@ class UI:
         # Dynamically build the menu items
         items = []
         if st.get("active"): items.append("Stop capture")
-        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display", "Shutdown Pi"]
+        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display", "Shutdown Camera"]
         self._home_items = items
 
         if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)

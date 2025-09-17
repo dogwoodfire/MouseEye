@@ -2188,4 +2188,127 @@ def schedule_page():
         SCHED_TPL,
         fps_choices=globals().get("FPS_CHOICES", [10, 24, 30]),
         default_fps=globals().get("DEFAULT_FPS", 24),
-        interval_default=
+        interval_default=globals().get("CAPTURE_INTERVAL_SEC", 10),
+        schedules=items
+    )
+
+@app.post("/schedule/arm")
+def schedule_arm():
+    start_local = request.form.get("start_local", "").strip()
+    hr_str  = request.form.get("duration_hr",  "0") or "0"
+    min_str = request.form.get("duration_min", "0") or "0" # <-- THE FIX IS HERE
+
+    try: dur_hr = int(hr_str.strip())
+    except: dur_hr = 0
+    try: dur_min = int(min_str.strip())
+    except: dur_min = 0
+    duration_min = max(1, dur_hr * 60 + dur_min)
+
+    try: interval = int(request.form.get("interval", "10") or 10)
+    except: interval = 10
+    try: fps = int(request.form.get("fps", "24") or 24)
+    except: fps = 24
+    
+    auto_encode = bool(request.form.get("auto_encode"))
+    sess_name = (request.form.get("sess_name") or "").strip()
+
+    try:
+        # Use a timezone-aware conversion to avoid DST bugs
+        local_tz = pytz.timezone('Europe/London')
+        start_dt = local_tz.localize(datetime.strptime(start_local, "%Y-%m-%dT%H:%M"))
+        start_ts = int(start_dt.timestamp())
+        end_ts = start_ts + duration_min * 60
+    except Exception:
+        # Fallback to current time + 1 minute if there is an error
+        start_ts = int(time.time()) + 60
+        end_ts = start_ts + duration_min * 60
+
+    sid = uuid.uuid4().hex[:8]
+    now_ts = int(time.time())
+    
+    with _sched_lock:
+        _schedules[sid] = dict(
+            start_ts=start_ts, end_ts=end_ts,
+            interval=interval, fps=fps,
+            sess=sess_name, auto_encode=auto_encode,
+            created_ts=now_ts,
+        )
+        _save_sched_state()
+
+    return redirect(url_for("schedule_page"))
+
+@app.post("/schedule/cancel/<sid>")
+def schedule_cancel_id(sid):
+    with _sched_lock:
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return redirect(url_for("schedule_page"))
+
+@app.get("/schedule/list")
+def schedule_list_json():
+    """
+    Compact JSON for the LCD:
+    [
+      {"id": "abcd1234", "start_ts": 123, "end_ts": 456, "interval": 10, "fps": 24,
+       "sess": "", "auto_encode": true, "created_ts": 123}
+    ]
+    """
+    now = int(time.time())
+    items = []
+    for sid, st in _schedules.items():
+        try:
+            d = dict(st)
+            d["id"] = sid
+            # normalize types
+            d["start_ts"] = int(d.get("start_ts", 0))
+            d["end_ts"]   = int(d.get("end_ts", 0))
+            d["interval"] = int(d.get("interval", 10))
+            d["fps"]      = int(d.get("fps", 24))
+            d["auto_encode"] = bool(d.get("auto_encode", False))
+            d["created_ts"]  = int(d.get("created_ts", d["start_ts"]))
+        except Exception:
+            continue
+        items.append(d)
+
+    items.sort(key=lambda d: d.get("start_ts", 0))
+    resp = jsonify(items)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.post("/schedule/delete")
+def schedule_delete_json():
+    """
+    Delete a schedule by id. Accepts form or JSON:
+      - form: id=<sid>
+      - json: {"id": "<sid>"}
+    Returns 204 on success (even if id didn’t exist), 400 if no id supplied.
+    """
+    sid = request.form.get("id") or (request.json or {}).get("id")
+    if not sid:
+        return ("missing id", 400)
+
+    with _sched_lock:
+        # stop timers and remove
+        _cancel_timers_for(sid)
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return ("", 204)
+
+# ================== /Simple Scheduler ==================
+# Load persisted schedule and re-arm timers on process start
+try:
+    if _load_sched_state():
+        _arm_timers_all()
+except Exception:
+    pass
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", "5050"))
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+
+
+
+# # ---------- Main ----------
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5050) 
