@@ -1553,6 +1553,15 @@ TPL_INDEX = r"""
 </main>
 
 <script>
+    function toggleSettings() {
+        const panel = document.getElementById('settings-panel');
+        if (!panel) return; // Safety check
+        if (panel.style.display === 'none' || panel.style.display === '') {
+        panel.style.display = 'block';
+        } else {
+        panel.style.display = 'none';
+        }
+    }
   function stopClick(evt){
     if (evt && evt.preventDefault) evt.preventDefault();
     const btn = evt?.currentTarget;
@@ -1769,14 +1778,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       txt.textContent = `Storage: ${pctUsed}% used`;
     }
   }
-    function toggleSettings() {
-    const panel = document.getElementById('settings-panel');
-    if (panel.style.display === 'none') {
-        panel.style.display = 'block';
-    } else {
-        panel.style.display = 'none';
-    }
-    }
+
   async function pollDisk() {
     try {
       const r = await fetch("{{ url_for('disk') }}");
