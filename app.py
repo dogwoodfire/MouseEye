@@ -636,7 +636,18 @@ def _capture_loop(sess_dir, interval):
 
 @app.post("/sync_time")
 def sync_time_route():
+    # First, set the system time as before
     _set_system_time()
+    
+    # Now, restart the LCD service to force it to show the new time
+    try:
+        # NOTE: Assumes your LCD service is named 'lcd_hat.service'
+        subprocess.run(["sudo", "systemctl", "restart", "lcd_hat.service"], check=True)
+    except Exception as e:
+        print(f"Error restarting LCD service: {e}")
+        # Return an error so the user knows something went wrong
+        return jsonify({"error": "Failed to restart LCD service", "message": str(e)}), 500
+
     return ("", 204) # Return an empty success response
 
 def ap_enable():
