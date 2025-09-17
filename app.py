@@ -640,19 +640,39 @@ def sync_time_route():
     return ("", 204) # Return an empty success response
 
 def ap_enable():
+    """Enables the Wi-Fi radio and brings the hotspot connection up."""
+    # Returns a tuple: (bool: success, str: message)
     _nmcli("radio", "wifi", "on")
     ok, out = _nmcli("con", "up", HOTSPOT_NAME)
     return ok, out
 
 def ap_disable():
+    """Brings the hotspot connection down."""
+    # Returns a tuple: (bool: success, str: message)
     ok, out = _nmcli("con", "down", HOTSPOT_NAME)
-    # treat “not active” as success so it’s idempotent
     if ok:
         return True, out
+    
+    # It's okay if the connection was already down. Treat that as success.
     txt = (out or "").lower()
     if ("not active" in txt) or ("unknown connection" in txt):
-       return True, out
+        return True, out
+    
     return False, out
+
+@app.post("/ap/toggle")
+def ap_toggle():
+    """Toggles the hotspot on or off and returns a detailed JSON response."""
+    if ap_is_on():
+        ok, message = ap_disable()
+    else:
+        ok, message = ap_enabl
+    
+    if ok:
+        return jsonify({"on": ap_is_on(), "message": "Success"})
+    else:
+        # If it fails, return the actual error message from nmcli
+        return jsonify({"on": ap_is_on(), "error": "toggle_failed", "message": message}), 500
 
 @app.post("/ap/on")
 def ap_on():
