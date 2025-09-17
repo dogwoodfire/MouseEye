@@ -5,6 +5,7 @@ from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, 
 import pytz
 import subprocess
 import io, zipfile
+from os.path import basename
 
 # ---------- Hotspot / AP control (NetworkManager) ----------
 HOTSPOT_NAME = os.environ.get("HOTSPOT_NAME", "Pi-Hotspot")
