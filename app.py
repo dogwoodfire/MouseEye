@@ -105,10 +105,12 @@ def ap_is_on():
 def _set_system_time():
     """Sets the system time from the Python script's time."""
     try:
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         subprocess.run(["sudo", "date", "-s", now_str], check=True)
     except Exception as e:
         print(f"Error setting system time: {e}", file=sys.stderr)
+
+
 
 @app.post("/sync_time")
 def sync_time_route():
@@ -116,10 +118,9 @@ def sync_time_route():
     return ("", 204) # Return an empty success response
 
 def ap_enable():
-    # ensure Wi-Fi radio is on first
     _nmcli("radio", "wifi", "on")
     ok, out = _nmcli("con", "up", HOTSPOT_NAME)
-    
+        
     return ok
 
 def ap_disable():
