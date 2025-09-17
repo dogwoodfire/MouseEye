@@ -1209,7 +1209,7 @@ class UI:
         # Dynamically build the menu items
         items = []
         if st.get("active"): items.append("Stop capture")
-        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display"]
+        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display", "Shutdown Pi"]
         self._home_items = items
 
         if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
