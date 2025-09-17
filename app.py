@@ -2053,28 +2053,14 @@ TPL_STILLS = r"""
   .photo-card .info a { color: #111827; text-decoration: none; }
   .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; }
   .btn-del { background-color:#fee2e2; border-color:#fecaca; color:#991b1b; }
-  .footer {
-  position: sticky; bottom: 0; background:#fff;
-  border-top:1px solid var(--border); padding:10px 12px;
-  }
-  .footer .row { align-items:center; justify-content:space-between; }
-  .diskbar {
-    height:10px; background:#e5e7eb; border-radius:999px; overflow:hidden; width:300px;
-  }
-  .diskbar .fill {
-    height:100%; width:0%;
-    background:#5ca5d6; /* light blue */
-  }
-  .footer .label { color: var(--muted); font-size: 13px; }
-  .diskbar .fill { height:100%; width:0%; transition:width .25s ease; }
-  .diskbar .fill.ok   { background:#5ca5d6; } /* light blue */
-  .diskbar .fill.warn { background:#f59e0b; } /* amber */
-  .diskbar .fill.crit { background:#ef4444; } /* red */
 </style>
-<header>
-  <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
-  <h1>📷 Stills Gallery</h1>
-</header>
+    <header>
+      <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
+      <h1>📷 Stills Gallery</h1>
+      {% if stills %}
+        <a class="btn" href="{{ url_for('download_stills_zip') }}" style="margin-left: auto;">⬇️ Download All (.zip)</a>
+      {% endif %}
+    </header>
 <main>
   {% if not stills %}
     <p>No stills captured yet. Press KEY3 on the device to take one.</p>
@@ -2095,13 +2081,6 @@ TPL_STILLS = r"""
     {% endfor %}
     </div>
   {% endif %}
-  {% if stills %}
-  <div class="footer card">
-  <div class="row">
-    <a class="btn" href="{{ url_for('download_stills_zip') }}" style="margin-left: auto;">⬇️ Download All (.zip)</a>
-  </div>
-</div>
-{% endif %}
 </main>
 """
 
