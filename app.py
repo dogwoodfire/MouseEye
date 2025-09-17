@@ -641,8 +641,7 @@ def sync_time_route():
     
     # Now, restart the LCD service to force it to show the new time
     try:
-        # NOTE: Assumes your LCD service is named 'lcd_hat.service'
-        subprocess.run(["sudo", "systemctl", "restart", "lcd_hat.service"], check=True)
+        subprocess.run(["sudo", "systemctl", "restart", "timelapse-lcd.service"], check=True)
     except Exception as e:
         print(f"Error restarting LCD service: {e}")
         # Return an error so the user knows something went wrong
