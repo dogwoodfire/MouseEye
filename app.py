@@ -2054,8 +2054,8 @@ TPL_STILLS = r"""
   .photo-card .info a { color: #111827; text-decoration: none; }
   .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; }
   .btn-del { background-color:#fee2e2; border-color:#fecaca; color:#991b1b; }
-  .footer { position: sticky; bottom: 0; background:#fff; border-top:1px solid var(--border); padding:10px 12px; }
-  .card { background:#ffffff; border:1px solid var(--border); border-radius:12px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04);}
+  .footer { position: sticky; bottom: 0; background:#fff; border-top:1px solid #e5e7eb; padding:15px 15px; }
+  .card { background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; padding: 12px; margin: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04);}
 </style>
     <header>
       <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
