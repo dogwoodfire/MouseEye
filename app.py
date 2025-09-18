@@ -927,6 +927,21 @@ def delete_still(filename):
         print(f"Error deleting still {filename}: {e}")
     return redirect(url_for("stills_gallery"))
 
+@app.post("/delete_all_stills")
+def delete_all_stills():
+    """Deletes all still images from the gallery."""
+    try:
+        # Iterate over all files in the stills directory and remove them
+        for filename in os.listdir(STILLS_DIR):
+            file_path = os.path.join(STILLS_DIR, filename)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        print("All still images have been deleted.")
+    except Exception as e:
+        print(f"Error deleting all stills: {e}")
+    # Redirect back to the now-empty gallery page
+    return redirect(url_for("stills_gallery"))
+
 @app.get("/download_stills_zip")
 def download_stills_zip():
     """Creates a ZIP archive of all stills and sends it for download."""
@@ -2054,8 +2069,8 @@ TPL_STILLS = r"""
   .photo-card .info a { color: #111827; text-decoration: none; }
   .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; }
   .btn-del { background-color:#fee2e2; border-color:#fecaca; color:#991b1b; }
-  .footer { position: sticky; bottom: 0; background:#fff; border-top:1px solid #e5e7eb; padding:15px 15px; }
-  .card { background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; padding: 12px; margin: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04);}
+  .footer { position: sticky; bottom: 0; background:#fff; border-top:1px solid #e5e7eb; padding:15px; }
+  .card { background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; padding: 12px; margin: 0px 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04);}
 </style>
     <header>
       <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
@@ -2082,11 +2097,17 @@ TPL_STILLS = r"""
     {% endfor %}
     </div>
   {% endif %}
-    <div class ="footer card">
-         {% if stills %}
-        <a class="btn" href="{{ url_for('download_stills_zip') }}" style="margin-left: auto;">⬇️ Download All (.zip)</a>
-      {% endif %}
-      </div>
+<div class="footer card">
+  {% if stills %}
+    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+      <a class="btn" href="{{ url_for('download_stills_zip') }}">⬇️ Download All (.zip)</a>
+
+      <form action="{{ url_for('delete_all_stills') }}" method="post" onsubmit="return confirm('Are you sure you want to permanently delete ALL still images? This cannot be undone.');">
+        <button type="submit" class="btn btn-del">🗑️ Delete All</button>
+      </form>
+    </div>
+  {% endif %}
+</div>
 </main>
 """
 
