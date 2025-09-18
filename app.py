@@ -2054,13 +2054,12 @@ TPL_STILLS = r"""
   .photo-card .info a { color: #111827; text-decoration: none; }
   .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; }
   .btn-del { background-color:#fee2e2; border-color:#fecaca; color:#991b1b; }
+  .footer { position: sticky; bottom: 0; background:#fff; border-top:1px solid var(--border); padding:10px 12px; }
 </style>
     <header>
       <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
       <h1>📷 Stills Gallery</h1>
-      {% if stills %}
-        <a class="btn" href="{{ url_for('download_stills_zip') }}" style="margin-left: auto;">⬇️ Download All (.zip)</a>
-      {% endif %}
+
     </header>
 <main>
   {% if not stills %}
@@ -2083,6 +2082,11 @@ TPL_STILLS = r"""
     </div>
   {% endif %}
 </main>
+    <footer>
+         {% if stills %}
+        <a class="btn" href="{{ url_for('download_stills_zip') }}" style="margin-left: auto;">⬇️ Download All (.zip)</a>
+      {% endif %}
+      </footer>
 """
 
 # ======== Simple Scheduler ========
