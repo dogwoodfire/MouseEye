@@ -2055,6 +2055,7 @@ TPL_STILLS = r"""
   .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; }
   .btn-del { background-color:#fee2e2; border-color:#fecaca; color:#991b1b; }
   .footer { position: sticky; bottom: 0; background:#fff; border-top:1px solid var(--border); padding:10px 12px; }
+  .card { background: var(--card-bg); border:1px solid var(--border); border-radius:12px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04);}
 </style>
     <header>
       <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
@@ -2081,12 +2082,12 @@ TPL_STILLS = r"""
     {% endfor %}
     </div>
   {% endif %}
-</main>
-    <footer>
+    <div class ="footer card">
          {% if stills %}
         <a class="btn" href="{{ url_for('download_stills_zip') }}" style="margin-left: auto;">⬇️ Download All (.zip)</a>
       {% endif %}
-      </footer>
+      </div>
+</main>
 """
 
 # ======== Simple Scheduler ========
