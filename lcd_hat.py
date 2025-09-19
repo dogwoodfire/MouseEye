@@ -181,7 +181,7 @@ RED=(255,80,80);     DIM=(90,90,90)
 SPINNER = ["-", "\\", "|", "/"]
 
 # --- Icon Definitions using pytablericons ---
-from pytablericons import TablerIcons, Icon
+from pytablericons import TablerIcons
 
 # Icon settings
 ICON_SIZE = (16, 16) # Define size as a tuple
