@@ -1124,33 +1124,31 @@ class UI:
             log(f"Failed to fetch still '{filename}': {e}")
 
         if image_data:
-            img = Image.open(io.BytesIO(image_data))
-            img.thumbnail((WIDTH, HEIGHT), Image.LANCZOS)
-            background = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
-            paste_x = (WIDTH - img.width) // 2
-            paste_y = (HEIGHT - img.height) // 2
-            background.paste(img, (paste_x, paste_y))
-            
-            drw = ImageDraw.Draw(background)
-            page_text = f"{self.stills_idx + 1} of {len(self.stills_list)}"
-            footer_w = self._text_w(F_SMALL, page_text)
-            drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), page_text, font=F_SMALL, fill=WHITE)
-            
-            self._present(background)
+            try:
+                img = Image.open(io.BytesIO(image_data))
+                
+                # --- THIS IS THE FIX ---
+                # Use the modern Image.Resampling.LANCZOS constant
+                img.thumbnail((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+                # --- END OF FIX ---
+                
+                background = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
+                paste_x = (WIDTH - img.width) // 2
+                paste_y = (HEIGHT - img.height) // 2
+                background.paste(img, (paste_x, paste_y))
+                
+                drw = ImageDraw.Draw(background)
+                page_text = f"{self.stills_idx + 1} of {len(self.stills_list)}"
+                footer_w = self._text_w(F_SMALL, page_text)
+                drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), page_text, font=F_SMALL, fill=WHITE)
+                
+                self._present(background)
+            except Exception as e:
+                # If resizing fails for any reason, now we'll see the error
+                log(f"Error rendering image '{filename}': {e}")
+                self._draw_center("Render Failed", sub=filename)
         else:
-            # --- THIS IS THE CHANGE ---
-            # If the image fails to load, draw the filename on the screen for debugging.
-            img = self._blank()
-            drw = ImageDraw.Draw(img)
-            drw.text((2, 20), "Load Failed:", font=F_TEXT, fill=RED)
-            # Draw filename wrapped to fit screen
-            y_pos = 40
-            # Split filename into chunks of ~20 characters to avoid overflow
-            for chunk in [filename[i:i+20] for i in range(0, len(filename), 20)]:
-                 drw.text((2, y_pos), chunk, font=F_SMALL, fill=WHITE)
-                 y_pos += 12
-            self._present(img)
-            # --- END OF CHANGE ---
+            self._draw_center("Load Failed", sub=filename)
 
     def _render_stills_viewer(self):
         """Renders the current still image."""
