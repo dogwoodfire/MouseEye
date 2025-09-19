@@ -1566,7 +1566,7 @@ TPL_INDEX = r"""
         </span>
       </div>
 
-      <div id="settings-panel" style="display: none; margin-top: 5px; border-top: 1px solid #fff;">
+      <div id="settings-panel" style="display: none; margin-top: 10px; border-top: 1px solid #fff; padding-top: 10px;">
         <div class="row">
           {% if ap.on %}
             <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
@@ -1586,7 +1586,7 @@ TPL_INDEX = r"""
         </div>
       </div>
     </div>
-<div class="card" style="font-weight:600;font-size:20px;background:#e9f7f4;">Camera 📷</div>
+<div class="card" style="font-weight:600;font-size:20px;background:#e9f7f4;border-radius: 10px 10px 0px 0px">Camera 📷</div>
     <div class="card" style="background:#e9f7f4;">
     <div class="row">
         <form action="{{ url_for('take_web_still') }}" method="post" style="display:block;width: 100%;">
