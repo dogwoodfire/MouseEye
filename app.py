@@ -1596,9 +1596,7 @@ TPL_INDEX = r"""
               📸 Quick Photo
           </button>
         </form>
-    </div>
-    <div class="row">
-        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
+        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Viewfinder</a>
         <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
     </div>
     </div>
