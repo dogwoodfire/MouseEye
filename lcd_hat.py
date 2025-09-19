@@ -1081,29 +1081,6 @@ class UI:
         self.state = self.HOME; self.menu_idx = 0; self._request_hard_clear(); self.render()
     # Add these new methods to the UI class
 
-    def open_stills_viewer(self):
-        """Fetches the list of stills and enters the viewer state."""
-        self._draw_center("Loading Stills...")
-        
-        # Fetch the list of image filenames from the API
-        stills = _http_json(STILLS_LIST_URL)
-        
-        # Check if the fetch was successful and the list is not empty
-        if isinstance(stills, list) and stills:
-            self.stills_list = stills
-            self.stills_idx = 0
-            self.state = self.STILLS_VIEWER
-        else:
-            # If there are no stills or an error occurred, show a message
-            self.stills_list = []
-            self._draw_center("No Stills Found", sub="Press joystick to exit.")
-            # Set state to home so joystick press will exit
-            self.state = self.HOME
-            time.sleep(2)
-
-        # Render whatever state we ended up in
-        self.render()
-
     def _fetch_and_draw_still(self):
         """Fetches a single still image with detailed debugging print statements."""
         print("\n--- Entering Stills Viewer ---")
@@ -1131,35 +1108,36 @@ class UI:
             print(f"CRITICAL: Download failed. Error: {e}")
 
         if image_data:
+            print("DEBUG: Image data exists. Attempting to render with PIL.")
             try:
-                img_from_web = Image.open(io.BytesIO(image_data))
+                img = Image.open(io.BytesIO(image_data))
+                print(f"DEBUG: PIL opened image. Format: {img.format}, Size: {img.size}, Mode: {img.mode}")
+                
+                img.thumbnail((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+                print(f"DEBUG: Thumbnail created. New size: {img.size}")
 
-                # Create a proportionally scaled thumbnail
-                img_from_web.thumbnail((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
-
-                # Create a new black background image
                 background = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
-
-                # Calculate the position to paste the thumbnail in the center
-                paste_x = (WIDTH - img_from_web.width) // 2
-                paste_y = (HEIGHT - img_from_web.height) // 2
-
-                # --- THIS IS THE FIX ---
-                # Use the simple, direct paste method that we know works
-                background.paste(img_from_web, (paste_x, paste_y), mask=img_from_web)
-                # --- END OF FIX ---
-
+                paste_x = (WIDTH - img.width) // 2
+                paste_y = (HEIGHT - img.height) // 2
+                
+                # Use the simple paste method we know works for the rotation icons
+                background.paste(img, (paste_x, paste_y), mask=img)
+                print("DEBUG: Image pasted onto background.")
+                
                 drw = ImageDraw.Draw(background)
                 page_text = f"{self.stills_idx + 1} of {len(self.stills_list)}"
                 footer_w = self._text_w(F_SMALL, page_text)
                 drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), page_text, font=F_SMALL, fill=WHITE)
+                print("DEBUG: Pagination text drawn.")
                 
                 self._present(background)
+                print("DEBUG: Final image presented to screen.")
 
             except Exception as e:
-                log(f"Error rendering image '{filename}': {e}")
+                print(f"CRITICAL: PIL rendering failed. Error: {e}")
                 self._draw_center("Render Failed", sub=filename)
         else:
+            print("DEBUG: No image data was downloaded. Showing 'Load Failed' screen.")
             self._draw_center("Load Failed", sub=filename)
 
     def _render_stills_viewer(self):
