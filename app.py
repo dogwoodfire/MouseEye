@@ -1562,7 +1562,6 @@ TPL_INDEX = r"""
           {% endif %}
         </span>
         <span>
-            <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
             <button class="btn" onclick="toggleSettings()">⚙️ Settings</button>
         </span>
       </div>
@@ -1642,6 +1641,7 @@ TPL_INDEX = r"""
               📸 Quick Photo
           </button>
         </form>
+        <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
     </div>
     </div>
   <div class="card">
