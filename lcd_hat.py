@@ -188,20 +188,20 @@ ICON_SIZE = (16, 16) # Define size as a tuple
 STROKE_WEIGHT = 0.25    # Set the desired weight here (1=thin, 2=default, 3=thick)
 
 # Generate PIL Image objects using the correct method
-# 1. Load the icon
 screen_off_icon = TablerIcons.load(OutlineIcon.MOON,stroke_width = STROKE_WEIGHT)
-# 2. Set its properties
-# screen_off_icon.stroke_width = STROKE_WEIGHT
-# 3. Resize and convert it
 IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
 
 rotate_icon = TablerIcons.load(OutlineIcon.REFRESH,stroke_width = STROKE_WEIGHT)
-# rotate_icon.stroke_width = STROKE_WEIGHT
 IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
 
 shutdown_icon = TablerIcons.load(OutlineIcon.POWER,stroke_width = STROKE_WEIGHT)
-# shutdown_icon.stroke_width = STROKE_WEIGHT
 IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
+
+icon_portrait = TablerIcons.load(OutlineIcon.RECTANGLE_VERTICAL, stroke_width=STROKE_WEIGHT)
+IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE).convert('1')
+
+icon_landscape = TablerIcons.load(OutlineIcon.RECTANGLE_HORIZONTAL, stroke_width=STROKE_WEIGHT)
+IMG_ICON_LANDSCAPE = icon_landscape.resize(ICON_SIZE).convert('1')
 
 
 # ----------------- HTTP helpers -----------------
@@ -1188,24 +1188,34 @@ class UI:
             self._panel_on()
             if self.bl is not None: self.bl.value = 1.0
 
-            # Define simple icons for orientation
-            portrait_icon = "\n  +----+\n  |    |\n  |    |\n  +----+"
-            landscape_icon = "\n  +------+\n  |      |\n  +------+"
+            img = self._blank()
+            drw = ImageDraw.Draw(img)
             
             if self.rot_deg == 0:
                 mode_text = "Portrait"
-                icon = portrait_icon
+                icon_to_draw = IMG_ICON_PORTRAIT
             else:
                 mode_text = "Landscape"
-                icon = landscape_icon
+                icon_to_draw = IMG_ICON_LANDSCAPE
+
+            # Draw the title text
+            title_text = f"Rotation: {mode_text}"
+            title_w = self._text_w(F_TITLE, title_text)
+            drw.text(((WIDTH - int(title_w)) // 2, 20), title_text, font=F_TITLE, fill=WHITE)
             
-            # Display the text and the selected icon
-            # self._draw_center(f"Rotation: {mode_text}", sub=icon)
+            # Create a palette and draw the icon below the text
+            palette = [0,0,0] + [255,255,255] * 255
+            icon_copy = icon_to_draw.copy()
+            icon_copy.putpalette(palette)
+            
+            icon_pos = ((WIDTH - icon_copy.width) // 2, 50)
+            img.paste(icon_copy, icon_pos, mask=icon_copy)
+            
+            self._present(img)
 
             self._bind_inputs()
             self._request_hard_clear()
-            self._draw_center(f"Rotation: {mode_text}", sub=icon)
-            time.sleep(0.6)
+            time.sleep(1.5) # Keep the confirmation on screen
             self.state = self.HOME
             self.render(force=True)
         finally:
