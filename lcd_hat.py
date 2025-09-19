@@ -73,6 +73,19 @@ _STATUS_LOCK = threading.Lock()
 
 STILLS_LIST_URL = f"{LOCAL}/stills_api"
 
+def _refresh_stills_list(self):
+    """Fetch the list of stills from the backend and reset index."""
+    try:
+        files = _http_json(STILLS_LIST_URL, timeout=1.5)
+        if isinstance(files, list):
+            self.stills_list = files
+            self.stills_idx = 0 if files else 0
+        else:
+            self.stills_list = []
+    except Exception:
+        self.stills_list = []
+
+
 def _poll_status_worker():
     """
     A daemon thread that polls the backend and updates the shared _STATUS_CACHE.
@@ -966,6 +979,7 @@ class UI:
             elif sel == "Schedules":
                 self.open_schedules()
             elif sel == "View Stills":
+                self._refresh_stills_list()
                 self.state = self.STILLS_VIEWER
                 self.render()
             elif sel == "Settings":
@@ -1085,8 +1099,11 @@ class UI:
     def _fetch_and_draw_still(self):
         """Fetches and draws a still image using the known-working logic."""
         if not self.stills_list:
-            self._draw_center("No Stills Found", sub="Press joystick to exit.")
-            return
+            self._refresh_stills_list()
+            if not self.stills_list:
+                self._draw_center("No Stills Found", sub="Press joystick to exit.")
+                return
+
 
         filename = self.stills_list[self.stills_idx]
         image_data = None
