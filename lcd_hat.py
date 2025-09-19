@@ -1416,24 +1416,20 @@ class UI:
                     "Shutdown Camera": IMG_ICON_SHUTDOWN
                 }
                 
-                palette = [0,0,0] + [255,255,255] * 255
-                
                 for i, txt in enumerate(self.settings_menu_items):
                     fill = BLUE if i == self.menu_idx else WHITE
-                    icon_to_draw = icons.get(txt)
+                    icon_image = icons.get(txt)
                     
-                    if icon_to_draw:
-                        # --- THIS IS THE FIX ---
-                        # Work on a copy of the icon, not the original
-                        icon_copy = icon_to_draw.copy()
-                        icon_copy.putpalette(palette)
-                        # --- END OF FIX ---
-                        
+                    if icon_image:
+                        # --- THIS IS THE CORRECT METHOD ---
+                        # We "paint" the color WHITE onto the screen,
+                        # using the 1-bit icon image as a stencil or "mask".
                         icon_pos = (5, y)
                         text_pos = (28, y)
-                        img.paste(icon_copy, icon_pos, mask=icon_copy)
+                        img.paste(WHITE, icon_pos, mask=icon_image)
                         drw.text(text_pos, txt, font=F_TEXT, fill=fill)
                     else:
+                        # For items without an icon, like "‹ Back"
                         drw.text((10, y), txt, font=F_TEXT, fill=fill)
                     
                     y += 20
