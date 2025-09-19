@@ -986,6 +986,25 @@ def download_stills_zip():
         print(f"Error creating ZIP file: {e}")
         abort(500, "Failed to create ZIP file.")
 
+@app.post("/delete_past_schedules")
+def delete_past_schedules():
+    """Finds and deletes all schedules that have an end time in the past."""
+    with _sched_lock:
+        now_ts = int(time.time())
+        # Create a list of keys (schedule IDs) to delete
+        ids_to_delete = [
+            sid for sid, data in _schedules.items()
+            if int(data.get("end_ts", 0)) < now_ts
+        ]
+        
+        # Delete the identified schedules
+        for sid in ids_to_delete:
+            _schedules.pop(sid, None)
+        
+        _save_sched_state()
+        
+    return redirect(url_for("schedule_page"))
+
 @app.post("/rename/<sess>")
 def rename(sess):
     # Disable rename for active session
@@ -2322,6 +2341,11 @@ SCHED_TPL = '''<!doctype html>
 </div>
 
 <h2 style="margin-top:24px;">Past Schedules</h2>
+{% if past_schedules %}
+  <form action="{{ url_for('delete_past_schedules') }}" method="post" onsubmit="return confirm('Are you sure you want to delete all past schedule records?');" style="margin-bottom: 12px;">
+    <button type="submit" class="danger" style="max-width: 200px;">🗑️ Delete All Past</button>
+  </form>
+{% endif %}
 <div class="cards">
   {% if not past_schedules %}
     <div class="muted">No past schedules.</div>
