@@ -845,23 +845,23 @@ class UI:
         self.render(force=True)
 
     # ---------- state helpers ----------
-        def nav(self, delta):
-            if self._busy: return
-            if self.state == self.HOME:
-                items = getattr(self, "_home_items", self.menu_items)
-                self.menu_idx = (self.menu_idx + delta) % len(items)
-                self.render()
-            elif self.state == self.SETTINGS_MENU: # ADD THIS BLOCK
-                self.menu_idx = (self.menu_idx + delta) % len(self.settings_menu_items)
-                self.render()
-            elif self.state == self.SCHED_LIST:
-                n_items = 2 + len(self._sch_rows)  # 0=Back, 1=New, 2.. schedules
-                self.menu_idx = (self.menu_idx + delta) % max(1, n_items)
-                self.render()
-            elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
-                self.confirm_idx = 1 - self.confirm_idx; self.render()
-            else:
-                self.adjust(-1 if delta > 0 else +1)
+    def nav(self, delta):
+        if self._busy: return
+        if self.state == self.HOME:
+            items = getattr(self, "_home_items", self.menu_items)
+            self.menu_idx = (self.menu_idx + delta) % len(items)
+            self.render()
+        elif self.state == self.SETTINGS_MENU:
+            self.menu_idx = (self.menu_idx + delta) % len(self.settings_menu_items)
+            self.render()
+        elif self.state == self.SCHED_LIST:
+            n_items = 2 + len(self._sch_rows)  # 0=Back, 1=New, 2.. schedules
+            self.menu_idx = (self.menu_idx + delta) % max(1, n_items)
+            self.render()
+        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
+            self.confirm_idx = 1 - self.confirm_idx; self.render()
+        else:
+            self.adjust(-1 if delta > 0 else +1)
 
     def adjust(self, delta):
         if self._busy: return
@@ -907,7 +907,7 @@ class UI:
             elif self.menu_idx == 1: # Stop Timelapse
                 self.stop_capture()
             return
-        
+
         if self.state == self.HOME:
             items = getattr(self, "_home_items", self.menu_items)
             sel = items[self.menu_idx]
@@ -918,7 +918,6 @@ class UI:
             elif sel == "Schedules":
                 self.open_schedules()
             elif sel == "Settings":
-                # Enter the new settings menu
                 self.state = self.SETTINGS_MENU
                 self.menu_idx = 0
                 self.render()
@@ -935,12 +934,11 @@ class UI:
                 self.confirm_idx = 1  # Default to "No"
                 self.render()
             elif sel == "‹ Back":
-                # Go back to the home menu
                 self.state = self.HOME
                 self.menu_idx = 0
                 self.render()
             return
-
+        
         # advance through TL or SCH wizard
         if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_ENC):
             self.state += 1
@@ -985,7 +983,6 @@ class UI:
                 ok_flag = _delete_schedule_backend(sid)
                 time.sleep(0.1)
 
-                # consider success if the id disappears from listing
                 success = False
                 deadline = time.time() + 1.2
                 while time.time() < deadline:
@@ -1006,18 +1003,15 @@ class UI:
                 self.render(force=True)
                 return
 
-            # chose "No"
             self._selected_sched = None
             self._reload_schedules_view()
             return
+            
         if self.state == self.SHUTDOWN_CONFIRM:
             if self.confirm_idx == 0: # User selected "Yes"
                 self._draw_center("Shutting down...", "")
                 time.sleep(1) # Give user time to read
-                # Send the shutdown command to the Flask server
                 _http_post_form(f"{LOCAL}/shutdown", {})
-                # The script will be terminated by the OS shutdown.
-                # We can just sleep here.
                 time.sleep(30) 
             else: # User selected "No"
                 self._abort_to_home()
