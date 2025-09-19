@@ -1631,16 +1631,17 @@ TPL_INDEX = r"""
   </div>
   {% else %}
     <div class="card">
+    <h3>Camera</h3>
     <div class="row">
-        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
-                <div class="row">
-                <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
+        <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
           <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %}>
               📸 Quick Photo
           </button>
         </form>
-            <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
-        </div>
+    </div>
+    <div class="row">
+        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
+        <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
     </div>
     </div>
   <div class="card">
