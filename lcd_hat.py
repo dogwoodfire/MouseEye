@@ -1180,7 +1180,7 @@ class UI:
 
             self._bind_inputs()
             self._request_hard_clear()
-            self._draw_center("Rotation: {mode_text}", sub=icon)
+            self._draw_center(f"Rotation: {mode_text}", sub=icon)
             time.sleep(0.6)
             self.state = self.HOME
             self.render(force=True)
@@ -1437,7 +1437,7 @@ class UI:
 
                 self._draw_lines(
                     lines, title="Schedules",
-                    footer="OK select • Back=first item",
+                    footer="OK select",
                     highlight_idxes=hi_ok,
                     dividers=True,
                     divider_after=divider_after
