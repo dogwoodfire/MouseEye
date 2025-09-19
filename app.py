@@ -1587,20 +1587,20 @@ TPL_INDEX = r"""
       </div>
     </div>
 <div class="card" style="font-weight:600;font-size:20px;background:#e9f7f4;border-radius: 10px 10px 0px 0px;margin-bottom:3px">Camera 📷</div>
-    <div class="card" style="background:#e9f7f4;border-radius: 0px 0px 10px 10px;">
+    <div class="card" style="border-radius: 0px 0px 10px 10px;">
     <div class="row">
         <form action="{{ url_for('take_web_still') }}" method="post" style="display:block;width: 100%;">
-          <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %} style="width:100%;justify-content: center;background:#fff;">
+          <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %} style="width:100%;justify-content: center;">
               📸 Take Photo
           </button>
         </form>
     </div>
 <div class="row" style="display: flex; gap: 10px;">
-        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %} style="flex: 1; justify-content: center;background:#fff;">👀 Viewfinder</a>
-        <a class="btn" href="{{ url_for('stills_gallery') }}" style="flex: 1; justify-content: center;background:#fff;">🖼️ Stills Gallery</a>
+        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %} style="flex: 1; justify-content: center;">👀 Viewfinder</a>
+        <a class="btn" href="{{ url_for('stills_gallery') }}" style="flex: 1; justify-content: center;">🖼️ Stills Gallery</a>
     </div>
     </div>
-      <div class="card" style="font-weight:600;font-size:20px;margin-bottom:3px;border-radius: 10px 10px 0px 0px">Timelapse 🎥</div>
+      <div class="card" style="font-weight:600;font-size:20px;margin-bottom:3px;border-radius: 10px 10px 0px 0px;background:#e9f7f4;">Timelapse 🎥</div>
   <form class="card" action="{{ url_for('start') }}" method="post" style="border-radius: 0px 0px 10px 10px">
 
     <div class="row">
