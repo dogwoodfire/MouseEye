@@ -1578,8 +1578,6 @@ TPL_INDEX = r"""
               <button type="submit">Enable Hotspot</button>
             </form>
           {% endif %}
-        </div>
-        <div class="row" style="margin-top: 10px;">
             <form action="{{ url_for('shutdown_device') }}" method="post" onsubmit="return confirm('Are you sure you want to shut down the Raspberry Pi?');">
                 <button type="submit" style="background-color:#d9534f; color:white; border-color:#d43f3a;">
                     🔌 Shutdown Camera
