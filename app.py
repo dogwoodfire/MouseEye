@@ -908,6 +908,18 @@ def stills_gallery():
         files = []
     return render_template_string(TPL_STILLS, stills=files)
 
+@app.get("/stills_api")
+def stills_api():
+    """Returns a JSON list of still image filenames."""
+    try:
+        files = sorted(
+            [f for f in os.listdir(STILLS_DIR) if f.lower().endswith('.jpg')],
+            reverse=True
+        )
+        return jsonify(files)
+    except Exception as e:
+        return jsonify({"error": str(e), "files": []}), 500
+
 @app.get("/stills/<filename>")
 def serve_still(filename):
     """Serves a single still image file."""

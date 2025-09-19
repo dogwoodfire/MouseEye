@@ -70,6 +70,8 @@ _AP_CACHE = {"on": False, "ts": 0.0}
 _STATUS_CACHE = {}
 _STATUS_LOCK = threading.Lock()
 
+STILLS_LIST_URL = f"{LOCAL}/stills_api"
+
 def _poll_status_worker():
     """
     A daemon thread that polls the backend and updates the shared _STATUS_CACHE.
@@ -323,7 +325,7 @@ class UI:
     # States
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
     SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
-    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING, SHUTDOWN_CONFIRM, SETTINGS_MENU = range(22)
+    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING, SHUTDOWN_CONFIRM, SETTINGS_MENU, STILLS_VIEWER = range(23)
 
     def __init__(self):
         # prefs
@@ -374,9 +376,12 @@ class UI:
 
         self.state = self.HOME
         self.menu_idx = 0
-        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Settings"]
+        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "View Stills", "Settings"]
         self.settings_menu_items = ["Screen off", "Rotate display", "Shutdown Camera", "‹ Back"]
         self._home_items = self.menu_items[:]
+        
+        self.stills_list = []
+        self.stills_idx = 0
 
         try:
             # Load and display a custom splash screen image
@@ -844,6 +849,10 @@ class UI:
             self.sch_date = self.sch_date - timedelta(days=10); self.render()
         elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
+        elif self.state == self.STILLS_VIEWER:
+            if self.stills_list:
+                self.stills_idx = (self.stills_idx - 1) % len(self.stills_list)
+                self.render()
             
     def _logical_right(self):
         if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
@@ -854,6 +863,10 @@ class UI:
             self.sch_date = self.sch_date + timedelta(days=10); self.render()
         elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
             self.confirm_idx = 1 - self.confirm_idx; self.render()
+        elif self.state == self.STILLS_VIEWER:
+            if self.stills_list:
+                self.stills_idx = (self.stills_idx + 1) % len(self.stills_list)
+                self.render()
 
     # ---------- screen power ----------
     def _sleep_screen(self):
@@ -947,10 +960,17 @@ class UI:
                 self.start_tl_wizard()
             elif sel == "Schedules":
                 self.open_schedules()
+            elif sel == "View Stills":
+                 self.open_stills_viewer()
             elif sel == "Settings":
                 self.state = self.SETTINGS_MENU
                 self.menu_idx = 0
                 self.render()
+            return
+        
+        elif self.state == self.STILLS_VIEWER:
+            self.state = self.HOME
+            self.render()
             return
         
         elif self.state == self.SETTINGS_MENU:
@@ -967,6 +987,10 @@ class UI:
                 self.state = self.HOME
                 self.menu_idx = 0
                 self.render()
+            return
+        
+        if self.state == self.STILLS_VIEWER:
+            self._render_stills_viewer()
             return
         
         # advance through TL or SCH wizard
@@ -1050,7 +1074,55 @@ class UI:
     def _abort_to_home(self):
         self._draw_center("Discarded"); time.sleep(0.5)
         self.state = self.HOME; self.menu_idx = 0; self._request_hard_clear(); self.render()
+    # Add these new methods to the UI class
 
+    def open_stills_viewer(self):
+        """Fetches the list of stills and enters the viewer state."""
+        self._draw_center("Loading Stills...")
+        try:
+            stills = _http_json(STILLS_LIST_URL)
+            if isinstance(stills, list):
+                self.stills_list = stills
+                self.stills_idx = 0
+            else:
+                self.stills_list = []
+        except Exception:
+            self.stills_list = []
+
+        self.state = self.STILLS_VIEWER
+        self.render()
+
+    def _fetch_and_draw_still(self):
+        """Fetches a single still image and draws it."""
+        if not self.stills_list:
+            self._draw_center("No Stills Found", sub="Press any key to exit.")
+            return
+
+        filename = self.stills_list[self.stills_idx]
+        image_data = _http_post_and_get_image(f"{LOCAL}/stills/{filename}")
+
+        if image_data:
+            img = Image.open(io.BytesIO(image_data))
+            img.thumbnail((WIDTH, HEIGHT), Image.LANCZOS)
+            background = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
+            paste_x = (WIDTH - img.width) // 2
+            paste_y = (HEIGHT - img.height) // 2
+            background.paste(img, (paste_x, paste_y))
+
+            # Draw pagination
+            drw = ImageDraw.Draw(background)
+            page_text = f"{self.stills_idx + 1} of {len(self.stills_list)}"
+            footer_w = self._text_w(F_SMALL, page_text)
+            drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), page_text, font=F_SMALL, fill=WHITE)
+
+            self._present(background)
+        else:
+            self._draw_center("Load Failed", sub=filename)
+
+    def _render_stills_viewer(self):
+        """Renders the current still image."""
+        self._fetch_and_draw_still()
+        
     # ---------- actions ----------
     def quick_start(self):
         if self._busy: return
