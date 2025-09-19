@@ -1579,7 +1579,7 @@ TPL_INDEX = r"""
             </form>
           {% endif %}
             <form action="{{ url_for('shutdown_device') }}" method="post" onsubmit="return confirm('Are you sure you want to shut down the Raspberry Pi?');">
-                <button type="submit" style="background-color:#d9534f; color:white; border-color:#d43f3a;">
+                <button type="submit" style="background-color:#d9534f; color:white; border-color:#d43f3a;margin-botom: 0px">
                     🔌 Shutdown Camera
                 </button>
             </form>
