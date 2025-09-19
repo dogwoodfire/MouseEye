@@ -1566,7 +1566,7 @@ TPL_INDEX = r"""
         </span>
       </div>
 
-      <div id="settings-panel" style="display: none; margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
+      <div id="settings-panel" style="display: none; margin-top: 5px; border-top: 1px solid #fff;">
         <div class="row">
           {% if ap.on %}
             <form action="{{ url_for('ap_toggle') }}" method="post" style="display:inline;">
