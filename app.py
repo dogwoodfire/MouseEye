@@ -117,24 +117,23 @@ def _set_system_time(time_str):
 BASE = os.environ.get("TL_BASE", "/home/pi/timelapse")
 
 def _ensure_dirs(base_root: str):
-    """Ensure sessions/images directories exist. If creation fails (e.g. not running on Pi),
-    fall back to a local ./timelapse directory so the app can still start."""
-    sess = os.path.join(base_root, "sessions")
-    stills = os.path.join(base_root, "stills")  # legacy; not used for new sessions
+    """Ensure sessions and stills directories exist."""
+    sess_path = os.path.join(base_root, "sessions")
+    stills_path = os.path.join(base_root, "stills")
     try:
-        os.makedirs(sess, exist_ok=True)
-        os.makedirs(stills, exist_ok=True)
-        return base_root, sess, imgs
+        os.makedirs(sess_path, exist_ok=True)
+        os.makedirs(stills_path, exist_ok=True)
+        return base_root, sess_path, stills_path
     except Exception:
-        # Fallback to a local, user-writable directory (works on dev desktops)
-        fallback_root = os.path.abspath(os.environ.get("TL_FALLBACK_BASE", "./timelapse"))
-        fb_sess = os.path.join(fallback_root, "sessions")
-        fb_imgs = os.path.join(fallback_root, "stills")
-        os.makedirs(fb_sess, exist_ok=True)
-        os.makedirs(fb_imgs, exist_ok=True)
-        return fallback_root, fb_sess, fb_imgs
+        # Fallback to a local, user-writable directory
+        fallback_root = os.path.abspath("./timelapse")
+        fb_sess_path = os.path.join(fallback_root, "sessions")
+        fb_stills_path = os.path.join(fallback_root, "stills")
+        os.makedirs(fb_sess_path, exist_ok=True)
+        os.makedirs(fb_stills_path, exist_ok=True)
+        return fallback_root, fb_sess_path, fb_stills_path
 
-BASE, SESSIONS_DIR, IMAGES_DIR = _ensure_dirs(BASE)
+BASE, SESSIONS_DIR, STILLS_DIR = _ensure_dirs(BASE)
 STILLS_DIR = os.path.join(BASE, "stills")
 
 CAMERA_STILL = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
@@ -572,7 +571,8 @@ def _capture_loop(sess_dir, interval):
     ]
 
     proc = None
-    log_path = os.path.join(BASE, "timelapse_capture.log") # Log file path
+    # Save the log inside the specific session's directory
+    log_path = os.path.join(sess_dir, "capture.log")
 
     try:
         # Open a log file to capture errors from the camera process
