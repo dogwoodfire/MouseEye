@@ -1586,7 +1586,7 @@ TPL_INDEX = r"""
         </div>
       </div>
     </div>
-<div class="card" style="font-weight:600;font-size:20px;background:#e9f7f4;border-radius: 10px 10px 0px 0px;margin-bottom:5px">Camera 📷</div>
+<div class="card" style="font-weight:600;font-size:20px;background:#e9f7f4;border-radius: 10px 10px 0px 0px;margin-bottom:3px">Camera 📷</div>
     <div class="card" style="background:#e9f7f4;border-radius: 0px 0px 10px 10px;">
     <div class="row">
         <form action="{{ url_for('take_web_still') }}" method="post" style="display:block;width: 100%;">
@@ -1600,8 +1600,8 @@ TPL_INDEX = r"""
         <a class="btn" href="{{ url_for('stills_gallery') }}" style="flex: 1; justify-content: center;">🖼️ Stills Gallery</a>
     </div>
     </div>
-      <div class="card" style="font-weight:600;font-size:20px;">Timelapse 🎥</div>
-  <form class="card" action="{{ url_for('start') }}" method="post">
+      <div class="card" style="font-weight:600;font-size:20px;margin-bottom:3px;border-radius: 10px 10px 0px 0px">Timelapse 🎥</div>
+  <form class="card" action="{{ url_for('start') }}" method="post" style="border-radius: 0px 0px 10px 10px">
 
     <div class="row">
       <label>⏱ Interval (s):</label>
