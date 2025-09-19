@@ -974,10 +974,10 @@ class UI:
                 self.render()
             return
         
-        elif self.state == self.STILLS_VIEWER:
-            self.state = self.HOME
-            self.render()
-            return
+        # elif self.state == self.STILLS_VIEWER:
+        #     self.state = self.HOME
+        #     self.render()
+        #     return
         
         elif self.state == self.SETTINGS_MENU:
             sel = self.settings_menu_items[self.menu_idx]
