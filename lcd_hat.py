@@ -1093,13 +1093,23 @@ class UI:
         self.render()
 
     def _fetch_and_draw_still(self):
-        """Fetches a single still image and draws it."""
+        """Fetches a single still image via GET and draws it."""
         if not self.stills_list:
             self._draw_center("No Stills Found", sub="Press any key to exit.")
             return
 
         filename = self.stills_list[self.stills_idx]
-        image_data = _http_post_and_get_image(f"{LOCAL}/stills/{filename}")
+        
+        # --- THIS IS THE FIX ---
+        # Use a simple GET request to download the image, not POST
+        image_data = None
+        try:
+            with urlopen(f"{LOCAL}/stills/{filename}", timeout=5.0) as r:
+                if r.status == 200:
+                    image_data = r.read()
+        except Exception as e:
+            log(f"Failed to fetch still '{filename}': {e}")
+        # --- END OF FIX ---
 
         if image_data:
             img = Image.open(io.BytesIO(image_data))
@@ -1108,13 +1118,12 @@ class UI:
             paste_x = (WIDTH - img.width) // 2
             paste_y = (HEIGHT - img.height) // 2
             background.paste(img, (paste_x, paste_y))
-
-            # Draw pagination
+            
             drw = ImageDraw.Draw(background)
             page_text = f"{self.stills_idx + 1} of {len(self.stills_list)}"
             footer_w = self._text_w(F_SMALL, page_text)
             drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), page_text, font=F_SMALL, fill=WHITE)
-
+            
             self._present(background)
         else:
             self._draw_center("Load Failed", sub=filename)
