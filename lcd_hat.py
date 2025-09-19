@@ -195,7 +195,7 @@ IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
 rotate_icon = TablerIcons.load(FilledIcon.MOON)
 IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
 
-shutdown_icon = TablerIcons.load(FilledIcon.POWER)
+shutdown_icon = TablerIcons.load(FilledIcon.MOON)
 IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
 
 # ----------------- HTTP helpers -----------------
