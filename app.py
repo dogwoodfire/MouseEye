@@ -1588,7 +1588,7 @@ TPL_INDEX = r"""
         </div>
       </div>
     </div>
-<div class="card" style="font-weight:600;font-size:20px;">Camera 📷</div>
+<div class="card" style="font-weight:600;font-size:20px;">Camera 📷
     <div class="card">
     <div class="row">
         <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
@@ -1600,6 +1600,7 @@ TPL_INDEX = r"""
     <div class="row">
         <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
         <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
+    </div>
     </div>
     </div>
       <div class="card" style="font-weight:600;font-size:20px;">Timelapse 🎥</div>
