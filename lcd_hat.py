@@ -1176,11 +1176,11 @@ class UI:
                 icon = landscape_icon
             
             # Display the text and the selected icon
-            self._draw_center(f"Rotation: {mode_text}", sub=icon)
+            # self._draw_center(f"Rotation: {mode_text}", sub=icon)
 
             self._bind_inputs()
             self._request_hard_clear()
-            self._draw_center("Rotation set", "Lasndscape" if self.rot_deg == 90 else "Portrait")
+            self._draw_center("Rotation: {mode_text}", sub=icon)
             time.sleep(0.6)
             self.state = self.HOME
             self.render(force=True)
