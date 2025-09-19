@@ -966,7 +966,8 @@ class UI:
             elif sel == "Schedules":
                 self.open_schedules()
             elif sel == "View Stills":
-                 self.open_stills_viewer()
+                self.state = self.STILLS_VIEWER
+                self.render()
             elif sel == "Settings":
                 self.state = self.SETTINGS_MENU
                 self.menu_idx = 0
