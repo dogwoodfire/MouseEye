@@ -1590,7 +1590,7 @@ TPL_INDEX = r"""
     <div class="card" style="background:#e9f7f4;border-radius: 0px 0px 10px 10px;">
     <div class="row">
         <form action="{{ url_for('take_web_still') }}" method="post" style="display:block;width: 100%;">
-          <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %} style="width:100%;justify-content: center;">
+          <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %} style="width:100%;justify-content: center;background:#fff;">
               📸 Take Photo
           </button>
         </form>
