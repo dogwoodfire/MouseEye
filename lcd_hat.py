@@ -852,10 +852,11 @@ class UI:
             self.menu_idx = (self.menu_idx + delta) % len(items)
             self.render()
         elif self.state == self.SETTINGS_MENU:
+            # This block handles navigation for the new menu
             self.menu_idx = (self.menu_idx + delta) % len(self.settings_menu_items)
             self.render()
         elif self.state == self.SCHED_LIST:
-            n_items = 2 + len(self._sch_rows)  # 0=Back, 1=New, 2.. schedules
+            n_items = 2 + len(self._sch_rows)
             self.menu_idx = (self.menu_idx + delta) % max(1, n_items)
             self.render()
         elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
