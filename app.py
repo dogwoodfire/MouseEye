@@ -1602,8 +1602,9 @@ TPL_INDEX = r"""
         <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
     </div>
     </div>
+      <div class="card" style="font-weight:600;font-size:20px;">Timelapse 🎥</div>
   <form class="card" action="{{ url_for('start') }}" method="post">
-      <div style="font-weight:600;font-size:20px;">Timelapse 🎥</div>
+
     <div class="row">
       <label>⏱ Interval (s):</label>
       <input name="interval" type="number" min="1" step="1" value="{{ interval_default }}" style="width:90px">
