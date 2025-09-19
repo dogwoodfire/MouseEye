@@ -1188,7 +1188,6 @@ class UI:
             self._panel_on()
             if self.bl is not None: self.bl.value = 1.0
 
-            # --- Start of New Icon Logic ---
             img = self._blank()
             drw = ImageDraw.Draw(img)
             
@@ -1199,25 +1198,22 @@ class UI:
                 mode_text = "Landscape"
                 icon_to_draw = IMG_ICON_LANDSCAPE
 
-            # Draw the title text
             title_text = f"Rotation: {mode_text}"
             title_w = self._text_w(F_TITLE, title_text)
             drw.text(((WIDTH - int(title_w)) // 2, 20), title_text, font=F_TITLE, fill=WHITE)
             
-            # Create a palette and draw the icon below the text
-            palette = [0,0,0] + [255,255,255] * 255
-            icon_copy = icon_to_draw.copy()
-            icon_copy.putpalette(palette)
-            
-            icon_pos = ((WIDTH - icon_copy.width) // 2, 50)
-            img.paste(icon_copy, icon_pos, mask=icon_copy)
+            # --- THIS IS THE CORRECT METHOD ---
+            # Convert the icon to a 1-bit mask on the fly
+            icon_mask = icon_to_draw.convert('1')
+            icon_pos = ((WIDTH - icon_mask.width) // 2, 50)
+            # Paint the color WHITE onto the screen using the icon as a stencil
+            img.paste(WHITE, icon_pos, mask=icon_mask)
             
             self._present(img)
-            # --- End of New Icon Logic ---
-
+            
             self._bind_inputs()
             self._request_hard_clear()
-            time.sleep(1.5) # Keep the confirmation on screen
+            time.sleep(1.5)
             self.state = self.HOME
             self.render(force=True)
         finally:
@@ -1438,7 +1434,6 @@ class UI:
                     icon_image = icons.get(txt)
                     
                     if icon_image:
-                        # --- THIS IS THE CORRECT METHOD ---
                         # We "paint" the color WHITE onto the screen,
                         # using the 1-bit icon image as a stencil or "mask".
                         icon_pos = (5, y)
