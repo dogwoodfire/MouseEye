@@ -1401,24 +1401,22 @@ class UI:
                 self._render_home(); return
             
             if self.state == self.SETTINGS_MENU:
-                # This logic now draws icons next to the text
                 img = self._blank()
                 drw = ImageDraw.Draw(img)
                 y = 2
                 
-                # Draw title and footer
                 drw.text((2, y), "Settings", font=F_TITLE, fill=WHITE); y += 18
                 footer_text = "OK select, UP/DOWN nav"
                 footer_w = self._text_w(F_SMALL, footer_text)
                 drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), footer_text, font=F_SMALL, fill=WHITE)
 
-                # Associate menu items with their icons
                 icons = {
                     "Screen off": IMG_ICON_SCREEN_OFF,
                     "Rotate display": IMG_ICON_ROTATE,
                     "Shutdown Camera": IMG_ICON_SHUTDOWN
                 }
-
+                
+                # --- Start of New/Corrected Code ---
                 # Create a palette to map the icon's 1-bit color to RGB
                 # 0=black (background), 255=white (foreground)
                 palette = [0,0,0] + [255,255,255] * 255
@@ -1438,23 +1436,7 @@ class UI:
                         drw.text((10, y), txt, font=F_TEXT, fill=fill)
                     
                     y += 20
-
-                # Draw each menu item with its icon
-                for i, txt in enumerate(self.settings_menu_items):
-                    fill = BLUE if i == self.menu_idx else WHITE
-                    icon = icons.get(txt)
-                    
-                    if icon:
-                        # Position for icon and text
-                        icon_pos = (5, y + 2)
-                        text_pos = (28, y)
-                        img.paste(icon, icon_pos)
-                        drw.text(text_pos, txt, font=F_TEXT, fill=fill)
-                    else:
-                        # For items without an icon, like "‹ Back"
-                        drw.text((10, y), txt, font=F_TEXT, fill=fill)
-                    
-                    y += 20 # Increase line spacing for icons
+                # --- End of New/Corrected Code ---
                 
                 self._present(img)
                 return
