@@ -181,7 +181,7 @@ RED=(255,80,80);     DIM=(90,90,90)
 SPINNER = ["-", "\\", "|", "/"]
 
 # --- Icon Definitions using pytablericons ---
-from pytablericons import TablerIcons
+from pytablericons import TablerIcons, OutlineIcon
 
 # Icon settings
 ICON_SIZE = (16, 16) # Define size as a tuple
@@ -189,13 +189,13 @@ ICON_COLOR = "white"
 
 # Generate PIL Image objects directly from the library using the correct method
 # We use .copy() because the resize method modifies the image in-place
-screen_off_icon = TablerIcons.load(FilledIcon.MOON)
+screen_off_icon = TablerIcons.load(OutlineIcon.MOON)
 IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
 
-rotate_icon = TablerIcons.load(FilledIcon.REFRESH)
+rotate_icon = TablerIcons.load(OutlineIcon.REFRESH)
 IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
 
-shutdown_icon = TablerIcons.load(FilledIcon.POWER)
+shutdown_icon = TablerIcons.load(OutlineIcon.POWER)
 IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
 
 # ----------------- HTTP helpers -----------------
