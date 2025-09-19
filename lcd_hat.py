@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from collections import deque
 import threading
 import io
+from urllib.parse import quote
 
 DEBUG = os.environ.get("DEBUG") == "1"
 def log(*a):
@@ -1104,7 +1105,7 @@ class UI:
         self.render()
 
     def _fetch_and_draw_still(self):
-        """Fetches a single still image via GET and draws it."""
+        """Fetches a single still image via GET and draws it, handling special characters."""
         if not self.stills_list:
             self._draw_center("No Stills Found", sub="Press joystick to exit.")
             return
@@ -1112,15 +1113,18 @@ class UI:
         filename = self.stills_list[self.stills_idx]
         image_data = None
         
-        # --- THIS IS THE FIX ---
-        # Use a direct GET request to download the image from the correct endpoint
         try:
-            with urlopen(f"{LOCAL}/stills/{filename}", timeout=5.0) as r:
+            # --- THIS IS THE FIX ---
+            # URL-encode the filename to handle spaces and special characters
+            safe_filename = quote(filename)
+            url = f"{LOCAL}/stills/{safe_filename}"
+            # --- END OF FIX ---
+            
+            with urlopen(url, timeout=5.0) as r:
                 if r.status == 200:
                     image_data = r.read()
         except Exception as e:
             log(f"Failed to fetch still '{filename}': {e}")
-        # --- END OF FIX ---
 
         if image_data:
             img = Image.open(io.BytesIO(image_data))
