@@ -189,18 +189,18 @@ STROKE_WEIGHT = 0.5    # Set the desired weight here (1=thin, 2=default, 3=thick
 
 # Generate PIL Image objects using the correct method
 # 1. Load the icon
-screen_off_icon = TablerIcons.load(OutlineIcon.MOON)
+screen_off_icon = TablerIcons.load(OutlineIcon.MOON,stroke_width = STROKE_WEIGHT)
 # 2. Set its properties
-screen_off_icon.stroke_width = STROKE_WEIGHT
+# screen_off_icon.stroke_width = STROKE_WEIGHT
 # 3. Resize and convert it
 IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
 
-rotate_icon = TablerIcons.load(OutlineIcon.REFRESH)
-rotate_icon.stroke_width = STROKE_WEIGHT
+rotate_icon = TablerIcons.load(OutlineIcon.REFRESH,stroke_width = STROKE_WEIGHT)
+# rotate_icon.stroke_width = STROKE_WEIGHT
 IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
 
-shutdown_icon = TablerIcons.load(OutlineIcon.POWER)
-shutdown_icon.stroke_width = STROKE_WEIGHT
+shutdown_icon = TablerIcons.load(OutlineIcon.POWER,stroke_width = STROKE_WEIGHT)
+# shutdown_icon.stroke_width = STROKE_WEIGHT
 IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
 
 
