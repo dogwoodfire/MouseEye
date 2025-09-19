@@ -200,7 +200,7 @@ IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE)
 icon_portrait = TablerIcons.load(OutlineIcon.RECTANGLE_VERTICAL, stroke_width=STROKE_WEIGHT, color="white")
 IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE)
 
-icon_landscape = TablerIcons.load(OutlineIcon.RECTANGLE_HORIZONTAL, stroke_width=STROKE_WEIGHT, color="white")
+icon_landscape = TablerIcons.load(OutlineIcon.RECTANGLE, stroke_width=STROKE_WEIGHT, color="white")
 IMG_ICON_LANDSCAPE = icon_landscape.resize(ICON_SIZE)
 
 
