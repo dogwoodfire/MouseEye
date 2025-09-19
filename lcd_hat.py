@@ -184,25 +184,24 @@ SPINNER = ["-", "\\", "|", "/"]
 from pytablericons import TablerIcons, OutlineIcon
 
 # Icon settings
-ICON_SIZE = (16, 16) # Define size as a tuple
-ICON_SIZE_BIGGER = (32, 32)
-STROKE_WEIGHT = 0.25    # Set the desired weight here (1=thin, 2=default, 3=thick)
+ICON_SIZE = (32, 32)
+STROKE_WEIGHT = 1
 
-# Generate PIL Image objects using the correct method
-screen_off_icon = TablerIcons.load(OutlineIcon.MOON,stroke_width = STROKE_WEIGHT)
-IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
+# Generate PIL Image objects directly with the color white
+screen_off_icon = TablerIcons.load(OutlineIcon.MOON, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE)
 
-rotate_icon = TablerIcons.load(OutlineIcon.REFRESH,stroke_width = STROKE_WEIGHT)
-IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
+rotate_icon = TablerIcons.load(OutlineIcon.REFRESH, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE)
 
-shutdown_icon = TablerIcons.load(OutlineIcon.POWER,stroke_width = STROKE_WEIGHT)
-IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
+shutdown_icon = TablerIcons.load(OutlineIcon.POWER, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE)
 
-icon_portrait = TablerIcons.load(OutlineIcon.RECTANGLE_VERTICAL, stroke_width=STROKE_WEIGHT)
-IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE_BIGGER).convert('1')
+icon_portrait = TablerIcons.load(OutlineIcon.RECTANGLE_VERTICAL, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE)
 
-icon_landscape = TablerIcons.load(OutlineIcon.RECTANGLE, stroke_width=STROKE_WEIGHT)
-IMG_ICON_LANDSCAPE = icon_landscape.resize(ICON_SIZE_BIGGER).convert('1')
+icon_landscape = TablerIcons.load(OutlineIcon.RECTANGLE_HORIZONTAL, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_LANDSCAPE = icon_landscape.resize(ICON_SIZE)
 
 
 # ----------------- HTTP helpers -----------------
@@ -1207,10 +1206,9 @@ class UI:
                 drw.text(((WIDTH - int(line_w)) // 2, y_pos), line, font=F_TITLE, fill=WHITE)
                 y_pos += 16 # Move down for the next line
 
-            icon_mask = icon_to_draw.convert('1')
-            # Adjust icon position to be centered below the text
-            icon_pos = ((WIDTH - icon_mask.width) // 2, y_pos + 10)
-            img.paste(WHITE, icon_pos, mask=icon_mask)
+            # Paste the pre-colored icon using its own alpha channel as the mask
+            icon_pos = ((WIDTH - icon_to_draw.width) // 2, y_pos + 10)
+            img.paste(icon_to_draw, icon_pos, mask=icon_to_draw)
             
             self._present(img)
             
@@ -1420,7 +1418,7 @@ class UI:
                 img = self._blank()
                 drw = ImageDraw.Draw(img)
                 y = 2
-                
+
                 drw.text((2, y), "Settings", font=F_TITLE, fill=WHITE); y += 18
                 footer_text = "OK select, UP/DOWN nav"
                 footer_w = self._text_w(F_SMALL, footer_text)
@@ -1431,33 +1429,23 @@ class UI:
                     "Rotate display": IMG_ICON_ROTATE,
                     "Shutdown Camera": IMG_ICON_SHUTDOWN
                 }
-                
+
                 for i, txt in enumerate(self.settings_menu_items):
                     fill = BLUE if i == self.menu_idx else WHITE
                     icon_image = icons.get(txt)
-                    
+
                     if icon_image:
-                        # --- THIS IS THE HIGHER-QUALITY METHOD ---
-                        # Create a copy to work with
-                        icon_copy = icon_image.copy()
-                        
-                        # Create a mask from the icon's alpha channel for smooth edges
-                        mask = icon_copy.getchannel('A')
-                        
-                        # Create a solid white version of the icon
-                        solid_icon = Image.new("RGB", icon_copy.size, WHITE)
-                        
+                        # --- SIMPLIFIED METHOD ---
                         icon_pos = (5, y)
                         text_pos = (28, y)
-                        
-                        # Paste the solid white icon onto the screen using the alpha mask
-                        img.paste(solid_icon, icon_pos, mask=mask)
+                        # Paste the pre-colored icon using its own alpha channel as the mask
+                        img.paste(icon_image, icon_pos, mask=icon_image)
                         drw.text(text_pos, txt, font=F_TEXT, fill=fill)
                     else:
                         drw.text((10, y), txt, font=F_TEXT, fill=fill)
-                    
+
                     y += 20
-                
+
                 self._present(img)
                 return
 
