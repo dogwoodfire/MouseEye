@@ -1291,8 +1291,15 @@ class UI:
 
         # Dynamically build the menu items
         items = []
-        if st.get("active"): items.append("Stop capture")
-        items += ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display", "Shutdown Camera"]
+        if st.get("active"):
+            # When a capture is active, show a shorter menu
+            items = ["Stop capture", "Screen off", "Rotate display"]
+        else:
+            # When idle, show the main menu with the Settings option
+            items = self.menu_items # Uses ["Quick Start", ..., "Settings"]
+        
+        # This is the line that was missing the update.
+        # Ensure the logic uses the same list that is being displayed.
         self._home_items = items
 
         if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
