@@ -1105,7 +1105,7 @@ class UI:
         self.render()
 
     def _fetch_and_draw_still(self):
-        """Fetches a single still image via GET and draws it, handling special characters."""
+        """Fetches a single still image and draws it using the known-working method."""
         if not self.stills_list:
             self._draw_center("No Stills Found", sub="Press joystick to exit.")
             return
@@ -1116,7 +1116,6 @@ class UI:
         try:
             safe_filename = quote(filename)
             url = f"{LOCAL}/stills/{safe_filename}"
-            
             with urlopen(url, timeout=5.0) as r:
                 if r.status == 200:
                     image_data = r.read()
@@ -1125,26 +1124,32 @@ class UI:
 
         if image_data:
             try:
+                # --- Start of known-working logic from take_still_photo ---
                 img = Image.open(io.BytesIO(image_data))
                 
-                # --- THIS IS THE FIX ---
-                # Use the modern Image.Resampling.LANCZOS constant
+                # Create a proportionally scaled thumbnail.
                 img.thumbnail((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
-                # --- END OF FIX ---
-                
+
+                # Create a new black background image.
                 background = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
+
+                # Calculate the position to paste the thumbnail in the center.
                 paste_x = (WIDTH - img.width) // 2
                 paste_y = (HEIGHT - img.height) // 2
+
+                # Paste the thumbnail onto the black background.
                 background.paste(img, (paste_x, paste_y))
-                
+                # --- End of known-working logic ---
+
+                # Draw pagination text over the image
                 drw = ImageDraw.Draw(background)
                 page_text = f"{self.stills_idx + 1} of {len(self.stills_list)}"
                 footer_w = self._text_w(F_SMALL, page_text)
                 drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), page_text, font=F_SMALL, fill=WHITE)
                 
                 self._present(background)
+
             except Exception as e:
-                # If resizing fails for any reason, now we'll see the error
                 log(f"Error rendering image '{filename}': {e}")
                 self._draw_center("Render Failed", sub=filename)
         else:
