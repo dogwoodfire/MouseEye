@@ -896,6 +896,35 @@ def capture_still():
     except Exception as e:
         return jsonify({"error": "Failed to capture still", "message": str(e)}), 500
 
+@app.post("/take_web_still")
+def take_web_still():
+    """Captures a single photo from the web UI and redirects to a preview page."""
+    if not _idle_now():
+        return redirect(url_for("index")) # Don't do anything if not idle
+    
+    try:
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"still-{ts}.jpg"
+        path = os.path.join(STILLS_DIR, filename)
+
+        cmd = [
+            CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", path,
+            "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+            "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
+        ]
+        subprocess.run(cmd, check=True, timeout=10)
+        
+        # Redirect to the new preview page for this image
+        return redirect(url_for("still_preview", filename=filename))
+    except Exception as e:
+        print(f"Error capturing web still: {e}")
+        return redirect(url_for("index")) # Redirect home on error
+
+@app.get("/still_preview/<filename>")
+def still_preview(filename):
+    """Displays a single captured still with options."""
+    return render_template_string(TPL_STILL_PREVIEW, filename=filename)
+
 @app.get("/stills")
 def stills_gallery():
     """Displays a gallery of all captured stills."""
@@ -1605,6 +1634,16 @@ TPL_INDEX = r"""
     </div>
   </div>
   {% else %}
+    <div class="card"
+    <div class="row">
+        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
+        <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
+          <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %}>
+              📸 Quick Photo
+          </button>
+        </form>
+    </div>
+    </div>
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:center;">
       <div>
@@ -2140,6 +2179,30 @@ TPL_STILLS = r"""
     </div>
 </div>
 {% endif %}
+</main>
+"""
+TPL_STILL_PREVIEW = r"""
+<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Still Preview</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background:#f8fafc; color: #111827;}
+  header { background:#fff; border-bottom:1px solid #e5e7eb; padding: 10px 12px; display:flex; gap:10px; align-items:center; }
+  header h1 { margin: 0; font-size: 18px; }
+  main { padding: 12px; max-width: 1200px; margin: 0 auto; text-align: center; }
+  img { max-width: 100%; height: auto; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; }
+  .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; margin: 0 5px; }
+</style>
+<header>
+  <h1>📷 Photo Preview</h1>
+</header>
+<main>
+  <img src="{{ url_for('serve_still', filename=filename) }}" alt="Captured still image">
+  <div>
+    <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
+    <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ View Gallery</a>
+    <a class="btn" href="{{ url_for('serve_still', filename=filename) }}" download>⬇️ Download</a>
+  </div>
 </main>
 """
 
