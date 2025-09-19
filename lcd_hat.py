@@ -197,7 +197,7 @@ IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
 shutdown_icon = TablerIcons.load(OutlineIcon.POWER,stroke_width = STROKE_WEIGHT)
 IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
 
-icon_portrait = TablerIcons.load(OutlineIcon.RECTANGLE-VERTICAL, stroke_width=STROKE_WEIGHT)
+icon_portrait = TablerIcons.load(OutlineIcon.RECTANGLE_VERTICAL, stroke_width=STROKE_WEIGHT)
 IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE).convert('1')
 
 icon_landscape = TablerIcons.load(OutlineIcon.RECTANGLE, stroke_width=STROKE_WEIGHT)
