@@ -185,7 +185,7 @@ from pytablericons import TablerIcons, OutlineIcon
 
 # Icon settings
 ICON_SIZE = (16, 16) # Define size as a tuple
-STROKE_WEIGHT = 0.5    # Set the desired weight here (1=thin, 2=default, 3=thick)
+STROKE_WEIGHT = 0.25    # Set the desired weight here (1=thin, 2=default, 3=thick)
 
 # Generate PIL Image objects using the correct method
 # 1. Load the icon
