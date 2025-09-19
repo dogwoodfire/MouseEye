@@ -1437,14 +1437,23 @@ class UI:
                     icon_image = icons.get(txt)
                     
                     if icon_image:
-                        # We "paint" the color WHITE onto the screen,
-                        # using the 1-bit icon image as a stencil or "mask".
+                        # --- THIS IS THE HIGHER-QUALITY METHOD ---
+                        # Create a copy to work with
+                        icon_copy = icon_image.copy()
+                        
+                        # Create a mask from the icon's alpha channel for smooth edges
+                        mask = icon_copy.getchannel('A')
+                        
+                        # Create a solid white version of the icon
+                        solid_icon = Image.new("RGB", icon_copy.size, WHITE)
+                        
                         icon_pos = (5, y)
                         text_pos = (28, y)
-                        img.paste(WHITE, icon_pos, mask=icon_image)
+                        
+                        # Paste the solid white icon onto the screen using the alpha mask
+                        img.paste(solid_icon, icon_pos, mask=mask)
                         drw.text(text_pos, txt, font=F_TEXT, fill=fill)
                     else:
-                        # For items without an icon, like "‹ Back"
                         drw.text((10, y), txt, font=F_TEXT, fill=fill)
                     
                     y += 20
