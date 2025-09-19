@@ -1188,6 +1188,7 @@ class UI:
             self._panel_on()
             if self.bl is not None: self.bl.value = 1.0
 
+            # --- Start of New Icon Logic ---
             img = self._blank()
             drw = ImageDraw.Draw(img)
             
@@ -1212,6 +1213,7 @@ class UI:
             img.paste(icon_copy, icon_pos, mask=icon_copy)
             
             self._present(img)
+            # --- End of New Icon Logic ---
 
             self._bind_inputs()
             self._request_hard_clear()
