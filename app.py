@@ -1591,7 +1591,7 @@ TPL_INDEX = r"""
 <div class="card" style="font-weight:600;font-size:20px;background:#e9f7f4;">Camera 📷</div>
     <div class="card" style="background:#e9f7f4;">
     <div class="row">
-        <form action="{{ url_for('take_web_still') }}" method="post" style="display:block;">
+        <form action="{{ url_for('take_web_still') }}" method="post" style="display:block;width: 100%;">
           <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %} style="width:100%">
               📸 Quick Photo
           </button>
