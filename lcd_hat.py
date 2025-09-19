@@ -1543,6 +1543,10 @@ class UI:
 
                 self._present(img)
                 return
+            
+            if self.state == self.STILLS_VIEWER:
+                self._fetch_and_draw_still()
+                return
 
             if self.state in (
                 self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_ENC,
