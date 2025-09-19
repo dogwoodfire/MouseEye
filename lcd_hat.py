@@ -1136,7 +1136,7 @@ class UI:
                 img = Image.open(io.BytesIO(image_data))
                 print(f"DEBUG: PIL opened image. Format: {img.format}, Size: {img.size}, Mode: {img.mode}")
                 
-                img.thumbnail((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+                img.thumbnail((WIDTH, HEIGHT), Image.LANCZOS)
                 print(f"DEBUG: Thumbnail created. New size: {img.size}")
 
                 background = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
