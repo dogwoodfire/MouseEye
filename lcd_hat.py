@@ -297,7 +297,7 @@ class UI:
     # States
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
     SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
-    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING, SHUTDOWN_CONFIRM = range(21)
+    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING, SHUTDOWN_CONFIRM, SETTINGS_MENU = range(22)
 
     def __init__(self):
         # prefs
@@ -348,7 +348,8 @@ class UI:
 
         self.state = self.HOME
         self.menu_idx = 0
-        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Screen off", "Rotate display", "Shutdown Camera"]
+        self.menu_items = ["Quick Start", "New Timelapse", "Schedules", "Settings"]
+        self.settings_menu_items = ["Screen off", "Rotate display", "Shutdown Camera", "‹ Back"]
         self._home_items = self.menu_items[:]
 
         try:
@@ -844,20 +845,23 @@ class UI:
         self.render(force=True)
 
     # ---------- state helpers ----------
-    def nav(self, delta):
-        if self._busy: return
-        if self.state == self.HOME:
-            items = getattr(self, "_home_items", self.menu_items)
-            self.menu_idx = (self.menu_idx + delta) % max(1, len(items))
-            self.render()
-        elif self.state == self.SCHED_LIST:
-            n_items = 2 + len(self._sch_rows)  # 0=Back, 1=New, 2.. schedules
-            self.menu_idx = (self.menu_idx + delta) % max(1, n_items)
-            self.render()
-        elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
-            self.confirm_idx = 1 - self.confirm_idx; self.render()
-        else:
-            self.adjust(-1 if delta > 0 else +1)
+        def nav(self, delta):
+            if self._busy: return
+            if self.state == self.HOME:
+                items = getattr(self, "_home_items", self.menu_items)
+                self.menu_idx = (self.menu_idx + delta) % len(items)
+                self.render()
+            elif self.state == self.SETTINGS_MENU: # ADD THIS BLOCK
+                self.menu_idx = (self.menu_idx + delta) % len(self.settings_menu_items)
+                self.render()
+            elif self.state == self.SCHED_LIST:
+                n_items = 2 + len(self._sch_rows)  # 0=Back, 1=New, 2.. schedules
+                self.menu_idx = (self.menu_idx + delta) % max(1, n_items)
+                self.render()
+            elif self.state in (self.TL_CONFIRM, self.SCH_CONFIRM, self.SCHED_DEL_CONFIRM, self.SHUTDOWN_CONFIRM):
+                self.confirm_idx = 1 - self.confirm_idx; self.render()
+            else:
+                self.adjust(-1 if delta > 0 else +1)
 
     def adjust(self, delta):
         if self._busy: return
@@ -906,17 +910,34 @@ class UI:
         
         if self.state == self.HOME:
             items = getattr(self, "_home_items", self.menu_items)
-            sel = items[self.menu_idx] if items else None
-            if not sel: return
-            if sel.startswith("Stop capture"): self.stop_capture()
-            elif sel == "Quick Start":         self.quick_start()
-            elif sel == "New Timelapse":       self.start_tl_wizard()
-            elif sel == "Schedules":           self.open_schedules()
-            elif sel == "Screen off":          self._draw_center_sleep_then_off()
-            elif sel.startswith("Rotate display"): self.toggle_rotation()
+            sel = items[self.menu_idx]
+            if sel == "Quick Start":
+                self.quick_start()
+            elif sel == "New Timelapse":
+                self.start_tl_wizard()
+            elif sel == "Schedules":
+                self.open_schedules()
+            elif sel == "Settings":
+                # Enter the new settings menu
+                self.state = self.SETTINGS_MENU
+                self.menu_idx = 0
+                self.render()
+            return
+        
+        elif self.state == self.SETTINGS_MENU:
+            sel = self.settings_menu_items[self.menu_idx]
+            if sel == "Screen off":
+                self._draw_center_sleep_then_off()
+            elif sel == "Rotate display":
+                self.toggle_rotation()
             elif sel == "Shutdown Camera":
                 self.state = self.SHUTDOWN_CONFIRM
-                self.confirm_idx = 1 # Default to "No"
+                self.confirm_idx = 1  # Default to "No"
+                self.render()
+            elif sel == "‹ Back":
+                # Go back to the home menu
+                self.state = self.HOME
+                self.menu_idx = 0
                 self.render()
             return
 
@@ -1340,6 +1361,15 @@ class UI:
 
             if self.state == self.HOME:
                 self._render_home(); return
+            
+            if self.state == self.SETTINGS_MENU:
+                self._draw_lines(
+                    self.settings_menu_items,
+                    title="Settings",
+                    footer="OK select, UP/DOWN nav",
+                    highlight_idxes={self.menu_idx}
+                )
+                return
 
             if self.state in (
                 self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_ENC,
