@@ -180,18 +180,23 @@ RED=(255,80,80);     DIM=(90,90,90)
 
 SPINNER = ["-", "\\", "|", "/"]
 
-# ---  Icon Definitions using pytablericons ---
-import pytablericons
+# --- Icon Definitions using pytablericons ---
+from pytablericons import TablerIcons, Icon
 
 # Icon settings
-ICON_SIZE = 16
+ICON_SIZE = (16, 16) # Define size as a tuple
 ICON_COLOR = "white"
 
-# Generate PIL Image objects directly from the library
-# We convert them to '1' for monochrome masking
-IMG_ICON_SCREEN_OFF = pytablericons.image("moon", size=ICON_SIZE, color=ICON_COLOR).convert('1')
-IMG_ICON_ROTATE = pytablericons.image("refresh", size=ICON_SIZE, color=ICON_COLOR).convert('1')
-IMG_ICON_SHUTDOWN = pytablericons.image("power", size=ICON_SIZE, color=ICON_COLOR).convert('1')
+# Generate PIL Image objects directly from the library using the correct method
+# We use .copy() because the resize method modifies the image in-place
+screen_off_icon = TablerIcons.load(Icon.MOON)
+IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
+
+rotate_icon = TablerIcons.load(Icon.REFRESH)
+IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
+
+shutdown_icon = TablerIcons.load(Icon.POWER)
+IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
 
 # ----------------- HTTP helpers -----------------
 def _ap_status():
