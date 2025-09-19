@@ -826,6 +826,10 @@ class UI:
             self.render()
         elif self.state == self.SCH_DATE:
             self.sch_date = self.sch_date + timedelta(days=1); self.render()
+        elif self.state == self.STILLS_VIEWER:
+            # This exits the viewer and returns to the home menu
+            self.state = self.HOME
+            self.render()
         else:
             self.adjust(+1)
             
@@ -837,13 +841,15 @@ class UI:
             self.render()
         elif self.state == self.SCH_DATE:
             self.sch_date = self.sch_date - timedelta(days=1); self.render()
+        elif self.state == self.STILLS_VIEWER:
+            # This also exits the viewer
+            self.state = self.HOME
+            self.render()
         else:
             self.adjust(-1)
 
     def _logical_left(self):
-        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
-            self.adjust(-10)
-        elif self.state in (self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
+        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN, self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
             self.adjust(-10)
         elif self.state == self.SCH_DATE:
             self.sch_date = self.sch_date - timedelta(days=10); self.render()
@@ -855,9 +861,7 @@ class UI:
                 self.render()
             
     def _logical_right(self):
-        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN):
-            self.adjust(+10)
-        elif self.state in (self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
+        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN, self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
             self.adjust(+10)
         elif self.state == self.SCH_DATE:
             self.sch_date = self.sch_date + timedelta(days=10); self.render()
