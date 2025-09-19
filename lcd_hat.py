@@ -208,6 +208,21 @@ IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE_LARGE)
 icon_landscape = TablerIcons.load(OutlineIcon.RECTANGLE, stroke_width=STROKE_WEIGHT, color="white")
 IMG_ICON_LANDSCAPE = icon_landscape.resize(ICON_SIZE_LARGE)
 
+icon_play = TablerIcons.load(OutlineIcon.PLAYER_PLAY, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_PLAY = icon_play.resize(ICON_SIZE)
+
+icon_camera = TablerIcons.load(OutlineIcon.CAMERA_PLUS, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_CAMERA = icon_camera.resize(ICON_SIZE)
+
+icon_calendar = TablerIcons.load(OutlineIcon.CALENDAR_EVENT, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_CALENDAR = icon_calendar.resize(ICON_SIZE)
+
+icon_photo = TablerIcons.load(OutlineIcon.PHOTO, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_PHOTO = icon_photo.resize(ICON_SIZE)
+
+icon_settings = TablerIcons.load(OutlineIcon.SETTINGS, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_SETTINGS = icon_settings.resize(ICON_SIZE)
+
 
 # ----------------- HTTP helpers -----------------
 def _ap_status():
@@ -1132,7 +1147,7 @@ class UI:
                 self._draw_center("Render Failed", sub=filename)
         else:
             self._draw_center("Load Failed", sub=filename)
-            
+
     def _refresh_stills_list(self):
         """Fetch the list of stills from the backend and reset index."""
         try:
@@ -1438,33 +1453,54 @@ class UI:
             return
 
         status = "Idle"
-        if st.get("encoding"): status = "Encoding"
-        elif st.get("active"): status = "Capturing"
-
-        # Dynamically build the menu items
         items = []
+
         if st.get("active"):
-            # When a capture is active, show a shorter menu
-            items = ["Stop capture", "Screen off", "Rotate display"]
+            status = "Capturing"
+            items = ["Stop capture", "Screen off"] 
         else:
-            # When idle, show the main menu with the Settings option
-            items = self.menu_items # Uses ["Quick Start", ..., "Settings"]
-        
-        # This is the line that was missing the update.
-        # Ensure the logic uses the same list that is being displayed.
+            items = self.menu_items
+
         self._home_items = items
+        if self.menu_idx >= len(items):
+            self.menu_idx = max(0, len(items) - 1)
 
-        if self.menu_idx >= len(items): self.menu_idx = max(0, len(items)-1)
+        # --- Start of New Icon Rendering Logic ---
+        img = self._blank()
+        drw = ImageDraw.Draw(img)
+        y = 2
 
-        # Create the new footer with the current time
+        drw.text((2, y), status, font=F_TITLE, fill=WHITE); y += 18
+        
+        icons = {
+            "Quick Start": IMG_ICON_PLAY,
+            "New Timelapse": IMG_ICON_CAMERA,
+            "Schedules": IMG_ICON_CALENDAR,
+            "View Stills": IMG_ICON_PHOTO,
+            "Settings": IMG_ICON_SETTINGS
+        }
+
+        for i, txt in enumerate(items):
+            fill = BLUE if i == self.menu_idx else WHITE
+            icon_image = icons.get(txt)
+            
+            if icon_image:
+                icon_pos = (5, y)
+                text_pos = (28, y)
+                img.paste(icon_image, icon_pos, mask=icon_image)
+                drw.text(text_pos, txt, font=F_TEXT, fill=fill)
+            else:
+                drw.text((10, y), txt, font=F_TEXT, fill=fill)
+            
+            y += 20
+        
         now_str = datetime.now().strftime("%H:%M:%S")
         footer_text = f"{now_str}"
-
-        # Draw the menu with the new footer
-        self._draw_lines(items, title=status,
-                         footer=footer_text,
-                         highlight_idxes={self.menu_idx},
-                         dividers=False)
+        footer_w = self._text_w(F_SMALL, footer_text)
+        drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), footer_text, font=F_SMALL, fill=WHITE)
+        
+        self._present(img)
+        # --- End of New Icon Rendering Logic ---
 
     def _render_wz(self):
         self._maybe_hard_clear()
