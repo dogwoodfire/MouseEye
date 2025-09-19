@@ -1597,9 +1597,9 @@ TPL_INDEX = r"""
           </button>
         </form>
     </div>
-    <div class="row">
-        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Viewfinder</a>
-        <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
+<div class="row" style="display: flex; gap: 10px;">
+        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %} style="flex: 1; justify-content: center;">👀 Viewfinder</a>
+        <a class="btn" href="{{ url_for('stills_gallery') }}" style="flex: 1; justify-content: center;">🖼️ Stills Gallery</a>
     </div>
     </div>
       <div class="card" style="font-weight:600;font-size:20px;">Timelapse 🎥</div>
