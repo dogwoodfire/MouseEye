@@ -190,14 +190,15 @@ ICON_COLOR = "white"
 
 # Generate PIL Image objects directly from the library using the correct method
 # We use .copy() because the resize method modifies the image in-place
-screen_off_icon = TablerIcons.load(OutlineIcon.MOON)
-IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1').ICON_WEIGHT
+screen_off_icon = TablerIcons.load(OutlineIcon.MOON, ICON_WEIGHT)
+IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
 
-rotate_icon = TablerIcons.load(OutlineIcon.REFRESH)
-IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1').ICON_WEIGHT
+rotate_icon = TablerIcons.load(OutlineIcon.REFRESH, ICON_WEIGHT)
+IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
 
-shutdown_icon = TablerIcons.load(OutlineIcon.POWER)
-IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1').ICON_WEIGHT
+shutdown_icon = TablerIcons.load(OutlineIcon.POWER, ICON_WEIGHT)
+IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
+
 
 # ----------------- HTTP helpers -----------------
 def _ap_status():
