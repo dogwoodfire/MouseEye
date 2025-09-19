@@ -1598,9 +1598,6 @@ TPL_INDEX = r"""
       <input name="duration_hours" type="number" min="0" step="1" placeholder="hrs" style="width:60px">
       <input name="duration_minutes" type="number" min="0" step="1" placeholder="mins" style="width:60px">
     </div>
-        <div class="row">
-          <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}"{% if not idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
-      </div>
     
     <div class="row">
       <button class="btn-strong" type="submit"
@@ -1633,15 +1630,17 @@ TPL_INDEX = r"""
     </div>
   </div>
   {% else %}
-    <div class="card"
+    <div class="card">
     <div class="row">
         <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
-        <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
+                <div class="row">
+                <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
           <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %}>
               📸 Quick Photo
           </button>
         </form>
-        <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
+            <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
+        </div>
     </div>
     </div>
   <div class="card">
