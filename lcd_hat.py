@@ -192,7 +192,7 @@ ICON_COLOR = "white"
 screen_off_icon = TablerIcons.load(FilledIcon.MOON)
 IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
 
-rotate_icon = TablerIcons.load(FilledIcon.REFRESH)
+rotate_icon = TablerIcons.load(FilledIcon.ROTATE)
 IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
 
 shutdown_icon = TablerIcons.load(FilledIcon.POWER)
