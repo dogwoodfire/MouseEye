@@ -1547,7 +1547,7 @@ TPL_INDEX = r"""
 </style>
 
 <header>
-  <h1>📸 Pi Timelapse - Mouse Eye 🐭 </h1>
+  <h1>📸 Cyclopse Camera </h1>
 </header>
 
 <main>
@@ -1589,7 +1589,7 @@ TPL_INDEX = r"""
       </div>
     </div>
   <form class="card" action="{{ url_for('start') }}" method="post">
-      <div style="font-weight:600;font-size:24px;">Timelapse 🎥</div>
+      <h1>Timelapse 🎥</h1>
     <div class="row">
       <label>⏱ Interval (s):</label>
       <input name="interval" type="number" min="1" step="1" value="{{ interval_default }}" style="width:90px">
@@ -1632,7 +1632,7 @@ TPL_INDEX = r"""
   </div>
   {% else %}
     <div class="card">
-    <div style="font-weight:600;font-size:24px;">Camera 📷</div>
+    <h1>>Camera 📷</h1>
     <div class="row">
         <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
           <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %}>
