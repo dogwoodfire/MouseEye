@@ -1588,8 +1588,22 @@ TPL_INDEX = r"""
         </div>
       </div>
     </div>
+    <div class="card">
+    <div style="font-weight:600;font-size:20px;">Camera 📷</div>
+    <div class="row">
+        <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
+          <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %}>
+              📸 Quick Photo
+          </button>
+        </form>
+    </div>
+    <div class="row">
+        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
+        <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
+    </div>
+    </div>
   <form class="card" action="{{ url_for('start') }}" method="post">
-      <h1>Timelapse 🎥</h1>
+      <div style="font-weight:600;font-size:20px;">Timelapse 🎥</div>
     <div class="row">
       <label>⏱ Interval (s):</label>
       <input name="interval" type="number" min="1" step="1" value="{{ interval_default }}" style="width:90px">
@@ -1631,20 +1645,6 @@ TPL_INDEX = r"""
     </div>
   </div>
   {% else %}
-    <div class="card">
-    <h1>>Camera 📷</h1>
-    <div class="row">
-        <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
-          <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %}>
-              📸 Quick Photo
-          </button>
-        </form>
-    </div>
-    <div class="row">
-        <a class="btn {% if not idle_now %}disabled{% endif %}" href="{{ url_for('live_page') }}" {% if not idle_now %}aria-disabled="true"{% endif %}>👀 Open viewfinder</a>
-        <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ Stills Gallery</a>
-    </div>
-    </div>
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:center;">
       <div>
