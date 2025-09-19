@@ -1083,62 +1083,55 @@ class UI:
     # Add these new methods to the UI class
 
     def _fetch_and_draw_still(self):
-        """Fetches a single still image with detailed debugging print statements."""
-        print("\n--- Entering Stills Viewer ---")
+        """Fetches and draws a still image using the known-working logic."""
         if not self.stills_list:
-            print("DEBUG: No stills in self.stills_list. Aborting.")
             self._draw_center("No Stills Found", sub="Press joystick to exit.")
             return
 
         filename = self.stills_list[self.stills_idx]
-        print(f"DEBUG: Attempting to load index {self.stills_idx}, filename: {filename}")
         image_data = None
         
         try:
             safe_filename = quote(filename)
             url = f"{LOCAL}/stills/{safe_filename}"
-            print(f"DEBUG: Fetching URL: {url}")
-            
             with urlopen(url, timeout=5.0) as r:
                 if r.status == 200:
                     image_data = r.read()
-                    print(f"DEBUG: Successfully downloaded {len(image_data)} bytes.")
-                else:
-                    print(f"DEBUG: Server returned status code {r.status}")
         except Exception as e:
-            print(f"CRITICAL: Download failed. Error: {e}")
+            log(f"Failed to fetch still '{filename}': {e}")
 
         if image_data:
-            print("DEBUG: Image data exists. Attempting to render with PIL.")
             try:
+                # --- Start of known-working logic from your example ---
                 img = Image.open(io.BytesIO(image_data))
-                print(f"DEBUG: PIL opened image. Format: {img.format}, Size: {img.size}, Mode: {img.mode}")
-                
-                img.thumbnail((WIDTH, HEIGHT), Image.LANCZOS)
-                print(f"DEBUG: Thumbnail created. New size: {img.size}")
 
+                # Create a proportionally scaled thumbnail. This modifies the image in-place.
+                img.thumbnail((WIDTH, HEIGHT), Image.LANCZOS)
+
+                # Create a new black background image of the correct screen size.
                 background = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
+
+                # Calculate the position to paste the thumbnail in the center.
                 paste_x = (WIDTH - img.width) // 2
                 paste_y = (HEIGHT - img.height) // 2
-                
-                # Use the simple paste method we know works for the rotation icons
-                background.paste(img, (paste_x, paste_y), mask=img)
-                print("DEBUG: Image pasted onto background.")
-                
+
+                # Paste the thumbnail onto the black background.
+                background.paste(img, (paste_x, paste_y))
+                # --- End of known-working logic ---
+
+                # Add the pagination text
                 drw = ImageDraw.Draw(background)
                 page_text = f"{self.stills_idx + 1} of {len(self.stills_list)}"
                 footer_w = self._text_w(F_SMALL, page_text)
                 drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), page_text, font=F_SMALL, fill=WHITE)
-                print("DEBUG: Pagination text drawn.")
                 
+                # Display the final composite image.
                 self._present(background)
-                print("DEBUG: Final image presented to screen.")
 
             except Exception as e:
-                print(f"CRITICAL: PIL rendering failed. Error: {e}")
+                log(f"Error rendering image '{filename}': {e}")
                 self._draw_center("Render Failed", sub=filename)
         else:
-            print("DEBUG: No image data was downloaded. Showing 'Load Failed' screen.")
             self._draw_center("Load Failed", sub=filename)
 
     def _render_stills_viewer(self):
