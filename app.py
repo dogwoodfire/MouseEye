@@ -2301,10 +2301,10 @@ SCHED_TPL = '''<!doctype html>
   <a class="link" href="{{ url_for('index') }}">← Back</a>
 </form>
 
-<h2>Existing schedules</h2>
+<h2>Upcoming & Active Schedules</h2>
 <div class="cards">
   {% if not schedules %}
-    <div class="muted">No schedules yet.</div>
+    <div class="muted">No upcoming schedules.</div>
   {% endif %}
   {% for sid, sc in schedules %}
   <div class="card">
@@ -2316,6 +2316,26 @@ SCHED_TPL = '''<!doctype html>
     <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
     <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Cancel this schedule?')">
       <button class="danger" type="submit">Cancel</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+
+<h2 style="margin-top:24px;">Past Schedules</h2>
+<div class="cards">
+  {% if not past_schedules %}
+    <div class="muted">No past schedules.</div>
+  {% endif %}
+  {% for sid, sc in past_schedules %}
+  <div class="card" style="opacity: 0.7;">
+    <div><b>ID:</b> {{ sid }}</div>
+    {% if sc.sess %}<div><b>Session:</b> {{ sc.sess }}</div>{% endif %}
+    <div><b>Start:</b> {{ sc.start_h }}</div>
+    <div><b>End:</b>   {{ sc.end_h }}</div>
+    <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
+    <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
+    <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Delete this past schedule record?')">
+      <button class="danger" type="submit">Delete Record</button>
     </form>
   </div>
   {% endfor %}
@@ -2373,24 +2393,38 @@ def disk():
 
 @app.get("/schedule")
 def schedule_page():
-    # build view model
-    items = []
-    for sid, st in sorted(_schedules.items(), key=lambda kv: kv[1].get("start_ts", 0)):
+    # build view models for upcoming/active and past schedules
+    now_ts = int(time.time())
+    upcoming_schedules = []
+    past_schedules = []
+    
+    sorted_items = sorted(_schedules.items(), key=lambda kv: kv[1].get("start_ts", 0))
+    
+    for sid, st in sorted_items:
         try:
             start_h = datetime.fromtimestamp(int(st["start_ts"])).strftime("%a %Y-%m-%d %H:%M")
             end_h   = datetime.fromtimestamp(int(st["end_ts"])).strftime("%a %Y-%m-%d %H:%M")
         except Exception:
             start_h = end_h = "?"
+        
+        # Create a view model object
         vm = dict(st)
         vm["start_h"] = start_h
         vm["end_h"]   = end_h
-        items.append((sid, type("S", (), vm)))
+        
+        # Sort into the correct list based on end time
+        if int(st.get("end_ts", 0)) < now_ts:
+            past_schedules.append((sid, vm))
+        else:
+            upcoming_schedules.append((sid, vm))
+
     return render_template_string(
         SCHED_TPL,
         fps_choices=globals().get("FPS_CHOICES", [10, 24, 30]),
         default_fps=globals().get("DEFAULT_FPS", 24),
         interval_default=globals().get("CAPTURE_INTERVAL_SEC", 10),
-        schedules=items
+        schedules=upcoming_schedules,
+        past_schedules=past_schedules # Pass the new list to the template
     )
 
 @app.post("/schedule/arm")
