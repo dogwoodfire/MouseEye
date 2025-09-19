@@ -180,6 +180,25 @@ RED=(255,80,80);     DIM=(90,90,90)
 
 SPINNER = ["-", "\\", "|", "/"]
 
+ICON_SCREEN_OFF = (
+    b'\x00\x00\x00\x07\xe0\x00\x0f\xf0\x01\xfc\x00\x03\xf8\x00\x07\xf0'
+    b'\x00\x07\xe0\x00\x0f\xc0\x00\x1f\x80\x00\x1f\x00\x00\x0e\x00\x00'
+    b'\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+)
+ICON_ROTATE = (
+    b'\x00\x00\x01\xf8\x03\xfc\x07\x8e\x07\x06\x0e\x06\x1c\x06\x38\x8e'
+    b'\x71\xfc\x0e\x06\x0e\x06\x0e\x06\x07\xf0\x03\xf8\x01\xf0\x00\x00'
+)
+ICON_SHUTDOWN = (
+    b'\x00\x00\x01\xe0\x03\xf0\x07\xb8\x0c\x9c\x0c\x1c\x18\x18\x18\x18'
+    b'\x18\x18\x0c\x1c\x0c\x9c\x07\xb8\x03\xf0\x01\xe0\x00\x00\x00\x00'
+)
+
+# Load icons into PIL Image objects
+IMG_ICON_SCREEN_OFF = Image.frombytes('1', (16, 16), ICON_SCREEN_OFF)
+IMG_ICON_ROTATE = Image.frombytes('1', (16, 16), ICON_ROTATE)
+IMG_ICON_SHUTDOWN = Image.frombytes('1', (16, 16), ICON_SHUTDOWN)
+
 # ----------------- HTTP helpers -----------------
 def _ap_status():
     j = _http_json(AP_STATUS_URL)
@@ -1382,12 +1401,42 @@ class UI:
                 self._render_home(); return
             
             if self.state == self.SETTINGS_MENU:
-                self._draw_lines(
-                    self.settings_menu_items,
-                    title="Settings",
-                    footer="OK select, UP/DOWN nav",
-                    highlight_idxes={self.menu_idx}
-                )
+                # This logic now draws icons next to the text
+                img = self._blank()
+                drw = ImageDraw.Draw(img)
+                y = 2
+                
+                # Draw title and footer
+                drw.text((2, y), "Settings", font=F_TITLE, fill=WHITE); y += 18
+                footer_text = "OK select, UP/DOWN nav"
+                footer_w = self._text_w(F_SMALL, footer_text)
+                drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), footer_text, font=F_SMALL, fill=WHITE)
+
+                # Associate menu items with their icons
+                icons = {
+                    "Screen off": IMG_ICON_SCREEN_OFF,
+                    "Rotate display": IMG_ICON_ROTATE,
+                    "Shutdown Camera": IMG_ICON_SHUTDOWN
+                }
+
+                # Draw each menu item with its icon
+                for i, txt in enumerate(self.settings_menu_items):
+                    fill = BLUE if i == self.menu_idx else WHITE
+                    icon = icons.get(txt)
+                    
+                    if icon:
+                        # Position for icon and text
+                        icon_pos = (5, y + 2)
+                        text_pos = (28, y)
+                        img.paste(icon, icon_pos)
+                        drw.text(text_pos, txt, font=F_TEXT, fill=fill)
+                    else:
+                        # For items without an icon, like "‹ Back"
+                        drw.text((10, y), txt, font=F_TEXT, fill=fill)
+                    
+                    y += 20 # Increase line spacing for icons
+                
+                self._present(img)
                 return
 
             if self.state in (
