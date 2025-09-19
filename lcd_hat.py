@@ -73,19 +73,6 @@ _STATUS_LOCK = threading.Lock()
 
 STILLS_LIST_URL = f"{LOCAL}/stills_api"
 
-def _refresh_stills_list(self):
-    """Fetch the list of stills from the backend and reset index."""
-    try:
-        files = _http_json(STILLS_LIST_URL, timeout=1.5)
-        if isinstance(files, list):
-            self.stills_list = files
-            self.stills_idx = 0 if files else 0
-        else:
-            self.stills_list = []
-    except Exception:
-        self.stills_list = []
-
-
 def _poll_status_worker():
     """
     A daemon thread that polls the backend and updates the shared _STATUS_CACHE.
@@ -1145,6 +1132,19 @@ class UI:
                 self._draw_center("Render Failed", sub=filename)
         else:
             self._draw_center("Load Failed", sub=filename)
+            
+    def _refresh_stills_list(self):
+        """Fetch the list of stills from the backend and reset index."""
+        try:
+            files = _http_json(STILLS_LIST_URL, timeout=1.5)
+            if isinstance(files, list):
+                self.stills_list = files
+                self.stills_idx = 0 if files else 0
+            else:
+                self.stills_list = []
+        except Exception:
+            self.stills_list = []
+
 
     def _render_stills_viewer(self):
         """Renders the current still image."""
