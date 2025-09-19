@@ -185,19 +185,23 @@ from pytablericons import TablerIcons, OutlineIcon
 
 # Icon settings
 ICON_SIZE = (16, 16) # Define size as a tuple
-ICON_WEIGHT = stroke_width=1
-ICON_COLOR = color="white"
+STROKE_WEIGHT = 1    # Set the desired weight here (1=thin, 2=default, 3=thick)
 
-# Generate PIL Image objects directly from the library using the correct method
-# We use .copy() because the resize method modifies the image in-place
-screen_off_icon = TablerIcons.load(OutlineIcon.MOON, ICON_WEIGHT)
-IMG_ICON_SCREEN_OFF = screen_off_icon.show
+# Generate PIL Image objects using the correct method
+# 1. Load the icon
+screen_off_icon = TablerIcons.load(OutlineIcon.MOON)
+# 2. Set its properties
+screen_off_icon.stroke_width = STROKE_WEIGHT
+# 3. Resize and convert it
+IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
 
-rotate_icon = TablerIcons.load(OutlineIcon.REFRESH, ICON_WEIGHT, ICON_COLOR)
-IMG_ICON_ROTATE = rotate_icon.show
+rotate_icon = TablerIcons.load(OutlineIcon.REFRESH)
+rotate_icon.stroke_width = STROKE_WEIGHT
+IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
 
-shutdown_icon = TablerIcons.load(OutlineIcon.POWER, ICON_WEIGHT)
-IMG_ICON_SHUTDOWN = shutdown_icon.show
+shutdown_icon = TablerIcons.load(OutlineIcon.POWER)
+shutdown_icon.stroke_width = STROKE_WEIGHT
+IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
 
 
 # ----------------- HTTP helpers -----------------
