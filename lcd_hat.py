@@ -1131,35 +1131,35 @@ class UI:
             print(f"CRITICAL: Download failed. Error: {e}")
 
         if image_data:
-            print("DEBUG: Image data exists. Attempting to render with PIL.")
             try:
-                img = Image.open(io.BytesIO(image_data))
-                print(f"DEBUG: PIL opened image. Format: {img.format}, Size: {img.size}, Mode: {img.mode}")
-                
-                img.thumbnail((WIDTH, HEIGHT), Image.LANCZOS)
-                print(f"DEBUG: Thumbnail created. New size: {img.size}")
+                img_from_web = Image.open(io.BytesIO(image_data))
 
+                # Create a proportionally scaled thumbnail
+                img_from_web.thumbnail((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+
+                # Create a new black background image
                 background = Image.new('RGB', (WIDTH, HEIGHT), (0, 0, 0))
-                paste_x = (WIDTH - img.width) // 2
-                paste_y = (HEIGHT - img.height) // 2
-                
-                background.paste(img, (paste_x, paste_y))
-                print("DEBUG: Image pasted onto background.")
-                
+
+                # Calculate the position to paste the thumbnail in the center
+                paste_x = (WIDTH - img_from_web.width) // 2
+                paste_y = (HEIGHT - img_from_web.height) // 2
+
+                # --- THIS IS THE FIX ---
+                # Use the simple, direct paste method that we know works
+                background.paste(img_from_web, (paste_x, paste_y), mask=img_from_web)
+                # --- END OF FIX ---
+
                 drw = ImageDraw.Draw(background)
                 page_text = f"{self.stills_idx + 1} of {len(self.stills_list)}"
                 footer_w = self._text_w(F_SMALL, page_text)
                 drw.text(((WIDTH - int(footer_w)) // 2, HEIGHT - 12), page_text, font=F_SMALL, fill=WHITE)
-                print("DEBUG: Pagination text drawn.")
                 
                 self._present(background)
-                print("DEBUG: Final image presented to screen.")
 
             except Exception as e:
-                print(f"CRITICAL: PIL rendering failed. Error: {e}")
+                log(f"Error rendering image '{filename}': {e}")
                 self._draw_center("Render Failed", sub=filename)
         else:
-            print("DEBUG: No image data was downloaded. Showing 'Load Failed' screen.")
             self._draw_center("Load Failed", sub=filename)
 
     def _render_stills_viewer(self):
