@@ -185,6 +185,7 @@ from pytablericons import TablerIcons, OutlineIcon
 
 # Icon settings
 ICON_SIZE = (16, 16) # Define size as a tuple
+ICON_SIZE_BIGGER = (32, 32)
 STROKE_WEIGHT = 0.25    # Set the desired weight here (1=thin, 2=default, 3=thick)
 
 # Generate PIL Image objects using the correct method
@@ -198,10 +199,10 @@ shutdown_icon = TablerIcons.load(OutlineIcon.POWER,stroke_width = STROKE_WEIGHT)
 IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
 
 icon_portrait = TablerIcons.load(OutlineIcon.RECTANGLE_VERTICAL, stroke_width=STROKE_WEIGHT)
-IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE).convert('1')
+IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE_BIGGER).convert('1')
 
 icon_landscape = TablerIcons.load(OutlineIcon.RECTANGLE, stroke_width=STROKE_WEIGHT)
-IMG_ICON_LANDSCAPE = icon_landscape.resize(ICON_SIZE).convert('1')
+IMG_ICON_LANDSCAPE = icon_landscape.resize(ICON_SIZE_BIGGER).convert('1')
 
 
 # ----------------- HTTP helpers -----------------
@@ -1192,28 +1193,30 @@ class UI:
             drw = ImageDraw.Draw(img)
             
             if self.rot_deg == 0:
-                mode_text = "Portrait"
+                # Text is now split with \n for two lines
+                title_text = "Rotation set to:\nPortrait"
                 icon_to_draw = IMG_ICON_PORTRAIT
             else:
-                mode_text = "Landscape"
+                title_text = "Rotation set to:\nLandscape"
                 icon_to_draw = IMG_ICON_LANDSCAPE
 
-            title_text = f"Rotation: {mode_text}"
-            title_w = self._text_w(F_TITLE, title_text)
-            drw.text(((WIDTH - int(title_w)) // 2, 20), title_text, font=F_TITLE, fill=WHITE)
-            
-            # --- THIS IS THE CORRECT METHOD ---
-            # Convert the icon to a 1-bit mask on the fly
+            # --- Centering logic for multi-line text and larger icon ---
+            y_pos = 15 # Starting y-position for the first line of text
+            for line in title_text.split('\n'):
+                line_w = self._text_w(F_TITLE, line)
+                drw.text(((WIDTH - int(line_w)) // 2, y_pos), line, font=F_TITLE, fill=WHITE)
+                y_pos += 16 # Move down for the next line
+
             icon_mask = icon_to_draw.convert('1')
-            icon_pos = ((WIDTH - icon_mask.width) // 2, 50)
-            # Paint the color WHITE onto the screen using the icon as a stencil
+            # Adjust icon position to be centered below the text
+            icon_pos = ((WIDTH - icon_mask.width) // 2, y_pos + 10)
             img.paste(WHITE, icon_pos, mask=icon_mask)
             
             self._present(img)
             
             self._bind_inputs()
             self._request_hard_clear()
-            time.sleep(1.5)
+            time.sleep(2) # Keep on screen a little longer
             self.state = self.HOME
             self.render(force=True)
         finally:
