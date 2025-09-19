@@ -2343,7 +2343,7 @@ SCHED_TPL = '''<!doctype html>
 <h2 style="margin-top:24px;">Past Schedules</h2>
 {% if past_schedules %}
   <form action="{{ url_for('delete_past_schedules') }}" method="post" onsubmit="return confirm('Are you sure you want to delete all past schedule records?');" style="margin-bottom: 12px;">
-    <button type="submit" class="danger" style="max-width: 200px;">🗑️ Delete All Past Schedules</button>
+    <button type="submit" class="danger" style="max-width: 1000px;">🗑️ Delete All Past Schedules</button>
   </form>
 {% endif %}
 <div class="cards">
