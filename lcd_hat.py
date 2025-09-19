@@ -184,8 +184,10 @@ SPINNER = ["-", "\\", "|", "/"]
 from pytablericons import TablerIcons, OutlineIcon
 
 # Icon settings
-ICON_SIZE = (32, 32)
+ICON_SIZE = (16, 16)
 STROKE_WEIGHT = 1
+ICON_SIZE_LARGE = (45, 45)
+STROKE_WEIGHT = 2
 
 # Generate PIL Image objects directly with the color white
 screen_off_icon = TablerIcons.load(OutlineIcon.MOON, stroke_width=STROKE_WEIGHT, color="white")
@@ -198,10 +200,10 @@ shutdown_icon = TablerIcons.load(OutlineIcon.POWER, stroke_width=STROKE_WEIGHT, 
 IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE)
 
 icon_portrait = TablerIcons.load(OutlineIcon.RECTANGLE_VERTICAL, stroke_width=STROKE_WEIGHT, color="white")
-IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE)
+IMG_ICON_PORTRAIT = icon_portrait.resize(ICON_SIZE_LARGE)
 
 icon_landscape = TablerIcons.load(OutlineIcon.RECTANGLE, stroke_width=STROKE_WEIGHT, color="white")
-IMG_ICON_LANDSCAPE = icon_landscape.resize(ICON_SIZE)
+IMG_ICON_LANDSCAPE = icon_landscape.resize(ICON_SIZE_LARGE)
 
 
 # ----------------- HTTP helpers -----------------
