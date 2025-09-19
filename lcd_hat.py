@@ -1083,17 +1083,24 @@ class UI:
     def open_stills_viewer(self):
         """Fetches the list of stills and enters the viewer state."""
         self._draw_center("Loading Stills...")
-        try:
-            stills = _http_json(STILLS_LIST_URL)
-            if isinstance(stills, list):
-                self.stills_list = stills
-                self.stills_idx = 0
-            else:
-                self.stills_list = []
-        except Exception:
+        
+        # Fetch the list of image filenames from the API
+        stills = _http_json(STILLS_LIST_URL)
+        
+        # Check if the fetch was successful and the list is not empty
+        if isinstance(stills, list) and stills:
+            self.stills_list = stills
+            self.stills_idx = 0
+            self.state = self.STILLS_VIEWER
+        else:
+            # If there are no stills or an error occurred, show a message
             self.stills_list = []
+            self._draw_center("No Stills Found", sub="Press joystick to exit.")
+            # Set state to home so joystick press will exit
+            self.state = self.HOME
+            time.sleep(2)
 
-        self.state = self.STILLS_VIEWER
+        # Render whatever state we ended up in
         self.render()
 
     def _fetch_and_draw_still(self):
