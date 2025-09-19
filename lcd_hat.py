@@ -1416,27 +1416,27 @@ class UI:
                     "Shutdown Camera": IMG_ICON_SHUTDOWN
                 }
                 
-                # --- Start of New/Corrected Code ---
-                # Create a palette to map the icon's 1-bit color to RGB
-                # 0=black (background), 255=white (foreground)
                 palette = [0,0,0] + [255,255,255] * 255
                 
                 for i, txt in enumerate(self.settings_menu_items):
                     fill = BLUE if i == self.menu_idx else WHITE
-                    icon = icons.get(txt)
+                    icon_to_draw = icons.get(txt)
                     
-                    if icon:
-                        icon.putpalette(palette) # Apply the palette to the icon
+                    if icon_to_draw:
+                        # --- THIS IS THE FIX ---
+                        # Work on a copy of the icon, not the original
+                        icon_copy = icon_to_draw.copy()
+                        icon_copy.putpalette(palette)
+                        # --- END OF FIX ---
+                        
                         icon_pos = (5, y)
                         text_pos = (28, y)
-                        # Use the icon itself as the mask to handle transparency
-                        img.paste(icon, icon_pos, mask=icon)
+                        img.paste(icon_copy, icon_pos, mask=icon_copy)
                         drw.text(text_pos, txt, font=F_TEXT, fill=fill)
                     else:
                         drw.text((10, y), txt, font=F_TEXT, fill=fill)
                     
                     y += 20
-                # --- End of New/Corrected Code ---
                 
                 self._present(img)
                 return
