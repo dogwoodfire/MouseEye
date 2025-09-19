@@ -1418,6 +1418,7 @@ class UI:
                     "Rotate display": IMG_ICON_ROTATE,
                     "Shutdown Camera": IMG_ICON_SHUTDOWN
                 }
+
                 # Create a palette to map the icon's 1-bit color to RGB
                 # 0=black (background), 255=white (foreground)
                 palette = [0,0,0] + [255,255,255] * 255
@@ -1437,6 +1438,23 @@ class UI:
                         drw.text((10, y), txt, font=F_TEXT, fill=fill)
                     
                     y += 20
+
+                # Draw each menu item with its icon
+                for i, txt in enumerate(self.settings_menu_items):
+                    fill = BLUE if i == self.menu_idx else WHITE
+                    icon = icons.get(txt)
+                    
+                    if icon:
+                        # Position for icon and text
+                        icon_pos = (5, y + 2)
+                        text_pos = (28, y)
+                        img.paste(icon, icon_pos)
+                        drw.text(text_pos, txt, font=F_TEXT, fill=fill)
+                    else:
+                        # For items without an icon, like "‹ Back"
+                        drw.text((10, y), txt, font=F_TEXT, fill=fill)
+                    
+                    y += 20 # Increase line spacing for icons
                 
                 self._present(img)
                 return
