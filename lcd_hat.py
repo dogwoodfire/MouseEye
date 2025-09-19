@@ -180,23 +180,18 @@ RED=(255,80,80);     DIM=(90,90,90)
 
 SPINNER = ["-", "\\", "|", "/"]
 
-ICON_SCREEN_OFF = (
-    b'\x01\x80\x07\xe0\x0c\x30\x18\x18\x10\x08\x10\x08\x10\x08\x10\x08'
-    b'\x10\x08\x10\x08\x18\x18\x0c\x30\x07\xe0\x01\x80\x00\x00\x00\x00'
-)
-ICON_ROTATE = (
-    b'\x00\x00\x07\xe0\x08\x10\x1c\x38\x22\x44\x22\x44\x22\x44\x23\xc4'
-    b'\x27\xe4\x3c\x38\x10\x10\x0e\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-)
-ICON_SHUTDOWN = (
-    b'\x22\x44\x14\x28\x08\x10\x07\xe0\x08\x10\x14\x28\x22\x44\x00\x00'
-    b'\x22\x44\x14\x28\x08\x10\x07\xe0\x08\x10\x14\x28\x22\x44\x00\x00'
-)
+# ---  Icon Definitions using pytablericons ---
+import pytablericons
 
-# Load icons into PIL Image objects
-IMG_ICON_SCREEN_OFF = Image.frombytes('1', (16, 16), ICON_SCREEN_OFF)
-IMG_ICON_ROTATE = Image.frombytes('1', (16, 16), ICON_ROTATE)
-IMG_ICON_SHUTDOWN = Image.frombytes('1', (16, 16), ICON_SHUTDOWN)
+# Icon settings
+ICON_SIZE = 16
+ICON_COLOR = "white"
+
+# Generate PIL Image objects directly from the library
+# We convert them to '1' for monochrome masking
+IMG_ICON_SCREEN_OFF = pytablericons.image("moon", size=ICON_SIZE, color=ICON_COLOR).convert('1')
+IMG_ICON_ROTATE = pytablericons.image("refresh", size=ICON_SIZE, color=ICON_COLOR).convert('1')
+IMG_ICON_SHUTDOWN = pytablericons.image("power", size=ICON_SIZE, color=ICON_COLOR).convert('1')
 
 # ----------------- HTTP helpers -----------------
 def _ap_status():
