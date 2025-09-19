@@ -186,18 +186,18 @@ from pytablericons import TablerIcons, OutlineIcon
 # Icon settings
 ICON_SIZE = (16, 16) # Define size as a tuple
 ICON_WEIGHT = stroke_width=1
-ICON_COLOR = "white"
+ICON_COLOR = color="white"
 
 # Generate PIL Image objects directly from the library using the correct method
 # We use .copy() because the resize method modifies the image in-place
 screen_off_icon = TablerIcons.load(OutlineIcon.MOON, ICON_WEIGHT)
-IMG_ICON_SCREEN_OFF = screen_off_icon.resize(ICON_SIZE).convert('1')
+IMG_ICON_SCREEN_OFF = screen_off_icon.show
 
-rotate_icon = TablerIcons.load(OutlineIcon.REFRESH, ICON_WEIGHT)
-IMG_ICON_ROTATE = rotate_icon.resize(ICON_SIZE).convert('1')
+rotate_icon = TablerIcons.load(OutlineIcon.REFRESH, ICON_WEIGHT, ICON_COLOR)
+IMG_ICON_ROTATE = rotate_icon.show
 
 shutdown_icon = TablerIcons.load(OutlineIcon.POWER, ICON_WEIGHT)
-IMG_ICON_SHUTDOWN = shutdown_icon.resize(ICON_SIZE).convert('1')
+IMG_ICON_SHUTDOWN = shutdown_icon.show
 
 
 # ----------------- HTTP helpers -----------------
