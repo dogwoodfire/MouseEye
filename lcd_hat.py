@@ -1095,14 +1095,14 @@ class UI:
     def _fetch_and_draw_still(self):
         """Fetches a single still image via GET and draws it."""
         if not self.stills_list:
-            self._draw_center("No Stills Found", sub="Press any key to exit.")
+            self._draw_center("No Stills Found", sub="Press joystick to exit.")
             return
 
         filename = self.stills_list[self.stills_idx]
+        image_data = None
         
         # --- THIS IS THE FIX ---
-        # Use a simple GET request to download the image, not POST
-        image_data = None
+        # Use a direct GET request to download the image from the correct endpoint
         try:
             with urlopen(f"{LOCAL}/stills/{filename}", timeout=5.0) as r:
                 if r.status == 200:
