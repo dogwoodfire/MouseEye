@@ -1164,6 +1164,20 @@ class UI:
             self._panel_on()
             if self.bl is not None: self.bl.value = 1.0
 
+            # Define simple icons for orientation
+            portrait_icon = "\n  +----+\n  |    |\n  |    |\n  +----+"
+            landscape_icon = "\n  +------+\n  |      |\n  +------+"
+            
+            if self.rot_deg == 0:
+                mode_text = "Portrait"
+                icon = portrait_icon
+            else:
+                mode_text = "Landscape"
+                icon = landscape_icon
+            
+            # Display the text and the selected icon
+            self._draw_center(f"Rotation: {mode_text}", sub=icon)
+
             self._bind_inputs()
             self._request_hard_clear()
             self._draw_center("Rotation set", "Lasndscape" if self.rot_deg == 90 else "Portrait")
