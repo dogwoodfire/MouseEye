@@ -1114,11 +1114,8 @@ class UI:
         image_data = None
         
         try:
-            # --- THIS IS THE FIX ---
-            # URL-encode the filename to handle spaces and special characters
             safe_filename = quote(filename)
             url = f"{LOCAL}/stills/{safe_filename}"
-            # --- END OF FIX ---
             
             with urlopen(url, timeout=5.0) as r:
                 if r.status == 200:
@@ -1141,7 +1138,19 @@ class UI:
             
             self._present(background)
         else:
-            self._draw_center("Load Failed", sub=filename)
+            # --- THIS IS THE CHANGE ---
+            # If the image fails to load, draw the filename on the screen for debugging.
+            img = self._blank()
+            drw = ImageDraw.Draw(img)
+            drw.text((2, 20), "Load Failed:", font=F_TEXT, fill=RED)
+            # Draw filename wrapped to fit screen
+            y_pos = 40
+            # Split filename into chunks of ~20 characters to avoid overflow
+            for chunk in [filename[i:i+20] for i in range(0, len(filename), 20)]:
+                 drw.text((2, y_pos), chunk, font=F_SMALL, fill=WHITE)
+                 y_pos += 12
+            self._present(img)
+            # --- END OF CHANGE ---
 
     def _render_stills_viewer(self):
         """Renders the current still image."""
