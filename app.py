@@ -1588,8 +1588,8 @@ TPL_INDEX = r"""
         </div>
       </div>
     </div>
-<div class="card" style="font-weight:600;font-size:20px;background:#f7e6dc;">Camera 📷</div>
-    <div class="card" style="background:#f7e6dc;">
+<div class="card" style="font-weight:600;font-size:20px;background:#e9f7f4;">Camera 📷</div>
+    <div class="card" style="background:#e9f7f4;">
     <div class="row">
         <form action="{{ url_for('take_web_still') }}" method="post" style="display:inline;">
           <button class="btn {% if not idle_now %}disabled{% endif %}" type="submit" {% if not idle_now %}aria-disabled="true"{% endif %}>
