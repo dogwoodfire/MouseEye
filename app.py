@@ -774,7 +774,7 @@ def index():
 
     disk_info = _disk_stats()
     temp_info = _get_cpu_temp()
-    high_temp_warning=high_temp_warning, 
+    high_temp_warning=_has_overheated_since_boot(), 
 
     return render_template_string(
         TPL_INDEX,
@@ -2615,4 +2615,4 @@ def schedule_arm():
         _schedules[sid] = dict(
             start_ts=start_ts, end_ts=end_ts,
             interval=interval, fps=fps,
-            sess=sess_name, auto_encode=au
+            sess=sess_name, aut
