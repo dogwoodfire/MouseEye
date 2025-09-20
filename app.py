@@ -1728,9 +1728,7 @@ TPL_INDEX = r"""
     <div class="diskbar" aria-label="disk usage">
       <div class="fill" id="disk-fill" style="width: {{ 100 - disk.pct_free }}%;"></div>
     </div>
-  </div>
   {% if temp %}
-  <div class="row" style="margin-top: 5px;">
       <div class="label" id="temp-text">CPU Temp: {{ temp }}°C</div>
   </div>
   {% endif %}
