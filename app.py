@@ -1729,7 +1729,7 @@ TPL_INDEX = r"""
       <div class="fill" id="disk-fill" style="width: {{ 100 - disk.pct_free }}%;"></div>
     </div>
   {% if temp %}
-      <div class="label" id="temp-text">CPU Temp: {{ temp }}°C</div>
+      <div class="label" id="temp-text">CPU Temp: </br>{{ temp }}°C</div>
   </div>
   {% endif %}
   </div>
