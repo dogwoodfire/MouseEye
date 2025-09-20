@@ -255,6 +255,7 @@ def _start_encode_worker_once():
                     "-i", os.path.join(sess_dir, "*.jpg"),
                     "-s", f"{CAPTURE_WIDTH}x{CAPTURE_HEIGHT}", # Set size
                     "-c:v", "libx264",
+                    "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p",
                     out
                 ]
