@@ -250,13 +250,12 @@ def _start_encode_worker_once():
                 # ...after computing sess_dir, out, fps...
                 cmd = prio + [
                     FFMPEG, "-y",
-                    "-framerate", str(fps),                          # input rate
-                    "-pattern_type", "glob",                         # read by glob, not %d
+                    "-framerate", str(fps),
+                    "-pattern_type", "glob",
                     "-i", os.path.join(sess_dir, "*.jpg"),
-                    "-vf", f"scale={CAPTURE_WIDTH}:{CAPTURE_HEIGHT},fps={fps}",  # lock exact fps
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                    "-s", f"{CAPTURE_WIDTH}x{CAPTURE_HEIGHT}", # Set size
+                    "-c:v", "libx264",
                     "-pix_fmt", "yuv420p",
-                    "-r", str(fps),                                  # output rate (belt & braces)
                     out
                 ]
 
@@ -775,6 +774,7 @@ def index():
 
     disk_info = _disk_stats()
     temp_info = _get_cpu_temp()
+    high_temp_warning=high_temp_warning, 
 
     return render_template_string(
         TPL_INDEX,
@@ -1721,6 +1721,11 @@ TPL_INDEX = r"""
   {% endfor %}
 
 <div class="footer card">
+    {% if high_temp_warning %}
+    <div class="row" style="background-color: #fef2f2; color: #991b1b; padding: 8px; border-radius: 8px; margin-bottom: 10px;">
+      <span>⚠️ Temp Warning: Device has throttled due to overheating since last reboot.</span>
+    </div>
+    {% endif %}
   <div class="row">
   <div>
     <div class="label" id="disk-text">
@@ -2335,6 +2340,23 @@ def _get_cpu_temp():
         print(f"Error reading CPU temp: {e}")
         return None
 
+def _has_overheated_since_boot():
+    """Checks system logs for CPU throttling messages since the last boot."""
+    try:
+        # journalctl -b shows logs for the current boot
+        # We grep for "throttled", which the kernel logs on high temperature.
+        cmd = "journalctl -b | grep -i 'throttled'"
+        # We use shell=True for the pipe, and check the return code.
+        # A return code of 0 means grep found a match.
+        result = subprocess.run(cmd, shell=True, check=True, capture_output=True)
+        return True # A match was found
+    except subprocess.CalledProcessError:
+        # A non-zero return code means grep found no matches
+        return False
+    except Exception as e:
+        print(f"Error checking for overheat messages: {e}")
+        return False
+    
 @app.get("/cpu_temp")
 def cpu_temp_api():
     """API endpoint to get the current CPU temperature."""
@@ -2593,85 +2615,4 @@ def schedule_arm():
         _schedules[sid] = dict(
             start_ts=start_ts, end_ts=end_ts,
             interval=interval, fps=fps,
-            sess=sess_name, auto_encode=auto_encode,
-            created_ts=now_ts,
-        )
-        _save_sched_state()
-
-    return redirect(url_for("schedule_page"))
-
-@app.post("/schedule/cancel/<sid>")
-def schedule_cancel_id(sid):
-    with _sched_lock:
-        _schedules.pop(sid, None)
-        _save_sched_state()
-    return redirect(url_for("schedule_page"))
-
-@app.get("/schedule/list")
-def schedule_list_json():
-    """
-    Compact JSON for the LCD:
-    [
-      {"id": "abcd1234", "start_ts": 123, "end_ts": 456, "interval": 10, "fps": 24,
-       "sess": "", "auto_encode": true, "created_ts": 123}
-    ]
-    """
-    now = int(time.time())
-    items = []
-    for sid, st in _schedules.items():
-        try:
-            d = dict(st)
-            d["id"] = sid
-            # normalize types
-            d["start_ts"] = int(d.get("start_ts", 0))
-            d["end_ts"]   = int(d.get("end_ts", 0))
-            d["interval"] = int(d.get("interval", 10))
-            d["fps"]      = int(d.get("fps", 24))
-            d["auto_encode"] = bool(d.get("auto_encode", False))
-            d["created_ts"]  = int(d.get("created_ts", d["start_ts"]))
-        except Exception:
-            continue
-        items.append(d)
-
-    items.sort(key=lambda d: d.get("start_ts", 0))
-    resp = jsonify(items)
-    resp.headers["Cache-Control"] = "no-store"
-    return resp
-
-@app.post("/schedule/delete")
-def schedule_delete_json():
-    """
-    Delete a schedule by id. Accepts form or JSON:
-      - form: id=<sid>
-      - json: {"id": "<sid>"}
-    Returns 204 on success (even if id didn’t exist), 400 if no id supplied.
-    """
-    sid = request.form.get("id") or (request.json or {}).get("id")
-    if not sid:
-        return ("missing id", 400)
-
-    with _sched_lock:
-        # stop timers and remove
-        _cancel_timers_for(sid)
-        _schedules.pop(sid, None)
-        _save_sched_state()
-    return ("", 204)
-
-# ================== /Simple Scheduler ==================
-# Load persisted schedule and re-arm timers on process start
-try:
-    if _load_sched_state():
-        _arm_timers_all()
-except Exception:
-    pass
-
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", "5050"))
-    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
-
-
-
-# # ---------- Main ----------
-# if __name__ == "__main__":
-#     app.run(host="0.0.0.0", port=5050) 
+            sess=sess_name, auto_encode=au
