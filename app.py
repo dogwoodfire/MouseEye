@@ -774,6 +774,7 @@ def index():
         next_sched = None
 
     disk_info = _disk_stats()
+    temp_info = _get_cpu_temp()
 
     return render_template_string(
         TPL_INDEX,
@@ -792,6 +793,7 @@ def index():
         encoding_active=encoding_active,
         idle_now=idle_now,
         ap_status=_ap_status_quick(),
+        temp=temp_info,
     )
 
 @app.route("/start", methods=["POST"])
@@ -1718,7 +1720,7 @@ TPL_INDEX = r"""
   </div>
   {% endfor %}
 
-  <div class="footer card">
+<div class="footer card">
   <div class="row">
     <div class="label" id="disk-text">
       Storage: {{ disk.free_gb }}GB free of {{ disk.total_gb }}GB ({{ 100 - disk.pct_free }}% used)
@@ -1727,8 +1729,12 @@ TPL_INDEX = r"""
       <div class="fill" id="disk-fill" style="width: {{ 100 - disk.pct_free }}%;"></div>
     </div>
   </div>
-</div>
-</main>
+  {% if temp %}
+  <div class="row" style="margin-top: 5px;">
+      <div class="label" id="temp-text">CPU Temp: {{ temp }}°C</div>
+  </div>
+  {% endif %}
+  </div>
 
 <script>
     function toggleSettings() {
@@ -1966,9 +1972,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) { /* ignore */ }
   }
 
+
   // run now + every 15s
-  pollDisk();
-  setInterval(pollDisk, 15000);
+pollDisk();
+setInterval(pollDisk, 15000);
+
+async function pollTemp() {
+    const tempTextEl = document.getElementById('temp-text');
+    if (!tempTextEl) return;
+    try {
+        const r = await fetch("{{ url_for('cpu_temp_api') }}");
+        if (!r.ok) return;
+        const data = await r.json();
+        if (data.temp) {
+            tempTextEl.textContent = `CPU Temp: ${data.temp}°C`;
+        }
+    } catch (e) { /* ignore */ }
+}
+// Poll temperature every 5 seconds
+setInterval(pollTemp, 5000);
 
   // --- Refresh meter immediately when a session is deleted ---
   function submitDelete(formEl, sessName) {
@@ -2299,6 +2321,25 @@ def _sched_http_post(path, data=None, timeout=5):
     except Exception:
         return False
     
+def _get_cpu_temp():
+    """Reads the CPU temperature and returns it as a string, or None on error."""
+    try:
+        # vcgencmd is the standard command-line tool to get Pi hardware info
+        out = subprocess.check_output(["vcgencmd", "measure_temp"], text=True)
+        # Output is typically "temp=45.6'C", so we split on '=' and "'"
+        return out.split("=")[1].split("'")[0]
+    except (FileNotFoundError, IndexError):
+        # Handle cases where the command isn't found or output is unexpected
+        return None
+    except Exception as e:
+        print(f"Error reading CPU temp: {e}")
+        return None
+
+@app.get("/cpu_temp")
+def cpu_temp_api():
+    """API endpoint to get the current CPU temperature."""
+    temp = _get_cpu_temp()
+    return jsonify({"temp": temp}) if temp else jsonify({"error": "Unavailable"}), 503
 
 @app.get("/qr_info")
 def qr_info():
