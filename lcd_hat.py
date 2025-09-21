@@ -346,7 +346,7 @@ class UI:
     def __init__(self):
         # prefs
         prefs = _load_prefs()
-        self.rot_deg = 90 if int(prefs.get("rot_deg", 0)) == 90 else 0
+        self.rot_deg = 90 if int(prefs.get("rot_deg", 180)) == 90 else 180
 
         # lcd
         self.serial = _mk_serial()
@@ -457,7 +457,14 @@ class UI:
             self._overlay_ap(img)
         except Exception:
             pass
-        frame = img.rotate(-90, expand=False, resample=Image.NEAREST) if self.rot_deg == 90 else img
+        # Handle 90-degree (landscape) and 180-degree (flipped portrait) rotation
+        if self.rot_deg == 90:
+            frame = img.rotate(-90, expand=False, resample=Image.NEAREST)
+        elif self.rot_deg == 180:
+            frame = img.rotate(-180, expand=False, resample=Image.NEAREST)
+        else: # Fallback for any other case
+            frame = img
+            
         with self._draw_lock:
             self.device.display(frame)
 
@@ -698,10 +705,11 @@ class UI:
                 b.when_released = None
 
     def _rebind_joystick(self):
-        if self.rot_deg == 0:
-            m = dict(up=self._logical_up, right=self._logical_right,
-                     down=self._logical_down, left=self._logical_left)
-        else:
+        if self.rot_deg == 180:
+            # Flipped Portrait: Up is Down, Down is Up, etc.
+            m = dict(up=self._logical_down, right=self._logical_left,
+                     down=self._logical_up, left=self._logical_right)
+        else: # Landscape (90 degrees)
             m = dict(up=self._logical_left, right=self._logical_up,
                      down=self._logical_right, left=self._logical_down)
 
@@ -1296,7 +1304,7 @@ class UI:
             self._panel_off()
 
             self._hard_clear()
-            self.rot_deg = 90 if self.rot_deg == 0 else 0
+            self.rot_deg = 90 if self.rot_deg == 180 else 180
             _save_prefs({"rot_deg": self.rot_deg})
 
             self._lcd_reinit()
@@ -1307,7 +1315,7 @@ class UI:
             img = self._blank()
             drw = ImageDraw.Draw(img)
             
-            if self.rot_deg == 0:
+            if self.rot_deg == 1800:
                 # Text is now split with \n for two lines
                 title_text = "Rotation set to:\nPortrait"
                 icon_to_draw = IMG_ICON_PORTRAIT
