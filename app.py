@@ -404,21 +404,32 @@ def _idle_now():
 
 def _list_sessions():
     out = []
-    for d in sorted(os.listdir(SESSIONS_DIR)):
-        sd = os.path.join(SESSIONS_DIR, d)
-        if not os.path.isdir(sd): continue
-        jpg = _session_latest_jpg(sd)
-        vid = _video_path(sd)
-        out.append({
-            "name": d,
-            "dir": sd,
-            "has_frame": bool(jpg),
-            "latest": os.path.basename(jpg) if jpg else "",
-            "has_video": os.path.exists(vid),
-            "video": os.path.basename(vid) if os.path.exists(vid) else "",
-            "count": len(glob.glob(os.path.join(sd, "*.jpg")))
-        })
-    out.sort(key=lambda x: x["name"], reverse=True)
+    # Use try-except to handle cases where SESSIONS_DIR might not exist yet
+    try:
+        for d in os.listdir(SESSIONS_DIR):
+            sd = os.path.join(SESSIONS_DIR, d)
+            if not os.path.isdir(sd): continue
+            
+            jpg = _session_latest_jpg(sd)
+            vid = _video_path(sd)
+            has_video = os.path.exists(vid)
+            
+            out.append({
+                "name": d,
+                "dir": sd,
+                "has_frame": bool(jpg),
+                "latest": os.path.basename(jpg) if jpg else "",
+                "has_video": has_video,
+                "video": os.path.basename(vid) if has_video else "",
+                "count": len(glob.glob(os.path.join(sd, "*.jpg"))),
+                # Add the creation time of the directory for sorting
+                "created_ts": os.path.getctime(sd)
+            })
+    except FileNotFoundError:
+        pass # Return an empty list if the directory doesn't exist
+        
+    # Sort the list of sessions by the creation timestamp, newest first
+    out.sort(key=lambda x: x["created_ts"], reverse=True)
     return out
 
 # ===== Simplified Scheduler =====
@@ -1091,9 +1102,10 @@ def preview(sess):
 
 @app.post("/encode/<sess>")
 def encode(sess):
-    if _any_encoding_active():                    # don't queue more jobs
+    if _any_encoding_active():
         _jobs[sess] = {"status":"error","progress":0,"reason":"busy"}
         return redirect(url_for("index"))
+        
     fps = request.form.get("fps", str(DEFAULT_FPS))
     try: fps = int(fps)
     except: fps = DEFAULT_FPS
@@ -1105,7 +1117,16 @@ def encode(sess):
         _jobs[sess] = {"status":"error","progress":0,"reason":"low_disk"}
         return redirect(url_for("index"))
 
-    # queue the job and return immediately; UI will poll /jobs
+    # If a video already exists, delete it before re-encoding
+    video_file = _video_path(sess_dir)
+    if os.path.exists(video_file):
+        try:
+            os.remove(video_file)
+        except OSError as e:
+            print(f"Error removing existing video file: {e}")
+            _jobs[sess] = {"status":"error","progress":0,"reason":"delete_failed"}
+            return redirect(url_for("index"))
+
     _jobs[sess] = {"status":"queued","progress":0}
     _encode_q.put((sess, fps))
     return redirect(url_for("index"))
@@ -1687,19 +1708,20 @@ TPL_INDEX = r"""
         {% endif %}
       </div>
 
-      <div class="controls">
-        {% if not s.has_video and current_session != s.name %}
-          <form action="{{ url_for('encode', sess=s.name) }}" method="post" onsubmit="showProgress('{{ s.name }}')">
-            <label>🎞 FPS:</label>
-              <select name="fps" {% if encoding_active %}disabled{% endif %}>
-                {% for f in fps_choices %}
-                  <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
-                {% endfor %}
-              </select>
+    <div class="controls">
+        <form action="{{ url_for('encode', sess=s.name) }}" method="post" onsubmit="showProgress('{{ s.name }}')">
+          <label>🎞 FPS:</label>
+            <select name="fps" {% if encoding_active %}disabled{% endif %}>
+              {% for f in fps_choices %}
+                <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
+              {% endfor %}
+            </select>
+          {% if not s.has_video %}
             <button class="btn" type="submit">🧩 Encode</button>
-          </form>
-        {% endif %}
-
+          {% else %}
+            <button class="btn" type="submit">🔄 Re-encode</button>
+          {% endif %}
+        </form>
         {% if s.has_video %}
           <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Download</a>
         {% endif %}
