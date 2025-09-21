@@ -2249,7 +2249,7 @@ TPL_STILL_PREVIEW = r"""
 </header>
 <main>
   <img src="{{ url_for('serve_still', filename=filename) }}" alt="Captured still image">
-  <div>
+  <div style="display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin-top: 20px;">
     <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
     <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ View Gallery</a>
     <a class="btn" href="{{ url_for('serve_still', filename=filename) }}" download>⬇️ Download</a>
