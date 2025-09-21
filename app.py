@@ -135,6 +135,7 @@ def _ensure_dirs(base_root: str):
 
 BASE, SESSIONS_DIR, STILLS_DIR = _ensure_dirs(BASE)
 STILLS_DIR = os.path.join(BASE, "stills")
+LCD_OFF_FLAG = os.path.join(BASE, "lcd_off.flag")
 
 CAMERA_STILL = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
 FFMPEG       = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
@@ -315,7 +316,22 @@ _capture_stop_timer = None
 _capture_end_ts     = None
 _capture_start_ts   = None 
 _active_schedule_id = None
+  #---------- LCD Power Control ----------
+@app.get("/lcd_power_status")
+def lcd_power_status():
+    """Checks if the LCD is supposed to be off."""
+    is_off = os.path.exists(LCD_OFF_FLAG)
+    return jsonify({"off": is_off})
 
+@app.post("/toggle_lcd_power")
+def toggle_lcd_power():
+    """Creates or deletes the flag file to turn the LCD on/off."""
+    if os.path.exists(LCD_OFF_FLAG):
+        os.remove(LCD_OFF_FLAG)
+    else:
+        # Create an empty file
+        open(LCD_OFF_FLAG, 'a').close()
+    return redirect(url_for("index"))
 # ---------- Session status API ----------
 # This endpoint returns whether the session is active, the number of frames
 # captured so far and the remaining time (if a duration was set).  The
@@ -1603,6 +1619,9 @@ TPL_INDEX = r"""
               <button type="submit">Enable Hotspot</button>
             </form>
           {% endif %}
+        <form action="{{ url_for('toggle_lcd_power') }}" method="post" style="display:inline;">
+            <button type="submit" class="btn">🌙 Toggle LCD</button>
+        </form>
             <form action="{{ url_for('shutdown_device') }}" method="post" onsubmit="return confirm('Are you sure you want to shut down the Raspberry Pi?');">
                 <button type="submit" style="background-color:#d9534f; color:white; border-color:#d43f3a">
                     🔌 Shutdown Camera

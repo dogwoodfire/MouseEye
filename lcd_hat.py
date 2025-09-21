@@ -59,6 +59,7 @@ SCHED_DEL_URLS  = [
 SCHED_LIST_URL  = f"{LOCAL}/schedule/list"   # preferred if available
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"  # legacy fallback
 QR_INFO_URL     = f"{LOCAL}/qr_info"
+LCD_OFF_FLAG = "/home/pi/timelapse/lcd_off.flag"
 
 # AP endpoints (Flask backend should return {"on","name","device","ip","ips":[]})
 AP_STATUS_URL = f"{LOCAL}/ap/status"
@@ -1685,46 +1686,50 @@ class UI:
         self.state = prev_state
 
 # ----------------- main loop -----------------
+# ----------------- main loop -----------------
 def main():
     ui = UI()
-
-    # Start the background polling thread
     poll_thread = threading.Thread(target=_poll_status_worker, daemon=True)
     poll_thread.start()
-    
-    time.sleep(1.0) # Give first poll time to complete
+    time.sleep(1.0)
 
     while True:
-        if ui._screen_off or ui._busy or ui.state == ui.MODAL:
+        # --- THIS IS THE NEW LOGIC ---
+        # Check for the flag file to control screen power
+        if os.path.exists(LCD_OFF_FLAG):
+            if not ui._screen_off:
+                ui._sleep_screen()
+            time.sleep(2) # Sleep longer when screen is off
+            continue # Skip the rest of the loop
+        elif ui._screen_off:
+            # If flag is gone but screen is off, wake it
+            ui._wake_screen()
+        # --- END OF NEW LOGIC ---
+
+        if ui._busy or ui.state == ui.MODAL:
             time.sleep(0.1)
             continue
 
-        st = ui._status() # Get latest status from cache
+        st = ui._status()
         is_active = st.get("active", False)
         is_encoding = st.get("encoding", False)
 
-        # --- Automatic State Machine ---
         if is_encoding:
             if ui.state != UI.ENCODING:
                 ui.state = UI.ENCODING
         elif is_active:
             if ui.state != UI.CAPTURING:
                 ui.state = UI.CAPTURING
-                ui.menu_idx = 0 # Reset menu for the new screen
+                ui.menu_idx = 0
         elif ui.state in (UI.CAPTURING, UI.ENCODING):
-             # If we were capturing or encoding, and now we are not, go home
              ui.state = UI.HOME
              ui.menu_idx = 0
-        # --- End of State Machine ---
-        
-        # Render the current state
+
         ui.render()
-        
-        # Spin the spinner if encoding
+
         if ui.state == UI.ENCODING:
             ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
 
-        # Update screen at a regular interval
         time.sleep(1.0)
 
 if __name__ == "__main__":
