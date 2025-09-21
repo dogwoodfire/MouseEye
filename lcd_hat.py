@@ -1724,4 +1724,30 @@ def main():
                 ui.state = UI.ENCODING
         elif is_active:
             if ui.state != UI.CAPTURING:
-                ui.state
+                ui.state = UI.CAPTURING
+                ui.menu_idx = 0
+        elif ui.state in (UI.CAPTURING, UI.ENCODING):
+             ui.state = UI.HOME
+             ui.menu_idx = 0
+
+        ui.render()
+
+        if ui.state == UI.ENCODING:
+            ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+
+        time.sleep(1.0)
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            print("DEBUG on", file=sys.stderr, flush=True)
+        # Ensure stdout/stderr are not buffered under systemd
+        try:
+            import sys as _sys
+            _sys.stdout.reconfigure(line_buffering=True)
+            _sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+        main()
+    except KeyboardInterrupt:
+        pass
