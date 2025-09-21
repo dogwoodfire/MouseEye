@@ -2242,14 +2242,17 @@ TPL_STILL_PREVIEW = r"""
   header h1 { margin: 0; font-size: 18px; }
   main { padding: 12px; max-width: 1200px; margin: 0 auto; text-align: center; }
   img { max-width: 100%; height: auto; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; }
-  .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; margin: 0 5px; }
+  .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; margin: 0 5px; display: inline-flex; align-items: center; justify-content: center; }
+  /* New style block for the button container */
+  .button-bar { display: flex; gap: 10px; margin-top: 10px; }
+  .button-bar .btn { flex: 1; margin: 0; }
 </style>
 <header>
   <h1>📷 Photo Preview</h1>
 </header>
 <main>
   <img src="{{ url_for('serve_still', filename=filename) }}" alt="Captured still image">
-  <div style="display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 10px; width: 100%;">
+  <div class="button-bar">
     <a class="btn" href="{{ url_for('index') }}">← Back to Home</a>
     <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ View Gallery</a>
     <a class="btn" href="{{ url_for('serve_still', filename=filename) }}" download>⬇️ Download</a>
