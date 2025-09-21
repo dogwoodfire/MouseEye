@@ -2249,7 +2249,7 @@ TPL_STILL_PREVIEW = r"""
 </header>
 <main>
   <img src="{{ url_for('serve_still', filename=filename) }}" alt="Captured still image">
-  <div style="display: flex; justify-content: center; gap: 5px; flex-wrap: wrap; margin-top: 10px;">
+  <div style="display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 10px; width: 100%;">
     <a class="btn" href="{{ url_for('index') }}">← Back to Home</a>
     <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ View Gallery</a>
     <a class="btn" href="{{ url_for('serve_still', filename=filename) }}" download>⬇️ Download</a>
