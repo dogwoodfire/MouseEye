@@ -908,7 +908,7 @@ class UI:
     def _wake_screen(self):
         try:
             if os.path.exists(LCD_OFF_FLAG):
-            os.remove(LCD_OFF_FLAG)
+                os.remove(LCD_OFF_FLAG)
             if self.bl is not None: self.bl.value = 1.0
         except Exception: pass
         self._screen_off = False
@@ -1727,4 +1727,24 @@ def main():
              ui.state = UI.HOME
              ui.menu_idx = 0
 
-        ui.r
+        ui.render()
+
+        if ui.state == UI.ENCODING:
+            ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+
+        time.sleep(1.0)
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            print("DEBUG on", file=sys.stderr, flush=True)
+        # Ensure stdout/stderr are not buffered under systemd
+        try:
+            import sys as _sys
+            _sys.stdout.reconfigure(line_buffering=True)
+            _sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+        main()
+    except KeyboardInterrupt:
+        pass

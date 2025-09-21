@@ -2708,3 +2708,37 @@ def schedule_list_json():
 @app.post("/schedule/delete")
 def schedule_delete_json():
     """
+    Delete a schedule by id. Accepts form or JSON:
+      - form: id=<sid>
+      - json: {"id": "<sid>"}
+    Returns 204 on success (even if id didn’t exist), 400 if no id supplied.
+    """
+    sid = request.form.get("id") or (request.json or {}).get("id")
+    if not sid:
+        return ("missing id", 400)
+
+    with _sched_lock:
+        # stop timers and remove
+        _cancel_timers_for(sid)
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return ("", 204)
+
+# ================== /Simple Scheduler ==================
+# Load persisted schedule and re-arm timers on process start
+try:
+    if _load_sched_state():
+        _arm_timers_all()
+except Exception:
+    pass
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", "5050"))
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+
+
+
+# # ---------- Main ----------
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5050) 
