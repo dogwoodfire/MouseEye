@@ -2243,7 +2243,7 @@ TPL_STILL_PREVIEW = r"""
   main { padding: 12px; max-width: 1200px; margin: 0 auto; text-align: center; }
   img { max-width: 100%; height: auto; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; }
   .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 0px; font-size:14px; text-decoration:none; margin: 0 5px; display: inline-flex; align-items: center; justify-content: center; }
-  .button-bar { display: flex; gap: 10px; margin-top: 10px; }
+  .button-bar { display: flex; gap: 10px; margin-top: 0px; }
   .button-bar .btn { flex: 1; margin: 0; }
 </style>
 <header>
