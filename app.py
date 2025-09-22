@@ -1432,8 +1432,6 @@ def live_mjpg():
                     ]
 
             cmd = build_cmd(w, h)
-            
-            cmd = build_cmd(CAPTURE_WIDTH, CAPTURE_HEIGHT)
             env = dict(os.environ)
             env.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")
             
@@ -1902,18 +1900,17 @@ TPL_INDEX = r"""
     </div>
     {% endif %}
   <div class="row">
-  <div>
-    <div class="label" id="disk-text">
-      Storage: {{ disk.free_gb }}GB free of {{ disk.total_gb }}GB ({{ 100 - disk.pct_free }}% used)
+    <div>
+      <div class="label" id="disk-text">
+        Storage: {{ disk.free_gb }}GB free of {{ disk.total_gb }}GB ({{ 100 - disk.pct_free }}% used)
+      </div>
+      <div class="diskbar" aria-label="disk usage">
+        <div class="fill" id="disk-fill" style="width: {{ 100 - disk.pct_free }}%;"></div>
+      </div>
     </div>
-    <div class="diskbar" aria-label="disk usage">
-      <div class="fill" id="disk-fill" style="width: {{ 100 - disk.pct_free }}%;"></div>
-    </div>
-</div>
-  {% if temp %}
+    {% if temp %}
       <div class="label" id="temp-text">CPU Temp: </br>{{ temp }}°C</div>
-  </div>
-  {% endif %}
+    {% endif %}
   </div>
 
 <script>
