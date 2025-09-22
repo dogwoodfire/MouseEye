@@ -735,92 +735,56 @@ class UI:
         self._rebind_joystick()
 
     def show_ap_info(self):
-        """Prepares QR code data and enters the QR viewer state."""
+        """
+        Shows a 2-page QR viewer when AP is ON.
+        Shows a single URL QR modal when AP is OFF (Wi-Fi client mode).
+        """
         if self._busy:
             return
         self._busy = True
         self._draw_center("Generating", sub="QR Code...")
-
-        # This will hold the data for our QR code pages
-        self.qr_pages = []
-
+        
         try:
             st = _http_json(AP_STATUS_URL) or {}
             ap_on = bool(st.get("on"))
-
+            
             if ap_on:
+                # --- NEW 2-Page Viewer for AP Mode ---
+                self.qr_pages = []
                 ssid = st.get("ssid") or st.get("name") or "Pi-Hotspot"
                 ip = st.get("ip") or "10.42.0.1"
                 password = ""
                 try:
                     cmd = ["sudo", "nmcli", "-s", "-g", "802-11-wireless-security.psk", "con", "show", "Pi-Hotspot"]
                     password = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-                except Exception:
-                    pass
+                except Exception: pass
 
-                # Page 1: Wi-Fi Login
                 if password:
                     self.qr_pages.append({
                         "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
                         "info_text": f"1/2: Scan to connect to\n'{ssid}'"
                     })
-
-                # Page 2: URL
+                
                 self.qr_pages.append({
                     "qr_text": f"http://{ip}:5050",
                     "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
                 })
-
-            else: # Not in AP Mode
-                # ... (existing non-AP mode logic remains the same)
+                
+                self.state = self.QR_CODE_VIEWER
+                self.qr_page_idx = 0
+                self.render()
+            
+            else:
+                # --- OLD Modal for Wi-Fi Client Mode ---
                 ssid = _current_wifi_ssid() or "Wi-Fi"
                 ips  = st.get("ips") or _local_ipv4s()
                 ip   = ips[0] if ips else ""
-                if ip:
-                    self.qr_pages.append({
-                        "qr_text": f"http://{ip}:5050",
-                        "info_text": f"On '{ssid}', go to:\nhttp://{ip}:5050"
-                    })
+                self._show_connect_url_modal(ssid, ip, ips)
+
         finally:
-            self._busy = False
-            if self.qr_pages:
-                self.state = self.QR_CODE_VIEWER
-                self.qr_page_idx = 0
-            else:
-                self._draw_center("Network Info", sub="Not connected.")
-                time.sleep(2)
-                self.state = self.HOME
-            self.render()
-
-    def _render_qr_viewer(self):
-        """Renders the currently selected QR code page."""
-        if not self.qr_pages or not (0 <= self.qr_page_idx < len(self.qr_pages)):
-            self._abort_to_home()
-            return
-
-        page = self.qr_pages[self.qr_page_idx]
-        qr_text = page["qr_text"]
-        info_text = page["info_text"]
-
-        qr = qrcode.QRCode(version=1, border=2)
-        qr.add_data(qr_text)
-        qr.make(fit=True)
-        qr_img = qr.make_image(fill_color="black", back_color="white")
-        qr_img = qr_img.resize((96, 96), Image.NEAREST)
-
-        img = self._blank()
-        img.paste(qr_img, (16, 10))
-
-        drw = ImageDraw.Draw(img)
-        y = 108
-        for line in info_text.split('\n'):
-            w = self._text_w(F_SMALL, line)
-            drw.text(((WIDTH - w) // 2, y), line, font=F_SMALL, fill=WHITE)
-            y += 10
-
-        drw.text((WIDTH - 2 - self._text_w(F_SMALL, "<∙>"), y), "<∙>", font=F_SMALL, fill=GRAY)
-
-        self._present(img)
+            # Only set busy to false if we are NOT in a modal state
+            if self.state not in (self.MODAL, self.QR_CODE_VIEWER):
+                self._busy = False
 
     # ---------- MODAL helpers (show URL until any key pressed) ----------
     def _bind_modal_inputs(self, handler):
@@ -1065,7 +1029,9 @@ class UI:
             return
         
         elif self.state == self.QR_CODE_VIEWER:
-            self._abort_to_home()
+            # Exit cleanly to the home screen without a message
+            self.state = self.HOME
+            self.render()
             return
         
         # elif self.state == self.STILLS_VIEWER:
@@ -1750,3 +1716,65 @@ class UI:
         time.sleep(2.5)
         self._sleep_screen()
         self.state = prev_state
+
+# ----------------- main loop -----------------
+# ----------------- main loop -----------------
+def main():
+    ui = UI()
+    poll_thread = threading.Thread(target=_poll_status_worker, daemon=True)
+    poll_thread.start()
+    time.sleep(1.0)
+
+    while True:
+        # --- THIS IS THE NEW LOGIC ---
+        # Check for the flag file to control screen power
+        if os.path.exists(LCD_OFF_FLAG):
+            if not ui._screen_off:
+                ui._sleep_screen()
+            time.sleep(2) # Sleep longer when screen is off
+            continue # Skip the rest of the loop
+        elif ui._screen_off:
+            # If flag is gone but screen is off, wake it
+            ui._wake_screen()
+        # --- END OF NEW LOGIC ---
+
+        if ui._busy or ui.state == ui.MODAL:
+            time.sleep(0.1)
+            continue
+
+        st = ui._status()
+        is_active = st.get("active", False)
+        is_encoding = st.get("encoding", False)
+
+        if is_encoding:
+            if ui.state != UI.ENCODING:
+                ui.state = UI.ENCODING
+        elif is_active:
+            if ui.state != UI.CAPTURING:
+                ui.state = UI.CAPTURING
+                ui.menu_idx = 0
+        elif ui.state in (UI.CAPTURING, UI.ENCODING):
+             ui.state = UI.HOME
+             ui.menu_idx = 0
+
+        ui.render()
+
+        if ui.state == UI.ENCODING:
+            ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+
+        time.sleep(1.0)
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            print("DEBUG on", file=sys.stderr, flush=True)
+        # Ensure stdout/stderr are not buffered under systemd
+        try:
+            import sys as _sys
+            _sys.stdout.reconfigure(line_buffering=True)
+            _sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+        main()
+    except KeyboardInterrupt:
+        pass
