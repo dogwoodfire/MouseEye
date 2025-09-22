@@ -193,6 +193,27 @@ def _cam_deg_for_backend():
     ui = _current_cam_rotate_deg()
     return (360 - ui) % 360
 
+from PIL import Image, ImageOps
+ORIENT_TAG = 0x0112  # EXIF Orientation
+
+def _ui_deg():
+    return _current_cam_rotate_deg()  # CCW 0/90/180/270
+
+def _needs_transpose():
+    return _ui_deg() in (90, 270)
+
+def _rotate_file_in_place(path: str):
+    """Rotate pixels to match UI CCW and normalize EXIF."""
+    deg = _ui_deg()
+    if deg % 360 == 0:
+        return
+    with Image.open(path) as im:
+        im = ImageOps.exif_transpose(im)  # apply incoming EXIF first
+        im = im.rotate(deg, expand=True)  # Pillow rotates CCW
+        exif = im.getexif()
+        exif[ORIENT_TAG] = 1  # Orientation=Normal
+        im.save(path, exif=exif)
+
 # --- Optional hflip/vflip flags from prefs ---
 def _mirror_flags_from_prefs():
     """
@@ -244,24 +265,26 @@ def _rot_flags_for(bin_path: str):
     """
     Return CLI flags to rotate frames for rpicam-* or libcamera-*.
     Uses --rotation <deg> (CW) and optional --hflip/--vflip from prefs.
+    For 90/270 UI requests we fall back to software rotation.
     """
     cam_deg = _cam_deg_for_backend()
-    flags = (["--rotation", str(cam_deg)] if cam_deg else [])
+    # Suppress 90/270 in hardware: not supported on your stack.
+    if cam_deg in (90, 270):
+        cam_deg = 0
+    flags = (["--rotation", str(cam_deg)] if cam_deg in (180,) else [])
     flags += _mirror_flags_from_prefs()
     return flags
 
 def _dims_for_rotation():
     """
-    Return (width, height) strings that match the *output* orientation.
-    For 90/270 degrees we must swap W/H for some camera stacks, otherwise
-    rpicam/libcamera can fail to configure the stream.
-    The swap decision uses the backend (CW) degrees to match the actual camera transform.
+    Return (width, height) strings for the backend.
+    Swap only if the backend is doing 90/270 (we don’t do that now).
     """
     cam_deg = _cam_deg_for_backend()
-    w, h = CAPTURE_WIDTH, CAPTURE_HEIGHT
     if cam_deg in (90, 270):
-        return (CAPTURE_HEIGHT, CAPTURE_WIDTH)
-    return (w, h)
+        cam_deg = 0
+    w, h = CAPTURE_WIDTH, CAPTURE_HEIGHT
+    return (w, h) if cam_deg in (0, 180) else (CAPTURE_HEIGHT, CAPTURE_WIDTH)
 
 app = Flask(__name__)
 app.jinja_env.globals.update(datetime=datetime)
@@ -330,12 +353,21 @@ def _start_encode_worker_once():
                 if shutil.which("ionice"): prio += ["ionice", "-c3"]
                 if shutil.which("nice"):   prio += ["nice", "-n", "19"]
 
-                # ...after computing sess_dir, out, fps...
+                vf = []
+                ui = _ui_deg()
+                # ffmpeg transpose: 1 = 90° CW, 2 = 90° CCW
+                if ui == 90:
+                    vf = ["-vf", "transpose=2"]  # 90° CCW
+                elif ui == 270:
+                    vf = ["-vf", "transpose=1"]  # 90° CW
+                # For 180 we already pass --rotation 180; no vf needed.
+
                 cmd = prio + [
                     FFMPEG, "-y",
                     "-framerate", str(fps),
                     "-pattern_type", "glob",
                     "-i", os.path.join(sess_dir, "*.jpg"),
+                    *vf,
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p",
@@ -1039,6 +1071,8 @@ def capture_still():
         ]
         print("[capture_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
+        if _needs_transpose():
+            _rotate_file_in_place(path)
 
         # Return the captured image directly for the LCD to display
         return send_file(path, mimetype='image/jpeg')
@@ -1063,6 +1097,8 @@ def take_web_still():
         ]
         print("[take_web_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
+        if _needs_transpose():
+            _rotate_file_in_place(path)
         
         # Redirect to the new preview page for this image
         return redirect(url_for("still_preview", filename=filename))
@@ -1597,6 +1633,18 @@ def live_page():
   </div>
 </main>
 <script>
+fetch("{{ url_for('debug_rotation') }}")
+  .then(r => r.json())
+  .then(j => {
+    const ui = j.deg || 0; // CCW
+    const img = document.getElementById('live-img');
+    if (img && (ui === 90 || ui === 270)) {
+      const cw = (360 - ui) % 360; // CSS rotates CW
+      img.style.transform = `rotate(${cw}deg)`;
+    } else if (img) {
+      img.style.transform = '';
+    }
+  });
   const img = document.getElementById('live-img');
   const msg = document.getElementById('msg');
   const STREAM_URL = "{{ url_for('live_mjpg') }}";
