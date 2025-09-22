@@ -739,7 +739,7 @@ class UI:
         Shows a 2-page QR viewer when AP is ON.
         Shows a single URL QR modal when AP is OFF (Wi-Fi client mode).
         """
-        if self._busy and not threading.main_thread().name in str(threading.current_thread()):
+        if self._busy and "worker" not in threading.current_thread().name:
              return
         self._busy = True
         self._draw_center("Generating", sub="QR Code...")
@@ -772,18 +772,17 @@ class UI:
                 
                 self.state = self.QR_CODE_VIEWER
                 self.qr_page_idx = 0
-                self.render() # Renders the new multi-page viewer
+                self.render()
             
             else:
                 # --- OLD Modal for Wi-Fi Client Mode ---
                 ssid = _current_wifi_ssid() or "Wi-Fi"
                 ips  = st.get("ips") or _local_ipv4s()
                 ip   = ips[0] if ips else ""
-                # This call handles its own state and busy flag
                 self._show_connect_url_modal(ssid, ip, ips)
 
         finally:
-            # The busy flag is released by the function that exits the viewer
+            # The busy flag is now released by the function that exits the viewer
             if self.state not in (self.MODAL, self.QR_CODE_VIEWER):
                 self._busy = False
 
@@ -1385,17 +1384,9 @@ class UI:
 
         def worker():
             initial_state_is_on = _ap_poll_cache(period=0)
-            ok = _http_post_form(AP_TOGGLE_URL, {}, timeout=8.0)
+            _http_post_form(AP_TOGGLE_URL, {}, timeout=8.0)
 
-            if not ok:
-                self._draw_center("AP toggle failed")
-                time.sleep(1.5)
-                self._busy = False
-                self.state = self.HOME
-                self.render(force=True)
-                return
-
-            # Wait for the state to change
+            # Wait for the state to actually change
             deadline = time.time() + 8.0
             st = {}
             while time.time() < deadline:
@@ -1404,12 +1395,12 @@ class UI:
                     break
                 time.sleep(0.5)
 
-            # Now check the final state and act accordingly
+            # Now check the final state and act
             if st.get("on"):
-                # If AP was turned ON, show the QR screen. It will handle the busy flag.
+                # If AP is ON, call the QR info screen. It will handle the busy flag from here.
                 self.show_ap_info()
             else:
-                # If AP was turned OFF, show confirmation and return to home
+                # If AP is OFF, show confirmation and return to home
                 self._draw_center("Hotspot OFF")
                 time.sleep(1)
                 self._busy = False
