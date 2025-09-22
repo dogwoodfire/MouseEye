@@ -773,27 +773,24 @@ def ap_status_json():
     ssid = ""
     password = ""
     try:
-        # --- START OF FIX ---
-        # Using the correct field name '802-11-wireless-security.psk' for your system
+        # Use the corrected field name for your system
         ok, out = _nmcli("-t", "-s", "-f", "GENERAL.DEVICES,802-11-wireless.ssid,802-11-wireless-security.psk", "con", "show", HOTSPOT_NAME)
-        # --- END OF FIX ---
         
-        # --- DIAGNOSTIC LOGGING (safe to leave in for now) ---
-        print("--- AP STATUS DIAGNOSTIC ---")
-        print(f"[DIAGNOSTIC] nmcli command 'ok': {ok}")
-        print(f"[DIAGNOSTIC] Raw output from nmcli: '{out}'")
-        
+        # --- START OF NEW ROBUST PARSING LOGIC ---
         if ok and out:
-            parts = out.split(':')
-            
-            print(f"[DIAGNOSTIC] Split parts array: {parts}")
-            
-            device = parts[0].strip() if len(parts) > 0 else ""
-            ssid = parts[1].strip() if len(parts) > 1 else ""
-            password = parts[2].strip() if len(parts) > 2 else ""
+            # Create a dictionary from the multi-line output
+            lines = out.strip().split('\n')
+            data = {}
+            for line in lines:
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    data[parts[0]] = parts[1]
 
-            print(f"[DIAGNOSTIC] Parsed -> device: '{device}', ssid: '{ssid}', password: '{password}'")
-            print("--------------------------")
+            # Safely get the values from the dictionary
+            device = data.get("GENERAL.DEVICES", "").strip()
+            ssid = data.get("802-11-wireless.ssid", "").strip()
+            password = data.get("802-11-wireless-security.psk", "").strip()
+        # --- END OF NEW ROBUST PARSING LOGIC ---
 
         if device:
             ip = _ipv4_for_device(device)
