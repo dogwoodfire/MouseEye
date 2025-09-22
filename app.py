@@ -18,8 +18,11 @@ def _nmcli(*args, timeout=6):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, timeout=timeout, check=False
         )
-        ok = (proc.returncode == 0)
-        return ok, (proc.stdout.strip() or proc.stderr.strip())
+        if proc.returncode == 0:
+            return True, proc.stdout.strip()
+        # Otherwise, return the error message for debugging.
+        return False, (proc.stderr.strip() or proc.stdout.strip())
+
     except Exception as e:
         return False, str(e)
 import re

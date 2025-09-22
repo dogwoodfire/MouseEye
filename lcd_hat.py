@@ -743,54 +743,42 @@ class UI:
             return
         self._busy = True
         self._draw_center("Generating", sub="QR Code...")
+        
+        # The 'try' statement has been removed from here
+        st = _http_json(AP_STATUS_URL) or {}
+        ap_on = bool(st.get("on"))
+        
+        if ap_on:
+            # --- New 2-Page Viewer for AP Mode ---
+            self.qr_pages = []
+            ssid = st.get("ssid") or st.get("name") or "Pi-Hotspot"
+            ip = st.get("ip") or "10.42.0.1"
+            
+            # Get password from the API response
+            password = st.get("password", "")
 
-        try:
-            st = _http_json(AP_STATUS_URL) or {}
-            ap_on = bool(st.get("on"))
-
-            if ap_on:
-                # --- New 2-Page Viewer for AP Mode ---
-                self.qr_pages = []
-                ssid = st.get("ssid") or st.get("name") or "Pi-Hotspot"
-                ip = st.get("ip") or "10.42.0.1"
-
-                # --- THIS IS THE FIX ---
-                # Get password from the API response instead of running a slow command
-                password = st.get("password", "")
-
-                # --- DELETE OR COMMENT OUT THIS ENTIRE BLOCK ---
-                # try:
-                #     cmd = ["sudo", "nmcli", "-s", "-g", "802-11-wireless-security.psk", "con", "show", "Pi-Hotspot"]
-                #     password = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-                # except Exception: pass
-
-                if password:
-                    self.qr_pages.append({
-                        "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
-                        "info_text": f"1/2: Scan to connect to\n'{ssid}'"
-                    })
-
+            if password:
                 self.qr_pages.append({
-                    "qr_text": f"http://{ip}:5050",
-                    "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
+                    "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
+                    "info_text": f"1/2: Scan to connect to\n'{ssid}'"
                 })
-
-                self.state = self.QR_CODE_VIEWER
-                self.qr_page_idx = 0
-                self.render() # Renders the new multi-page viewer
-
-            else:
-                # --- OLD Modal for Wi-Fi Client Mode ---
-                ssid = _current_wifi_ssid() or "Wi-Fi"
-                ips  = st.get("ips") or _local_ipv4s()
-                ip   = ips[0] if ips else ""
-                # This call handles its own state and busy flag
-                self._show_connect_url_modal(ssid, ip, ips)
-
-        finally:
-            # The busy flag is now released by the function that exits the viewer
-            if self.state not in (self.MODAL, self.QR_CODE_VIEWER):
-                self._busy = False
+            
+            self.qr_pages.append({
+                "qr_text": f"http://{ip}:5050",
+                "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
+            })
+            
+            self.state = self.QR_CODE_VIEWER
+            self.qr_page_idx = 0
+            self.render() # Renders the new multi-page viewer
+        
+        else:
+            # --- Modal for Wi-Fi Client Mode ---
+            ssid = _current_wifi_ssid() or "Wi-Fi"
+            ips  = st.get("ips") or _local_ipv4s()
+            ip   = ips[0] if ips else ""
+            # This call handles its own state and busy flag
+            self._show_connect_url_modal(ssid, ip, ips)
 
     # ---------- MODAL helpers (show URL until any key pressed) ----------
     def _bind_modal_inputs(self, handler):
@@ -1402,15 +1390,17 @@ class UI:
                     break
                 time.sleep(0.5)
 
-            # Now check the final state and act
-            if st.get("on"):
-                # If AP is ON, call the QR info screen. It will handle the busy flag.
+            # Unconditionally release the "Toggling..." busy state.
+            self._busy = False
+            is_on = st.get("on", False)
+
+            if is_on:
+                # Now, trigger the QR screen, which will manage its OWN busy state.
                 self.show_ap_info()
             else:
-                # If AP is OFF, show confirmation and return to home
+                # If AP is OFF, show confirmation and return to home.
                 self._draw_center("Hotspot OFF")
                 time.sleep(1)
-                self._busy = False
                 self.state = self.HOME
                 self.render(force=True)
 
