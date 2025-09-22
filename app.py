@@ -1548,7 +1548,7 @@ def live_page():
 TPL_INDEX = r"""
 <!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Pi Timelapse TESTING</title>
+<title>Pi Timelapse</title>
 <style>
   :root {
     --active-bg: #e6f2ff; /* light blue */
@@ -1639,7 +1639,7 @@ TPL_INDEX = r"""
 </style>
 
 <header>
-  <h1>📸 Cyclopse Camera </h1>
+  <h1>📸 Cyclopse Camera TESTING</h1>
 </header>
 
 <main>
