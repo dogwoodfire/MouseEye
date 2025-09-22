@@ -773,18 +773,19 @@ def ap_status_json():
     ssid = ""
     password = ""
     try:
-        ok, out = _nmcli("-t", "-s", "-f", "GENERAL.DEVICES,802-11-wireless.ssid,wifi-sec.psk", "con", "show", HOTSPOT_NAME)
+        # --- START OF FIX ---
+        # Using the correct field name '802-11-wireless-security.psk' for your system
+        ok, out = _nmcli("-t", "-s", "-f", "GENERAL.DEVICES,802-11-wireless.ssid,802-11-wireless-security.psk", "con", "show", HOTSPOT_NAME)
+        # --- END OF FIX ---
         
-        # --- START OF DIAGNOSTIC LOGGING ---
+        # --- DIAGNOSTIC LOGGING (safe to leave in for now) ---
         print("--- AP STATUS DIAGNOSTIC ---")
         print(f"[DIAGNOSTIC] nmcli command 'ok': {ok}")
         print(f"[DIAGNOSTIC] Raw output from nmcli: '{out}'")
-        # --- END OF DIAGNOSTIC LOGGING ---
-
+        
         if ok and out:
             parts = out.split(':')
-
-            # --- MORE DIAGNOSTIC LOGGING ---
+            
             print(f"[DIAGNOSTIC] Split parts array: {parts}")
             
             device = parts[0].strip() if len(parts) > 0 else ""
@@ -793,7 +794,6 @@ def ap_status_json():
 
             print(f"[DIAGNOSTIC] Parsed -> device: '{device}', ssid: '{ssid}', password: '{password}'")
             print("--------------------------")
-
 
         if device:
             ip = _ipv4_for_device(device)
@@ -810,6 +810,7 @@ def ap_status_json():
         "ssid": ssid or HOTSPOT_NAME,
         "password": password,
     })
+
 def _ap_status_quick():
     """Return a compact AP status dict for the template."""
     try:
