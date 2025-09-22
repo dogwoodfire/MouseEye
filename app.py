@@ -183,6 +183,16 @@ def _current_cam_rotate_deg():
     except Exception:
         return 0
 
+# --- Helper: Map UI/LCD CCW rotation to rpicam/libcamera CW rotation ---
+def _cam_deg_for_backend():
+    """
+    Map UI/LCD rotation (assumed CCW degrees) to rpicam/libcamera
+    rotation (CW degrees). Many UI toolkits & Pillow rotate CCW by default,
+    while rpicam/libcamera's --rotation is CW. So use: cam = (360 - ui) % 360
+    """
+    ui = _current_cam_rotate_deg()
+    return (360 - ui) % 360
+
 # --- Optional hflip/vflip flags from prefs ---
 def _mirror_flags_from_prefs():
     """
@@ -233,10 +243,10 @@ CAM_ROTATE_DEG = int(os.environ.get("CAM_ROTATE_DEG", "180"))
 def _rot_flags_for(bin_path: str):
     """
     Return CLI flags to rotate frames for rpicam-* or libcamera-*.
-    Uses --rotation <deg> and optional --hflip/--vflip from prefs.
+    Uses --rotation <deg> (CW) and optional --hflip/--vflip from prefs.
     """
-    deg = _current_cam_rotate_deg()
-    flags = (["--rotation", str(deg)] if deg else [])
+    cam_deg = _cam_deg_for_backend()
+    flags = (["--rotation", str(cam_deg)] if cam_deg else [])
     flags += _mirror_flags_from_prefs()
     return flags
 
@@ -245,10 +255,11 @@ def _dims_for_rotation():
     Return (width, height) strings that match the *output* orientation.
     For 90/270 degrees we must swap W/H for some camera stacks, otherwise
     rpicam/libcamera can fail to configure the stream.
+    The swap decision uses the backend (CW) degrees to match the actual camera transform.
     """
-    deg = _current_cam_rotate_deg()
+    cam_deg = _cam_deg_for_backend()
     w, h = CAPTURE_WIDTH, CAPTURE_HEIGHT
-    if deg in (90, 270):
+    if cam_deg in (90, 270):
         return (CAPTURE_HEIGHT, CAPTURE_WIDTH)
     return (w, h)
 
@@ -1062,6 +1073,7 @@ def take_web_still():
 def debug_rotation():
     try:
         deg = _current_cam_rotate_deg()
+        cam_deg = _cam_deg_for_backend()
         flags = _rot_flags_for(CAMERA_STILL)
         exists = os.path.exists(PREFS_FILE)
         try:
@@ -1074,6 +1086,7 @@ def debug_rotation():
             "prefs_exists": exists,
             "prefs_raw": prefs_raw,
             "deg": deg,
+            "cam_deg": cam_deg,
             "flags": flags,
             "camera_bin": CAMERA_STILL
         })
