@@ -742,20 +742,28 @@ class UI:
         
         if ap_on:
             # --- START OF HARD-CODED FIX ---
-            # This completely bypasses the backend for AP details.
-            # Replace these placeholder values with your actual hotspot details.
             ssid = "cyclopi_camera"
             password = "Steropes-123"
-            ip = "10.42.0.1"  # This is the default for Pi hotspots, change if yours is different.
+            ip = "10.42.0.1"  # Default for many Pi hotspots; change if needed.
             # --- END OF HARD-CODED FIX ---
 
-            # The rest of the logic uses the hard-coded variables above
+            def _escape_wifi(s: str) -> str:
+                # Escape special chars per Wi-Fi QR recommendations
+                for ch in ['\\', ';', ',', ':', '"']:
+                    s = s.replace(ch, '\\' + ch)
+                return s
+
             self.qr_pages = []
+
             if password:
-                self.qr_pages.append({
-                    "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
-                    "info_text": f"1/2: Scan to connect to\n'{ssid}'"
-                })
+                wifi_payload = f"WIFI:T:WPA;S:{_escape_wifi(ssid)};P:{_escape_wifi(password)};;"
+            else:
+                wifi_payload = f"WIFI:T:nopass;S:{_escape_wifi(ssid)};;"
+
+            self.qr_pages.append({
+                "qr_text": wifi_payload,
+                "info_text": f"1/2: Scan to connect to\n'{ssid}'"
+            })
 
             self.qr_pages.append({
                 "qr_text": f"http://{ip}:5050",
@@ -764,7 +772,7 @@ class UI:
 
             self.state = self.QR_CODE_VIEWER
             self.qr_page_idx = 0
-            self.render()
+            self.render()  # should call _render_qr_viewer() when state == QR_CODE_VIEWER
             self._bind_modal_inputs(self._modal_ack)
             
         else:
