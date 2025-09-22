@@ -231,7 +231,7 @@ def _rotate_still_to_canonical(path: str):
             if ui == 90 :
                 deg = 180     # landscape LCD → 180° CCW
             else:
-                deg = 0     # portrait LCD   → 270° CCW
+                deg = 90     # portrait LCD   → 270° CCW
 
             if deg % 360 != 0:
                 im = im.rotate(deg, expand=True)
