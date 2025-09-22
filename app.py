@@ -774,14 +774,16 @@ def ap_status_json():
     ssid = ""
     password = ""
     try:
-        # This one command gets the device, SSID, and password (secret)
+        # Get all AP info in one single, reliable command
         ok, out = _nmcli("-t", "-s", "-f", "GENERAL.DEVICES,802-11-wireless.ssid,wifi-sec.psk", "con", "show", HOTSPOT_NAME)
-        if ok:
+        if ok and out:
+            # Safely parse the colon-delimited output, which may have empty fields
             parts = out.split(':')
-            if len(parts) >= 3:
-                device = parts[0].strip()
-                ssid = parts[1].strip() or HOTSPOT_NAME # Fallback to name
-                password = parts[2].strip()
+            
+            # Assign parts safely, providing defaults if they don't exist
+            device = parts[0].strip() if len(parts) > 0 else ""
+            ssid = parts[1].strip() if len(parts) > 1 else ""
+            password = parts[2].strip() if len(parts) > 2 else ""
 
         if device:
             ip = _ipv4_for_device(device)
@@ -795,7 +797,7 @@ def ap_status_json():
         "device": device,
         "ip": ip,
         "ips": _all_ipv4_local(),
-        "ssid": ssid,
+        "ssid": ssid or HOTSPOT_NAME, # Use the connection name as a fallback
         "password": password,
     })
 
