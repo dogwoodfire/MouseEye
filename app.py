@@ -202,10 +202,11 @@ def _ui_deg():
 def _needs_transpose():
     return _ui_deg() in (90, 270)
 
-def _rotate_file_in_place(path: str):
-    """Rotate pixels to match UI CCW and normalize EXIF."""
-    deg = _ui_deg()
-    if deg % 360 == 0:
+def _rotate_file_in_place(path: str, deg: int = None):
+    """Rotate pixels CCW and normalize EXIF. If deg is None, uses UI setting."""
+    if deg is None:
+        deg = _ui_deg()
+    if (deg or 0) % 360 == 0:
         return
     with Image.open(path) as im:
         im = ImageOps.exif_transpose(im)  # apply incoming EXIF first
@@ -238,6 +239,11 @@ CAPTURE_INTERVAL_SEC = 10
 CAPTURE_WIDTH   = "1296"
 CAPTURE_HEIGHT  = "972"
 CAPTURE_QUALITY = "90"
+# project-level overrides (based on observed hardware behavior)
+# Force all STILL images to rotate 90° CCW after capture.
+STILLS_SOFT_ROTATE_CCW = 90  # degrees CCW to apply in software to each still
+# Force all TIMELAPSE videos to rotate 180° at encode time.
+TIMELAPSE_FORCE_ROTATE_DEG = 180
 
 # encoding defaults / choices
 FPS_CHOICES = [10, 24, 30]
@@ -354,12 +360,12 @@ def _start_encode_worker_once():
                 if shutil.which("nice"):   prio += ["nice", "-n", "19"]
 
                 vf = []
-                ui = _ui_deg()
-                # ffmpeg transpose: 1 = 90° CW, 2 = 90° CCW
-                if ui == 90:
-                    vf = ["-vf", "transpose=2"]  # 90° CCW
-                elif ui == 270:
-                    vf = ["-vf", "transpose=1"]  # 90° CW
+                if TIMELAPSE_FORCE_ROTATE_DEG % 360 == 180:
+                    vf = ["-vf", "hflip,vflip"]
+                elif TIMELAPSE_FORCE_ROTATE_DEG % 360 == 90:
+                    vf = ["-vf", "transpose=2"]   # 90° CCW
+                elif TIMELAPSE_FORCE_ROTATE_DEG % 360 == 270:
+                    vf = ["-vf", "transpose=1"]   # 90° CW
                 # For 180 we already pass --rotation 180; no vf needed.
 
                 cmd = prio + [
@@ -1072,7 +1078,7 @@ def capture_still():
         print("[capture_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
         if _needs_transpose():
-            _rotate_file_in_place(path)
+            _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
 
         # Return the captured image directly for the LCD to display
         return send_file(path, mimetype='image/jpeg')
@@ -1098,7 +1104,7 @@ def take_web_still():
         print("[take_web_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
         if _needs_transpose():
-            _rotate_file_in_place(path)
+            _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
         
         # Redirect to the new preview page for this image
         return redirect(url_for("still_preview", filename=filename))
