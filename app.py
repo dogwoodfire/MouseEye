@@ -154,7 +154,7 @@ LCD_OFF_FLAG = os.path.join(BASE, "lcd_off.flag")
 
 CAMERA_STILL = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
 FFMPEG       = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
-PREFS_FILE = "/home/pi/timelapse/lcd_prefs.json"
+PREFS_FILE = os.path.join(BASE, "lcd_prefs.json")
 
 def _current_cam_rotate_deg():
     """
@@ -182,6 +182,25 @@ def _current_cam_rotate_deg():
         return deg if deg in (0, 90, 180, 270) else 0
     except Exception:
         return 0
+
+# --- Optional hflip/vflip flags from prefs ---
+def _mirror_flags_from_prefs():
+    """
+    Optional hflip/vflip flags read from lcd_prefs.json.
+    Example JSON: {"rot_deg": 90, "hflip": false, "vflip": true}
+    """
+    try:
+        import json
+        from pathlib import Path
+        data = json.loads(Path(PREFS_FILE).read_text())
+        flags = []
+        if bool(data.get("hflip", False)):
+            flags.append("--hflip")
+        if bool(data.get("vflip", False)):
+            flags.append("--vflip")
+        return flags
+    except Exception:
+        return []
 
 # capture defaults
 CAPTURE_INTERVAL_SEC = 10
@@ -214,12 +233,11 @@ CAM_ROTATE_DEG = int(os.environ.get("CAM_ROTATE_DEG", "180"))
 def _rot_flags_for(bin_path: str):
     """
     Return CLI flags to rotate frames for rpicam-* or libcamera-*.
-    Uses --rotation <deg>, supported by both families.
+    Uses --rotation <deg> and optional --hflip/--vflip from prefs.
     """
     deg = _current_cam_rotate_deg()
     flags = (["--rotation", str(deg)] if deg else [])
-    # If you added mirror prefs:
-    # flags += _mirror_flags_from_prefs()
+    flags += _mirror_flags_from_prefs()
     return flags
 
 app = Flask(__name__)
@@ -997,6 +1015,7 @@ def capture_still():
             "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
             "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
         ]
+        print("[capture_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
 
         # Return the captured image directly for the LCD to display
@@ -1020,6 +1039,7 @@ def take_web_still():
             "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
             "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
         ]
+        print("[take_web_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
         
         # Redirect to the new preview page for this image
@@ -1027,6 +1047,27 @@ def take_web_still():
     except Exception as e:
         print(f"Error capturing web still: {e}")
         return redirect(url_for("index")) # Redirect home on error
+@app.get("/debug_rotation")
+def debug_rotation():
+    try:
+        deg = _current_cam_rotate_deg()
+        flags = _rot_flags_for(CAMERA_STILL)
+        exists = os.path.exists(PREFS_FILE)
+        try:
+            with open(PREFS_FILE, "r") as f:
+                prefs_raw = f.read()
+        except Exception:
+            prefs_raw = None
+        return jsonify({
+            "prefs_path": PREFS_FILE,
+            "prefs_exists": exists,
+            "prefs_raw": prefs_raw,
+            "deg": deg,
+            "flags": flags,
+            "camera_bin": CAMERA_STILL
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.get("/still_preview/<filename>")
 def still_preview(filename):
