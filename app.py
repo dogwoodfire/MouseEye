@@ -727,19 +727,6 @@ def ap_off():
     ok = ap_disable()
     return (jsonify({"on": False}) if ok else (jsonify({"on": True, "error":"disable_failed"}), 500))
 
-def ap_toggle():
-    # The ap_enable/disable functions now need to return the output message on failure
-    if ap_is_on():
-        ok, out = ap_disable()
-    else:
-        ok, out = ap_enable()
-    
-    if ok:
-        return jsonify({"on": ap_is_on()})
-    else:
-        # Return the actual error message from nmcli
-        return jsonify({"on": ap_is_on(), "error": "toggle_failed", "message": out}), 500
-
 @app.get("/ap/status")
 def ap_status_json():
     on = ap_is_on()
