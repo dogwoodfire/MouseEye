@@ -228,7 +228,7 @@ def _rotate_still_to_canonical(path: str):
             im = ImageOps.exif_transpose(im)  # normalize any incoming EXIF first
 
             ui = _ui_deg()  # 0/90/180/270 from lcd_prefs.json
-            if ui in (0, 90):
+            if ui == 90 :
                 deg = 90     # landscape LCD → 180° CCW
             else:
                 deg = 180     # portrait LCD   → 270° CCW
