@@ -993,6 +993,13 @@ class UI:
         self.render()
 
     def ok(self):
+
+        if self.state == self.QR_CODE_VIEWER:
+            self._busy = False
+            self.state = self.HOME
+            self.render(force=True)
+            return
+
         if self._busy or self._screen_off or self.state == self.ENCODING or self.state == self.MODAL:
             return
         

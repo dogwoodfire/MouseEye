@@ -28,26 +28,29 @@ def _nmcli(*args, timeout=6):
 import re
 
 def _ap_ssid(dev):
-    # 1) From the connection profile (most reliable)
-    ok, out = _nmcli("-g", "802-11-wireless.ssid", "con", "show", HOTSPOT_NAME)
-    if ok and out.strip():
-        return out.strip()
-
-    # 2) From the live device (fallback)
+    # 1) From the live device (most reliable for active AP)
     if dev:
         try:
             p = subprocess.run(
                 ["iw", "dev", dev, "info"],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, check=False
+                text=True, check=False, timeout=1.5
             )
             for ln in p.stdout.splitlines():
                 ln = ln.strip()
                 if ln.lower().startswith("ssid "):
-                    return ln.split(None, 1)[1].strip()
+                    ssid = ln.split(None, 1)[1].strip()
+                    if ssid:
+                        return ssid # Return immediately if found
         except Exception:
             pass
-    return None
+    
+    # 2) From the connection profile (fallback)
+    ok, out = _nmcli("-g", "802-11-wireless.ssid", "con", "show", HOTSPOT_NAME)
+    if ok and out.strip():
+        return out.strip()
+
+    return None # No SSID found
 
 def _ap_active_device():
     """Return the device name (e.g. wlan0) for the active AP, or ''."""
