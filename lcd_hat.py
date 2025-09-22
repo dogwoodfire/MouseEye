@@ -739,7 +739,7 @@ class UI:
         if self._busy:
             return
         self._busy = True
-        self._draw_center("Generating QR Code...")
+        self._draw_center("Generating", sub="QR Code...")
 
         # This will hold the data for our QR code pages
         self.qr_pages = []
@@ -818,8 +818,7 @@ class UI:
             drw.text(((WIDTH - w) // 2, y), line, font=F_SMALL, fill=WHITE)
             y += 10
 
-        drw.text((2, HEIGHT - 12), "< L/R >", font=F_SMALL, fill=GRAY)
-        drw.text((WIDTH - 2 - self._text_w(F_SMALL, "Exit"), HEIGHT - 12), "Exit", font=F_SMALL, fill=GRAY)
+        drw.text((WIDTH - 2 - self._text_w(F_SMALL, "<∙>"), y), "<∙>", font=F_SMALL, fill=GRAY)
 
         self._present(img)
 
@@ -1423,54 +1422,47 @@ class UI:
 
         def worker():
             try:
-                # Give nmcli time and be tolerant of timeouts
-                ok = _http_post_form(AP_TOGGLE_URL, {}, timeout=4.0)
+                # Store the initial state
+                initial_state_is_on = _ap_poll_cache(period=0) # Force a fresh check
+                
+                # Send the toggle command
+                ok = _http_post_form(AP_TOGGLE_URL, {}, timeout=8.0)
                 if not ok:
-                    # Even if POST timed out, it may still succeed shortly.
-                    deadline = time.time() + 3.0
-                    success = False
-                    while time.time() < deadline:
-                        st = _http_json(AP_STATUS_URL) or {}
-                        if isinstance(st.get("on"), bool):
-                            success = True
-                            break
-                        time.sleep(0.2)
-                    if not success:
-                        self._draw_center("AP toggle failed")
-                        time.sleep(0.6)
-                        return
+                    self._draw_center("AP toggle failed")
+                    time.sleep(1.5)
+                    return
 
-                # Confirm final state (with a few retries while NM settles)
-                st = {}
-                deadline = time.time() + 5.0
+                # Confirm the state has changed
+                deadline = time.time() + 8.0
+                state_changed = False
                 while time.time() < deadline:
                     st = _http_json(AP_STATUS_URL) or {}
-                    if "on" in st:
+                    if "on" in st and st["on"] != initial_state_is_on:
+                        state_changed = True
                         break
-                    time.sleep(0.2)
+                    time.sleep(0.5)
 
+                if not state_changed:
+                    self._draw_center("AP toggle failed", sub="No response")
+                    time.sleep(1.5)
+                    return
+                
+                # --- THIS IS THE NEW LOGIC ---
+                st = _http_json(AP_STATUS_URL) or {}
                 if st.get("on"):
-                    ssid = st.get("ssid") or st.get("name") or "Hotspot"
-                    # Poll IP briefly if not yet assigned
-                    ip = st.get("ip") or ""
-                    ips = st.get("ips") or []
-                    if not ip:
-                        ip_deadline = time.time() + 6.0
-                        while time.time() < ip_deadline and not ip:
-                            time.sleep(0.4)
-                            st2 = _http_json(AP_STATUS_URL) or {}
-                            ip = st2.get("ip") or ""
-                            ips = st2.get("ips") or ips
-
-                    # Show sticky modal with URL until key press
-                    self._show_connect_url_modal(ssid, ip, ips)
+                    # If the AP was just turned ON, immediately show the QR code viewer
+                    self.show_ap_info()
                 else:
+                    # If the AP was turned OFF, show a confirmation and go home
                     self._draw_center("Hotspot OFF")
-                    time.sleep(0.8)
+                    time.sleep(1)
+                    self.state = self.HOME
+                    self.render(force=True)
+                # --- END OF NEW LOGIC ---
+
             finally:
-                # Allow input again (modal will rebind on show)
-                self._busy = False
-                if self.state != self.MODAL:
+                if self.state != self.QR_CODE_VIEWER:
+                    self._busy = False
                     self.render(True)
 
         threading.Thread(target=worker, daemon=True).start()
