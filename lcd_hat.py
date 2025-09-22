@@ -783,7 +783,7 @@ class UI:
                 self._show_connect_url_modal(ssid, ip, ips)
 
         finally:
-            # The busy flag is released by the function that exits the viewer
+            # The busy flag is now released by the function that exits the viewer
             if self.state not in (self.MODAL, self.QR_CODE_VIEWER):
                 self._busy = False
 
@@ -1386,15 +1386,7 @@ class UI:
 
         def worker():
             initial_state_is_on = _ap_poll_cache(period=0)
-            ok = _http_post_form(AP_TOGGLE_URL, {}, timeout=8.0)
-            
-            if not ok:
-                self._draw_center("AP toggle failed")
-                time.sleep(1.5)
-                self._busy = False # Release busy flag on failure
-                self.state = self.HOME
-                self.render(force=True)
-                return
+            _http_post_form(AP_TOGGLE_URL, {}, timeout=8.0)
 
             # Wait for the state to actually change
             deadline = time.time() + 8.0
@@ -1405,7 +1397,7 @@ class UI:
                     break
                 time.sleep(0.5)
 
-            # Now check the final state and act accordingly
+            # Now check the final state and act
             if st.get("on"):
                 # If AP is ON, call the QR info screen. It will handle the busy flag.
                 self.show_ap_info()
