@@ -734,53 +734,63 @@ class UI:
         """
         if self._busy and "worker" not in threading.current_thread().name:
             return
+
         self._busy = True
-        self._draw_center("Generating", sub="QR Code...")
-        
-        st = _http_json(AP_STATUS_URL) or {}
-        ap_on = bool(st.get("on"))
-        
-        if ap_on:
-            # --- START OF HARD-CODED FIX ---
-            ssid = "cyclopi_camera"
-            password = "Steropes-123"
-            ip = "10.42.0.1"  # Default for many Pi hotspots; change if needed.
-            # --- END OF HARD-CODED FIX ---
+        try:
+            self._draw_center("Generating", sub="QR Code...")
 
-            def _escape_wifi(s: str) -> str:
-                # Escape special chars per Wi-Fi QR recommendations
-                for ch in ['\\', ';', ',', ':', '"']:
-                    s = s.replace(ch, '\\' + ch)
-                return s
+            # Don’t let this block forever
+            st = _http_json(AP_STATUS_URL, timeout=0.75) or {}
+            ap_on = bool(st.get("on"))
 
-            self.qr_pages = []
+            if ap_on:
+                # --- START OF HARD-CODED FIX ---
+                ssid = "cyclopi_camera"
+                password = "Steropes-123"
+                ip = "10.42.0.1"
+                # --- END OF HARD-CODED FIX ---
 
-            if password:
-                wifi_payload = f"WIFI:T:WPA;S:{_escape_wifi(ssid)};P:{_escape_wifi(password)};;"
+                def _escape_wifi(s: str) -> str:
+                    for ch in ['\\', ';', ',', ':', '"']:
+                        s = s.replace(ch, '\\' + ch)
+                    return s
+
+                pages = []
+                if password:
+                    wifi_payload = f"WIFI:T:WPA;S:{_escape_wifi(ssid)};P:{_escape_wifi(password)};;"
+                else:
+                    wifi_payload = f"WIFI:T:nopass;S:{_escape_wifi(ssid)};;"
+
+                pages.append({"qr_text": wifi_payload,
+                            "info_text": f"1/2: Scan to connect to\n'{ssid}'"})
+                pages.append({"qr_text": f"http://{ip}:5050",
+                            "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"})
+
+                # Update state
+                self.qr_pages = pages
+                self.state = self.QR_CODE_VIEWER
+                self.qr_page_idx = 0
+
             else:
-                wifi_payload = f"WIFI:T:nopass;S:{_escape_wifi(ssid)};;"
+                ssid = _current_wifi_ssid() or "Wi-Fi"
+                ips  = st.get("ips") or _local_ipv4s()
+                ip   = ips[0] if ips else ""
+                # Prepare to show modal after we clear _busy
+                self._pending_modal = (ssid, ip, ips)
 
-            self.qr_pages.append({
-                "qr_text": wifi_payload,
-                "info_text": f"1/2: Scan to connect to\n'{ssid}'"
-            })
+        finally:
+            # Make sure future renders aren’t blocked
+            self._busy = False
 
-            self.qr_pages.append({
-                "qr_text": f"http://{ip}:5050",
-                "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
-            })
-
-            self.state = self.QR_CODE_VIEWER
-            self.qr_page_idx = 0
-            self.render()  # should call _render_qr_viewer() when state == QR_CODE_VIEWER
+        # Do UI work *after* clearing _busy
+        if ap_on:
+            self.render()                       # now allowed to run
             self._bind_modal_inputs(self._modal_ack)
-            
         else:
-            # --- This block is for the 1-page Wi-Fi viewer (this part works) ---
-            ssid = _current_wifi_ssid() or "Wi-Fi"
-            ips  = st.get("ips") or _local_ipv4s()
-            ip   = ips[0] if ips else ""
-            self._show_connect_url_modal(ssid, ip, ips)
+            if hasattr(self, "_pending_modal"):
+                ssid, ip, ips = self._pending_modal
+                del self._pending_modal
+                self._show_connect_url_modal(ssid, ip, ips)
 
     # ---------- MODAL helpers (show URL until any key pressed) ----------
     def _bind_modal_inputs(self, handler):
