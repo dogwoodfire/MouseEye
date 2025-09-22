@@ -113,7 +113,7 @@ def _ap_password(conn_name):
     """Gets the Wi-Fi password for a given nmcli connection name."""
     try:
         # Use the existing sudo nmcli helper
-        ok, out = _nmcli("-s", "-g", "802-11-wireless-security.psk", "con", "show", conn_name)
+        ok, out = _nmcli("-s", "-g", "wifi-sec.psk", "con", "show", conn_name)        
         return out.strip() if ok and out else ""
     except Exception:
         return ""

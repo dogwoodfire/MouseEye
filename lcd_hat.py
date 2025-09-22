@@ -771,6 +771,8 @@ class UI:
             self.state = self.QR_CODE_VIEWER
             self.qr_page_idx = 0
             self.render() # Renders the new multi-page viewer
+
+            self._bind_modal_inputs(self._modal_ack)
         
         else:
             # --- Modal for Wi-Fi Client Mode ---
