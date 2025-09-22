@@ -2436,26 +2436,36 @@ def _get_cpu_temp():
         print(f"Error reading CPU temp: {e}")
         return None
 
+import subprocess
+
 def _has_overheated_since_boot():
-    """Checks the Pi's firmware for any throttling flags since the last boot."""
+    """Return True if the Pi firmware reports *overheating* since last boot."""
     try:
-        # `vcgencmd get_throttled` is the most reliable way to check.
-        # It returns a hex code like 'throttled=0x0'. A value of 0x0 means no issues.
-        out = subprocess.check_output(["vcgencmd", "get_throttled"], text=True, stderr=subprocess.DEVNULL)
-        
-        # The output is 'throttled=0x...'. We split on '=' and parse the hex.
-        hex_val_str = out.split('=')[1].strip()
-        
-        # If the value is anything other than 0, a throttling event has happened.
-        if int(hex_val_str, 16) != 0:
-            return True
-            
-    except (subprocess.CalledProcessError, FileNotFoundError, IndexError):
-        # If the command fails for any reason, assume no overheating.
+        out = subprocess.check_output(
+            ["vcgencmd", "get_throttled"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        # Expect format like: 'throttled=0x50005'
+        hex_val_str = out.split("=", 1)[1]
+        flags = int(hex_val_str, 16)
+
+        # Bit 3 = currently soft temp limit, bit 19 = has occurred since boot
+        OVERHEAT_MASK = 0x8 | 0x80000
+        return bool(flags & OVERHEAT_MASK)
+
+    except subprocess.CalledProcessError:
+        # Command executed but failed
         return False
-        
-    # If we get here, the value was 0x0, so no throttling has occurred.
-    return False
+    except FileNotFoundError:
+        # vcgencmd not installed or not in PATH
+        # Decide: raise, warn, or assume False
+        return False
+    except Exception as e:
+        # Unexpected format or other issue
+        # Safer to log error instead of silently swallowing
+        print(f"Error checking throttled state: {e}")
+        return False
     
 @app.get("/cpu_temp")
 def cpu_temp_api():
