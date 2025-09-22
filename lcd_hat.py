@@ -732,41 +732,81 @@ class UI:
                 self.btn_key3.when_pressed = self._wrap_wake(self.take_still_photo) # Add this line
         # keep joystick driving menus (rotation-aware)
         self._rebind_joystick()
+
     def show_ap_info(self):
         """Show connect info on demand (KEY2).
-        If AP is ON, show hotspot SSID + its IP.
-        If AP is OFF, show current Wi‑Fi SSID (if any) and local IP so you can reach Flask.
+        If AP is ON, show a Wi-Fi login QR code.
+        If AP is OFF, show a URL QR code for the current network.
         """
         if self._busy:
             return
         self._busy = True
+        self._draw_center("Generating QR Code...")
+        
         try:
             st = _http_json(AP_STATUS_URL) or {}
             ap_on = bool(st.get("on"))
+            
             if ap_on:
-                ssid = st.get("ssid") or st.get("name") or "Hotspot"
-                ip   = st.get("ip") or ""
-                ips  = st.get("ips") or []
-                # Poll IP briefly if not yet assigned
-                if not ip:
-                    deadline = time.time() + 4.0
-                    while time.time() < deadline and not ip:
-                        time.sleep(0.3)
-                        st2 = _http_json(AP_STATUS_URL) or {}
-                        ip = st2.get("ip") or ""
-                        if not ips:
-                            ips = st2.get("ips") or []
-                self._show_connect_url_modal(ssid, ip, ips)
-                return
-            # AP is OFF → show current Wi‑Fi network and LAN IP
-            ssid = _current_wifi_ssid() or "Wi‑Fi"
-            ips  = st.get("ips") or _local_ipv4s()
-            ip   = ips[0] if ips else ""
-            self._show_connect_url_modal(ssid, ip, ips)
+                # --- Wi-Fi Login QR Code Logic ---
+                ssid = st.get("ssid") or st.get("name") or "Pi-Hotspot"
+                ip = st.get("ip") or "10.42.0.1" # Default AP IP
+                
+                # Securely fetch the Wi-Fi password using nmcli
+                password = ""
+                try:
+                    cmd = ["sudo", "nmcli", "-s", "-g", "802-11-wireless-security.psk", "con", "show", "Pi-Hotspot"]
+                    password = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+                except Exception as e:
+                    log(f"Could not fetch Wi-Fi password: {e}")
+
+                if password:
+                    # Format for Wi-Fi login: WIFI:T:WPA;S:<SSID>;P:<PASSWORD>;;
+                    qr_text = f"WIFI:T:WPA;S:{ssid};P:{password};;"
+                    info_text = f"Scan to connect to\n'{ssid}'"
+                else:
+                    # Fallback to URL if password couldn't be read
+                    qr_text = f"http://{ip}:5050"
+                    info_text = f"Connect to '{ssid}'\nThen go to http://{ip}:5050"
+
+            else:
+                # --- URL QR Code Logic (when not in AP mode) ---
+                ssid = _current_wifi_ssid() or "Wi-Fi"
+                ips  = st.get("ips") or _local_ipv4s()
+                ip   = ips[0] if ips else ""
+                
+                if ip:
+                    qr_text = f"http://{ip}:5050"
+                    info_text = f"On '{ssid}', go to:\nhttp://{ip}:5050"
+                else:
+                    qr_text = None
+                    info_text = "Not connected to\nany network."
+            
+            # --- QR Code Generation and Display ---
+            if qr_text:
+                qr = qrcode.QRCode(version=1, border=2)
+                qr.add_data(qr_text)
+                qr.make(fit=True)
+                qr_img = qr.make_image(fill_color="black", back_color="white")
+                qr_img = qr_img.resize((96, 96), Image.NEAREST)
+
+                img = self._blank()
+                img.paste(qr_img, (16, 10))
+                
+                drw = ImageDraw.Draw(img)
+                y = 108
+                for line in info_text.split('\n'):
+                    w = self._text_w(F_SMALL, line)
+                    drw.text(((WIDTH - w) // 2, y), line, font=F_SMALL, fill=WHITE)
+                    y += 10
+                self._present(img)
+            else:
+                self._draw_center("Network Info", sub=info_text)
+
         finally:
             self._busy = False
-            if self.state != self.MODAL:
-                self.render(force=True)
+            self.state = self.MODAL
+            self._bind_modal_inputs(self._modal_ack)
 
     # ---------- MODAL helpers (show URL until any key pressed) ----------
     def _bind_modal_inputs(self, handler):
