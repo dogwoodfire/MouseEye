@@ -745,19 +745,42 @@ def ap_off():
 @app.get("/ap/status")
 def ap_status_json():
     on = ap_is_on()
-    dev = _ap_active_device() if on else ""
-    ip  = _ipv4_for_device(dev) if dev else ""
-    ssid = _ap_ssid(dev) if on else None
-    # --- ADD THIS LINE ---
-    password = _ap_password(HOTSPOT_NAME) if on else ""
+    if not on:
+        return jsonify({
+            "on": False,
+            "name": HOTSPOT_NAME,
+            "ips": _all_ipv4_local(),
+        })
+
+    # Get all AP info in one single, reliable command
+    device = ""
+    ip = ""
+    ssid = ""
+    password = ""
+    try:
+        # This one command gets the device, SSID, and password (secret)
+        ok, out = _nmcli("-t", "-s", "-f", "GENERAL.DEVICES,802-11-wireless.ssid,wifi-sec.psk", "con", "show", HOTSPOT_NAME)
+        if ok:
+            parts = out.split(':')
+            if len(parts) >= 3:
+                device = parts[0].strip()
+                ssid = parts[1].strip() or HOTSPOT_NAME # Fallback to name
+                password = parts[2].strip()
+
+        if device:
+            ip = _ipv4_for_device(device)
+
+    except Exception as e:
+        print(f"Error getting AP details: {e}")
+
     return jsonify({
-        "on": on,
+        "on": True,
         "name": HOTSPOT_NAME,
-        "device": dev,
+        "device": device,
         "ip": ip,
         "ips": _all_ipv4_local(),
         "ssid": ssid,
-        "password": password,  # <-- AND ADD THIS KEY
+        "password": password,
     })
 
 def _ap_status_quick():

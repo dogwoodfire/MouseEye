@@ -258,33 +258,21 @@ def _local_ipv4s():
         return []
 
 def _current_wifi_ssid():
-    # Try a few nmcli invocations; return first non-empty SSID.
-    cmds = [
-        # This command is more reliable for the actual broadcast SSID
-        ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
-        # This one can sometimes return the connection name, so it's used as a fallback
-        ["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,ACTIVE", "con", "show", "--active"],
-    ]
-    for cmd in cmds:
-        try:
-            out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=0.8)
-            for line in out.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                # This logic handles the output of the "active,ssid" command
-                if cmd[2] == "active,ssid":
-                    if line.startswith("yes:"):
-                        ssid = line.split(":", 1)[1]
-                        if ssid:
-                            return ssid
-                # This logic handles the output of the "NAME,TYPE..." command
-                else:
-                    parts = line.split(":")
-                    if len(parts) >= 4 and parts[1] in ("wifi", "802-11-wireless") and parts[-1] in ("yes", "activated", "activated (externally)"):
-                        return parts[0]
-        except Exception:
-            continue
+    """Finds the active Wi-Fi network's SSID via `nmcli`."""
+    try:
+        # Use `nmcli device wifi list` and find the line marked with an asterisk
+        cmd = ["nmcli", "dev", "wifi", "list"]
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=0.8)
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith('*'):
+                # Output is like: * SSID  MODE  CHAN  RATE  SIGNAL  BARS  SECURITY
+                # We split the line and take the second element, which is the SSID
+                parts = line.split()
+                if len(parts) > 1:
+                    return parts[1]
+    except Exception:
+        pass
     return ""
 
 # ----------------- Schedules (read: prefer backend JSON) -----------------
