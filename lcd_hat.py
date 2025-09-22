@@ -1652,37 +1652,46 @@ class UI:
 
     def _render_qr_viewer(self):
         """Draws the current page of the multi-page QR code viewer."""
-        if not self.qr_pages:
-            self._draw_center("No QR data", "Press OK to exit.")
-            return
+        try:
+            if not self.qr_pages:
+                self._draw_center("No QR data", "Press OK to exit.")
+                return
 
-        page_data = self.qr_pages[self.qr_page_idx]
-        qr_text = page_data.get("qr_text", "")
-        info_text = page_data.get("info_text", "")
+            page_data = self.qr_pages[self.qr_page_idx]
+            qr_text = page_data.get("qr_text", "")
+            info_text = page_data.get("info_text", "")
 
-        # --- Generate QR Code ---
-        qr = qrcode.QRCode(
-            # THE FIX: The 'version=1' parameter has been removed.
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=2,
-        )
-        qr.add_data(qr_text)
-        qr.make(fit=True)
-        qr_img = qr.make_image(fill_color="black", back_color="white")
-        qr_img = qr_img.resize((96, 96), Image.NEAREST)
+            qr = qrcode.QRCode(
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=2,
+            )
+            qr.add_data(qr_text)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="black", back_color="white")
+            qr_img = qr_img.resize((96, 96), Image.NEAREST)
 
-        # --- Draw the screen ---
-        img = self._blank()
-        img.paste(qr_img, (16, 0))
-        drw = ImageDraw.Draw(img)
-        y_pos = 98
-        for line in info_text.split('\n'):
-            line_w = self._text_w(F_SMALL, line)
-            drw.text(((WIDTH - int(line_w)) // 2, y_pos), line, font=F_SMALL, fill=WHITE)
-            y_pos += 12
+            img = self._blank()
+            img.paste(qr_img, (16, 0))
+            drw = ImageDraw.Draw(img)
+            y_pos = 98
+            for line in info_text.split('\n'):
+                line_w = self._text_w(F_SMALL, line)
+                drw.text(((WIDTH - int(line_w)) // 2, y_pos), line, font=F_SMALL, fill=WHITE)
+                y_pos += 12
 
-        self._present(img)
+            # --- START OF DIAGNOSTIC CODE ---
+            try:
+                # Save the generated image to a file for inspection
+                img.save("/home/pi/timelapse/qr_test_output.png")
+                log("DIAGNOSTIC: Successfully saved qr_test_output.png")
+            except Exception as e:
+                log(f"DIAGNOSTIC: FAILED to save qr_test_output.png: {e}")
+            # --- END OF DIAGNOSTIC CODE ---
+
+            self._present(img)
+        except Exception as e:
+            log(f"DIAGNOSTIC: An error occurred inside _render_qr_viewer: {e}")
 
 
     # show "sleeping" for a beat, then turn panel off
