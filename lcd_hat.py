@@ -260,8 +260,10 @@ def _local_ipv4s():
 def _current_wifi_ssid():
     # Try a few nmcli invocations; return first non-empty SSID.
     cmds = [
-        ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],   # lines like "yes:MySSID"
-        ["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,ACTIVE", "con", "show", "--active"],  # "HomeNet:wifi:wlan0:yes"
+        # This command is more reliable for the actual broadcast SSID
+        ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
+        # This one can sometimes return the connection name, so it's used as a fallback
+        ["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,ACTIVE", "con", "show", "--active"],
     ]
     for cmd in cmds:
         try:
@@ -270,11 +272,13 @@ def _current_wifi_ssid():
                 line = line.strip()
                 if not line:
                     continue
-                if cmd[2] == "dev":
+                # This logic handles the output of the "active,ssid" command
+                if cmd[2] == "active,ssid":
                     if line.startswith("yes:"):
                         ssid = line.split(":", 1)[1]
                         if ssid:
                             return ssid
+                # This logic handles the output of the "NAME,TYPE..." command
                 else:
                     parts = line.split(":")
                     if len(parts) >= 4 and parts[1] in ("wifi", "802-11-wireless") and parts[-1] in ("yes", "activated", "activated (externally)"):
@@ -792,6 +796,7 @@ class UI:
 
     def _modal_ack(self):
         # Dismiss modal and restore normal inputs
+        self._busy = False
         self.state = self.HOME
         self._request_hard_clear()
         self._bind_inputs()
