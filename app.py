@@ -1075,17 +1075,16 @@ def capture_still():
         filename = f"still-{ts}.jpg"
         path = os.path.join(STILLS_DIR, filename)
 
-        # Build and run the capture command
+        # Build and run the capture command (no hardware rotation for stills)
         cmd = [
-            CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", path,
+            CAMERA_STILL, "-o", path,
             "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
             "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
         ]
         print("[capture_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
-        # If UI wants 90° CCW, rotate the saved JPEG accordingly (hardware can't transpose)
-        if _ui_deg() == 90:
-            _rotate_file_in_place(path, deg=90)
+        # Always rotate stills 90° counter-clockwise (project requirement)
+        _rotate_file_in_place(path, deg=90)
 
         # Return the captured image directly for the LCD to display
         return send_file(path, mimetype='image/jpeg')
@@ -1104,14 +1103,13 @@ def take_web_still():
         path = os.path.join(STILLS_DIR, filename)
 
         cmd = [
-            CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", path,
+            CAMERA_STILL, "-o", path,
             "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
             "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
         ]
         print("[take_web_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
-        if _ui_deg() == 90:
-            _rotate_file_in_place(path, deg=90)
+        _rotate_file_in_place(path, deg=90)
         
         # Redirect to the new preview page for this image
         return redirect(url_for("still_preview", filename=filename))
@@ -1420,7 +1418,7 @@ def test_capture():
     fd, path = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
     cmd = [
-        CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", path,
+        CAMERA_STILL, "-o", path,
         "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
         "--quality", CAPTURE_QUALITY,
         "--immediate", "--nopreview"
@@ -1428,8 +1426,7 @@ def test_capture():
     try:
         subprocess.run(cmd, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if _ui_deg() == 90:
-            _rotate_file_in_place(path, deg=90)
+        _rotate_file_in_place(path, deg=90)
         return send_file(path, mimetype="image/jpeg")
     except Exception:
         abort(500)
