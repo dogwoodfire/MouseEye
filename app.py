@@ -726,7 +726,7 @@ def _capture_loop(sess_dir, interval):
     total_run_time_ms = 24 * 3600 * 1000 # 24 hours in ms
 
     cmd = [
-        CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)),
+        CAMERA_STILL,
         "-o", jpg_pattern,
         "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
         "--quality", CAPTURE_QUALITY,
@@ -746,6 +746,7 @@ def _capture_loop(sess_dir, interval):
         with open(log_path, "w") as log_file:
             log_file.write(f"Starting capture at {datetime.now()}\n")
             log_file.write(f"Command: {' '.join(cmd)}\n\n")
+            log_file.write("Timelapse: software-rotating each frame to canonical orientation (matches stills)\n")
             log_file.flush()
 
             # Start the camera process, redirecting stderr to our log file
@@ -756,16 +757,16 @@ def _capture_loop(sess_dir, interval):
 
             # Wait for the stop event, polling the process to ensure it's still running.
             while not _stop_event.wait(timeout=1.0):
-                # If UI requests 90° CCW, rotate any new frames immediately
-                if _ui_deg() == 90:
-                    try:
-                        for f in sorted(glob.glob(os.path.join(sess_dir, "*.jpg"))):
-                            if f in processed:
-                                continue
-                            _rotate_file_in_place(f, deg=90)
-                            processed.add(f)
-                    except Exception as _e:
-                        log_file.write(f"Rotation error: {_e}\n")
+                # Rotate any new frames immediately using the same rule as stills
+                try:
+                    for f in sorted(glob.glob(os.path.join(sess_dir, "*.jpg"))):
+                        if f in processed:
+                            continue
+                        _rotate_still_to_canonical(f)
+                        processed.add(f)
+                except Exception as _e:
+                    log_file.write(f"Rotation error: {_e}\n")
+
                 if proc.poll() is not None:
                     # Process exited unexpectedly. The error should be in the log.
                     log_file.write(f"\nProcess exited unexpectedly with code: {proc.returncode}\n")
