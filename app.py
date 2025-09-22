@@ -1639,7 +1639,7 @@ TPL_INDEX = r"""
 </style>
 
 <header>
-  <h1>📸 Cyclopse Camera TESTING</h1>
+  <h1>📸 Cyclopse Camera</h1>
 </header>
 
 <main>
