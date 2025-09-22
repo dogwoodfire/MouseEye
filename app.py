@@ -239,11 +239,10 @@ CAPTURE_INTERVAL_SEC = 10
 CAPTURE_WIDTH   = "1296"
 CAPTURE_HEIGHT  = "972"
 CAPTURE_QUALITY = "90"
-# project-level overrides (based on observed hardware behavior)
-# Force all STILL images to rotate 90° CCW after capture.
-STILLS_SOFT_ROTATE_CCW = 90  # degrees CCW to apply in software to each still
-# Force all TIMELAPSE videos to rotate 180° at encode time.
-TIMELAPSE_FORCE_ROTATE_DEG = 180
+#
+# Rotation policy:
+# - 180° is handled in hardware (rpicam --rotation 180).
+# - 90° CCW is applied in software for stills and for each timelapse frame at capture time.
 
 # encoding defaults / choices
 FPS_CHOICES = [10, 24, 30]
@@ -359,14 +358,8 @@ def _start_encode_worker_once():
                 if shutil.which("ionice"): prio += ["ionice", "-c3"]
                 if shutil.which("nice"):   prio += ["nice", "-n", "19"]
 
+                # No encode-time rotation: frames are already oriented at capture.
                 vf = []
-                if TIMELAPSE_FORCE_ROTATE_DEG % 360 == 180:
-                    vf = ["-vf", "hflip,vflip"]
-                elif TIMELAPSE_FORCE_ROTATE_DEG % 360 == 90:
-                    vf = ["-vf", "transpose=2"]   # 90° CCW
-                elif TIMELAPSE_FORCE_ROTATE_DEG % 360 == 270:
-                    vf = ["-vf", "transpose=1"]   # 90° CW
-                # For 180 we already pass --rotation 180; no vf needed.
 
                 cmd = prio + [
                     FFMPEG, "-y",
@@ -731,8 +724,21 @@ def _capture_loop(sess_dir, interval):
             # Start the camera process, redirecting stderr to our log file
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_file)
 
+            # Track which frames we've already post-rotated
+            processed = set(glob.glob(os.path.join(sess_dir, "*.jpg")))
+
             # Wait for the stop event, polling the process to ensure it's still running.
             while not _stop_event.wait(timeout=1.0):
+                # If UI requests 90° CCW, rotate any new frames immediately
+                if _ui_deg() == 90:
+                    try:
+                        for f in sorted(glob.glob(os.path.join(sess_dir, "*.jpg"))):
+                            if f in processed:
+                                continue
+                            _rotate_file_in_place(f, deg=90)
+                            processed.add(f)
+                    except Exception as _e:
+                        log_file.write(f"Rotation error: {_e}\n")
                 if proc.poll() is not None:
                     # Process exited unexpectedly. The error should be in the log.
                     log_file.write(f"\nProcess exited unexpectedly with code: {proc.returncode}\n")
@@ -1077,7 +1083,9 @@ def capture_still():
         ]
         print("[capture_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
-        _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
+        # If UI wants 90° CCW, rotate the saved JPEG accordingly (hardware can't transpose)
+        if _ui_deg() == 90:
+            _rotate_file_in_place(path, deg=90)
 
         # Return the captured image directly for the LCD to display
         return send_file(path, mimetype='image/jpeg')
@@ -1102,7 +1110,8 @@ def take_web_still():
         ]
         print("[take_web_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
-        _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
+        if _ui_deg() == 90:
+            _rotate_file_in_place(path, deg=90)
         
         # Redirect to the new preview page for this image
         return redirect(url_for("still_preview", filename=filename))
@@ -1419,7 +1428,8 @@ def test_capture():
     try:
         subprocess.run(cmd, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
+        if _ui_deg() == 90:
+            _rotate_file_in_place(path, deg=90)
         return send_file(path, mimetype="image/jpeg")
     except Exception:
         abort(500)
@@ -2791,3 +2801,163 @@ def _no_store_for_diag(resp):
         resp.headers["Cache-Control"] = "no-store"
     return resp
 
+@app.get("/disk")
+def disk():
+    return jsonify(_disk_stats())
+
+@app.get("/schedule")
+def schedule_page():
+    # build view models for upcoming/active and past schedules
+    now_ts = int(time.time())
+    upcoming_schedules = []
+    past_schedules = []
+    
+    sorted_items = sorted(_schedules.items(), key=lambda kv: kv[1].get("start_ts", 0))
+    
+    for sid, st in sorted_items:
+        try:
+            start_h = datetime.fromtimestamp(int(st["start_ts"])).strftime("%a %Y-%m-%d %H:%M")
+            end_h   = datetime.fromtimestamp(int(st["end_ts"])).strftime("%a %Y-%m-%d %H:%M")
+        except Exception:
+            start_h = end_h = "?"
+        
+        # Create a view model object
+        vm = dict(st)
+        vm["start_h"] = start_h
+        vm["end_h"]   = end_h
+        
+        # Sort into the correct list based on end time
+        if int(st.get("end_ts", 0)) < now_ts:
+            past_schedules.append((sid, vm))
+        else:
+            upcoming_schedules.append((sid, vm))
+
+    return render_template_string(
+        SCHED_TPL,
+        fps_choices=globals().get("FPS_CHOICES", [10, 24, 30]),
+        default_fps=globals().get("DEFAULT_FPS", 24),
+        interval_default=globals().get("CAPTURE_INTERVAL_SEC", 10),
+        schedules=upcoming_schedules,
+        past_schedules=past_schedules # Pass the new list to the template
+    )
+
+@app.post("/schedule/arm")
+def schedule_arm():
+    start_local = request.form.get("start_local", "").strip()
+    hr_str  = request.form.get("duration_hr",  "0") or "0"
+    min_str = request.form.get("duration_min", "0") or "0" # <-- THE FIX IS HERE
+
+    try: dur_hr = int(hr_str.strip())
+    except: dur_hr = 0
+    try: dur_min = int(min_str.strip())
+    except: dur_min = 0
+    duration_min = max(1, dur_hr * 60 + dur_min)
+
+    try: interval = int(request.form.get("interval", "10") or 10)
+    except: interval = 10
+    try: fps = int(request.form.get("fps", "24") or 24)
+    except: fps = 24
+    
+    auto_encode = bool(request.form.get("auto_encode"))
+    sess_name = (request.form.get("sess_name") or "").strip()
+
+    try:
+        # Use a timezone-aware conversion to avoid DST bugs
+        local_tz = pytz.timezone('Europe/London')
+        start_dt = local_tz.localize(datetime.strptime(start_local, "%Y-%m-%dT%H:%M"))
+        start_ts = int(start_dt.timestamp())
+        end_ts = start_ts + duration_min * 60
+    except Exception:
+        # Fallback to current time + 1 minute if there is an error
+        start_ts = int(time.time()) + 60
+        end_ts = start_ts + duration_min * 60
+
+    sid = uuid.uuid4().hex[:8]
+    now_ts = int(time.time())
+    
+    with _sched_lock:
+        _schedules[sid] = dict(
+            start_ts=start_ts, end_ts=end_ts,
+            interval=interval, fps=fps,
+            sess=sess_name, auto_encode=auto_encode,
+            created_ts=now_ts,
+        )
+        _save_sched_state()
+
+    return redirect(url_for("schedule_page"))
+
+@app.post("/schedule/cancel/<sid>")
+def schedule_cancel_id(sid):
+    with _sched_lock:
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return redirect(url_for("schedule_page"))
+
+@app.get("/schedule/list")
+def schedule_list_json():
+    """
+    Compact JSON for the LCD:
+    [
+      {"id": "abcd1234", "start_ts": 123, "end_ts": 456, "interval": 10, "fps": 24,
+       "sess": "", "auto_encode": true, "created_ts": 123}
+    ]
+    """
+    now = int(time.time())
+    items = []
+    for sid, st in _schedules.items():
+        try:
+            d = dict(st)
+            d["id"] = sid
+            # normalize types
+            d["start_ts"] = int(d.get("start_ts", 0))
+            d["end_ts"]   = int(d.get("end_ts", 0))
+            d["interval"] = int(d.get("interval", 10))
+            d["fps"]      = int(d.get("fps", 24))
+            d["auto_encode"] = bool(d.get("auto_encode", False))
+            d["created_ts"]  = int(d.get("created_ts", d["start_ts"]))
+        except Exception:
+            continue
+        items.append(d)
+
+    items.sort(key=lambda d: d.get("start_ts", 0))
+    resp = jsonify(items)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.post("/schedule/delete")
+def schedule_delete_json():
+    """
+    Delete a schedule by id. Accepts form or JSON:
+      - form: id=<sid>
+      - json: {"id": "<sid>"}
+    Returns 204 on success (even if id didn’t exist), 400 if no id supplied.
+    """
+    sid = request.form.get("id") or (request.json or {}).get("id")
+    if not sid:
+        return ("missing id", 400)
+
+    with _sched_lock:
+        # stop timers and remove
+        _cancel_timers_for(sid)
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return ("", 204)
+
+# ================== /Simple Scheduler ==================
+# Load persisted schedule and re-arm timers on process start
+try:
+    if _load_sched_state():
+        _arm_timers_all()
+except Exception:
+    pass
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", "5050"))
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+
+
+
+# # ---------- Main ----------
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5050) 
