@@ -741,29 +741,29 @@ class UI:
         ap_on = bool(st.get("on"))
         
         if ap_on:
-            # --- This block is for the 2-page AP viewer ---
-            self.qr_pages = []
-            ssid = st.get("ssid") or st.get("name") or "Pi-Hotspot"
-            ip = st.get("ip") or "10.42.0.1"
-            password = st.get("password", "")
+            # --- START OF HARD-CODED FIX ---
+            # Replace these placeholder values with your actual hotspot details.
+            ssid = "cyclopi_camera"
+            password = "Steropes-123"
+            ip = "10.42.0.1"  # This is the default for Pi hotspots, change if yours is different.
+            # --- END OF HARD-CODED FIX ---
 
+            # The rest of the logic uses the hard-coded variables above
+            self.qr_pages = []
             if password:
                 self.qr_pages.append({
                     "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
                     "info_text": f"1/2: Scan to connect to\n'{ssid}'"
                 })
-            
+
             self.qr_pages.append({
                 "qr_text": f"http://{ip}:5050",
                 "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
             })
-            
+
             self.state = self.QR_CODE_VIEWER
             self.qr_page_idx = 0
             self.render()
-            
-            # --- THIS IS THE FIX ---
-            # Enter a modal state where any key press will exit.
             self._bind_modal_inputs(self._modal_ack)
             
         else:
