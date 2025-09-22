@@ -735,19 +735,22 @@ class UI:
         self._rebind_joystick()
 
     def show_ap_info(self):
-        """Prepares QR code data and enters the QR viewer state."""
-        if self._busy and not threading.current_thread().name == 'Thread-1': # Allow worker thread to proceed
+        """
+        Shows a 2-page QR viewer when AP is ON.
+        Shows a single URL QR modal when AP is OFF (Wi-Fi client mode).
+        """
+        if self._busy:
             return
         self._busy = True
         self._draw_center("Generating", sub="QR Code...")
-
-        self.qr_pages = []
 
         try:
             st = _http_json(AP_STATUS_URL) or {}
             ap_on = bool(st.get("on"))
 
             if ap_on:
+                # --- New 2-Page Viewer for AP Mode ---
+                self.qr_pages = []
                 ssid = st.get("ssid") or st.get("name") or "Pi-Hotspot"
                 ip = st.get("ip") or "10.42.0.1"
                 password = ""
@@ -769,28 +772,21 @@ class UI:
 
                 self.state = self.QR_CODE_VIEWER
                 self.qr_page_idx = 0
+                self.render() # Renders the new multi-page viewer
 
-            else: # Not in AP Mode
+            else:
+                # --- OLD Modal for Wi-Fi Client Mode ---
                 ssid = _current_wifi_ssid() or "Wi-Fi"
                 ips  = st.get("ips") or _local_ipv4s()
                 ip   = ips[0] if ips else ""
-                if ip:
-                    self.qr_pages.append({
-                        "qr_text": f"http://{ip}:5050",
-                        "info_text": f"On '{ssid}', go to:\nhttp://{ip}:5050"
-                    })
-                self.state = self.QR_CODE_VIEWER
-                self.qr_page_idx = 0
+                # This call handles its own state and busy flag
+                self._show_connect_url_modal(ssid, ip, ips)
 
         finally:
-            # The busy flag is now released by the function that exits the viewer (_modal_ack or ok)
-            if not self.qr_pages:
-                self._draw_center("Network Info", sub="Not connected.")
-                time.sleep(2)
-                self.state = self.HOME
-                self._busy = False # Release busy flag if no QR pages were generated
-
-            self.render()
+            # The busy flag is released by the function that exits the viewer
+            # or automatically if we are not in a modal state.
+            if self.state not in (self.MODAL, self.QR_CODE_VIEWER):
+                self._busy = False
 
     # ---------- MODAL helpers (show URL until any key pressed) ----------
     def _bind_modal_inputs(self, handler):
@@ -1036,6 +1032,7 @@ class UI:
         
         elif self.state == self.QR_CODE_VIEWER:
             # Exit cleanly to the home screen without a message
+            self._busy = False
             self.state = self.HOME
             self.render()
             return
@@ -1393,18 +1390,18 @@ class UI:
         self._draw_center("Toggling AP…")
 
         def worker():
-            # We don't use a 'finally' block here to give show_ap_info full control
             initial_state_is_on = _ap_poll_cache(period=0)
             ok = _http_post_form(AP_TOGGLE_URL, {}, timeout=8.0)
+
             if not ok:
                 self._draw_center("AP toggle failed")
                 time.sleep(1.5)
-                self._busy = False # Release busy flag on failure
+                self._busy = False
                 self.state = self.HOME
                 self.render(force=True)
                 return
 
-            # Confirm state change
+            # Wait for the state to change
             deadline = time.time() + 8.0
             st = {}
             while time.time() < deadline:
@@ -1413,12 +1410,12 @@ class UI:
                     break
                 time.sleep(0.5)
 
-            # Check the final state
+            # Now check the final state and act accordingly
             if st.get("on"):
-                # If AP is ON, call the QR info screen. It will handle the busy flag from here.
+                # If AP was turned ON, show the QR screen. It will handle the busy flag.
                 self.show_ap_info()
             else:
-                # If AP is OFF, show confirmation and release the busy flag
+                # If AP was turned OFF, show confirmation and return to home
                 self._draw_center("Hotspot OFF")
                 time.sleep(1)
                 self._busy = False
@@ -1749,4 +1746,26 @@ def main():
                 ui.menu_idx = 0
         elif ui.state in (UI.CAPTURING, UI.ENCODING):
              ui.state = UI.HOME
-             ui.menu
+             ui.menu_idx = 0
+
+        ui.render()
+
+        if ui.state == UI.ENCODING:
+            ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+
+        time.sleep(1.0)
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            print("DEBUG on", file=sys.stderr, flush=True)
+        # Ensure stdout/stderr are not buffered under systemd
+        try:
+            import sys as _sys
+            _sys.stdout.reconfigure(line_buffering=True)
+            _sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+        main()
+    except KeyboardInterrupt:
+        pass
