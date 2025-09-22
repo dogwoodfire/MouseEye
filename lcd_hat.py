@@ -791,60 +791,39 @@ class UI:
 
     def _show_connect_url_modal(self, ssid, ip, ips):
         """Show SSID, IP, and a scannable QR code until a key is pressed."""
-        # First, determine the IP address to use.
-        connect_ip = ip
-        if not connect_ip:
-            # try a fallback hint if ips list exists
-            hint = (ips[0] if isinstance(ips, list) and ips else "")
-            if hint:
-                connect_ip = hint
+        connect_ip = ip or (ips[0] if isinstance(ips, list) and ips else "")
 
-        # If we have an IP, generate a QR code. Otherwise, show an error.
         if connect_ip:
             url = f"http://{connect_ip}:5050"
-
-            # 1. Create a QRCode object with a smaller border (default is 4)
             qr = qrcode.QRCode(
-                version=1,
+                # THE FIX: The 'version=1' parameter has been removed here as well for consistency.
                 error_correction=qrcode.constants.ERROR_CORRECT_L,
                 box_size=10,
-                border=2, # <-- Reduced border
+                border=2,
             )
             qr.add_data(url)
             qr.make(fit=True)
             qr_img = qr.make_image(fill_color="black", back_color="white")
-            
-            # Resize it to fit nicely on the 128x128 screen
             qr_img = qr_img.resize((96, 96), Image.NEAREST)
 
-            # Create a new blank image to draw on
             img = self._blank()
-            img.paste(qr_img, (16, 0)) # Paste QR code at the very top
+            img.paste(qr_img, (16, 0))
 
-            # Draw the human-readable text underneath
             drw = ImageDraw.Draw(img)
             ssid_text = f"SSID: {ssid or 'Hotspot'}"
-            # 2. Add the port number to the displayed IP address
             ip_text = f"IP: {connect_ip}:5050"
             prompt_text = "Press any key..."
-
             w_ssid = self._text_w(F_SMALL, ssid_text)
             w_ip = self._text_w(F_SMALL, ip_text)
             w_prompt = self._text_w(F_SMALL, prompt_text)
-
-            # 3. Adjust Y-coordinates to move text up slightly
             drw.text(((WIDTH - w_ssid) // 2, 98), ssid_text, font=F_SMALL, fill=WHITE)
             drw.text(((WIDTH - w_ip) // 2, 108), ip_text, font=F_SMALL, fill=WHITE)
             drw.text(((WIDTH - w_prompt) // 2, 118), prompt_text, font=F_SMALL, fill=GRAY)
-            
             self._present(img)
-
         else:
-            # If no IP is available, just show the text-based error as before
             lines = [f"SSID: {ssid or 'Not Connected'}", "IP: (unavailable)", "", "Press any key…"]
             self._draw_center("No Connection", "\n".join(lines))
 
-        # Set the modal state and bind inputs to dismiss the screen
         self.state = self.MODAL
         self._bind_modal_inputs(self._modal_ack)
 
@@ -1681,14 +1660,13 @@ class UI:
             self._draw_center("No QR data", "Press OK to exit.")
             return
 
-        # Get the data for the current page
         page_data = self.qr_pages[self.qr_page_idx]
         qr_text = page_data.get("qr_text", "")
         info_text = page_data.get("info_text", "")
 
-        # --- Generate QR Code (adapted from your _show_connect_url_modal) ---
+        # --- Generate QR Code ---
         qr = qrcode.QRCode(
-            version=1,
+            # THE FIX: The 'version=1' parameter has been removed.
             error_correction=qrcode.constants.ERROR_CORRECT_L,
             box_size=10,
             border=2,
@@ -1700,15 +1678,13 @@ class UI:
 
         # --- Draw the screen ---
         img = self._blank()
-        img.paste(qr_img, (16, 0))  # Paste QR code at the top
+        img.paste(qr_img, (16, 0))
         drw = ImageDraw.Draw(img)
-
-        # Draw the multi-line info text underneath the QR code
         y_pos = 98
         for line in info_text.split('\n'):
             line_w = self._text_w(F_SMALL, line)
             drw.text(((WIDTH - int(line_w)) // 2, y_pos), line, font=F_SMALL, fill=WHITE)
-            y_pos += 12  # Increment y for the next line
+            y_pos += 12
 
         self._present(img)
 
