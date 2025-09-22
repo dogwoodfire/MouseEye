@@ -785,7 +785,7 @@ class UI:
         # Do UI work *after* clearing _busy
         if ap_on:
             self.render()                       # now allowed to run
-            self._bind_modal_inputs(self._modal_ack)
+            # self._bind_modal_inputs(self._modal_ack)
         else:
             if hasattr(self, "_pending_modal"):
                 ssid, ip, ips = self._pending_modal
@@ -986,6 +986,14 @@ class UI:
 
     def ok(self):
 
+                # This block correctly handles exiting the QR viewer when the joystick is pushed.
+        if self.state == self.QR_CODE_VIEWER:
+            self.state = self.HOME
+            self.menu_idx = 0
+            self._request_hard_clear()
+            self.render()
+            return
+        
         if self._busy or self._screen_off or self.state == self.ENCODING or self.state == self.MODAL:
             return
         
