@@ -1343,7 +1343,7 @@ class UI:
             img = self._blank()
             drw = ImageDraw.Draw(img)
             
-            if self.rot_deg == 1800:
+            if self.rot_deg == 180:
                 # Text is now split with \n for two lines
                 title_text = "Rotation set to:\nPortrait"
                 icon_to_draw = IMG_ICON_PORTRAIT
