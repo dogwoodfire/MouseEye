@@ -342,7 +342,7 @@ class UI:
     # States
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
     SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
-    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING, SHUTDOWN_CONFIRM, SETTINGS_MENU, STILLS_VIEWER = range(23)
+    SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING, SHUTDOWN_CONFIRM, SETTINGS_MENU, STILLS_VIEWER, QR_CODE_VIEWER = range(24)
 
     def __init__(self):
         # prefs
@@ -399,6 +399,7 @@ class UI:
         
         self.stills_list = []
         self.stills_idx = 0
+        self.qr_page_idx = 0
 
         try:
             # Load and display a custom splash screen image
@@ -734,79 +735,93 @@ class UI:
         self._rebind_joystick()
 
     def show_ap_info(self):
-        """Show connect info on demand (KEY2).
-        If AP is ON, show a Wi-Fi login QR code.
-        If AP is OFF, show a URL QR code for the current network.
-        """
+        """Prepares QR code data and enters the QR viewer state."""
         if self._busy:
             return
         self._busy = True
         self._draw_center("Generating QR Code...")
-        
+
+        # This will hold the data for our QR code pages
+        self.qr_pages = []
+
         try:
             st = _http_json(AP_STATUS_URL) or {}
             ap_on = bool(st.get("on"))
-            
+
             if ap_on:
-                # --- Wi-Fi Login QR Code Logic ---
                 ssid = st.get("ssid") or st.get("name") or "Pi-Hotspot"
-                ip = st.get("ip") or "10.42.0.1" # Default AP IP
-                
-                # Securely fetch the Wi-Fi password using nmcli
+                ip = st.get("ip") or "10.42.0.1"
                 password = ""
                 try:
                     cmd = ["sudo", "nmcli", "-s", "-g", "802-11-wireless-security.psk", "con", "show", "Pi-Hotspot"]
                     password = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-                except Exception as e:
-                    log(f"Could not fetch Wi-Fi password: {e}")
+                except Exception:
+                    pass
 
+                # Page 1: Wi-Fi Login
                 if password:
-                    # Format for Wi-Fi login: WIFI:T:WPA;S:<SSID>;P:<PASSWORD>;;
-                    qr_text = f"WIFI:T:WPA;S:{ssid};P:{password};;"
-                    info_text = f"Scan to connect to\n'{ssid}'"
-                else:
-                    # Fallback to URL if password couldn't be read
-                    qr_text = f"http://{ip}:5050"
-                    info_text = f"Connect to '{ssid}'\nThen go to http://{ip}:5050"
+                    self.qr_pages.append({
+                        "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
+                        "info_text": f"1/2: Scan to connect to\n'{ssid}'"
+                    })
 
-            else:
-                # --- URL QR Code Logic (when not in AP mode) ---
+                # Page 2: URL
+                self.qr_pages.append({
+                    "qr_text": f"http://{ip}:5050",
+                    "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
+                })
+
+            else: # Not in AP Mode
+                # ... (existing non-AP mode logic remains the same)
                 ssid = _current_wifi_ssid() or "Wi-Fi"
                 ips  = st.get("ips") or _local_ipv4s()
                 ip   = ips[0] if ips else ""
-                
                 if ip:
-                    qr_text = f"http://{ip}:5050"
-                    info_text = f"On '{ssid}', go to:\nhttp://{ip}:5050"
-                else:
-                    qr_text = None
-                    info_text = "Not connected to\nany network."
-            
-            # --- QR Code Generation and Display ---
-            if qr_text:
-                qr = qrcode.QRCode(version=1, border=2)
-                qr.add_data(qr_text)
-                qr.make(fit=True)
-                qr_img = qr.make_image(fill_color="black", back_color="white")
-                qr_img = qr_img.resize((96, 96), Image.NEAREST)
-
-                img = self._blank()
-                img.paste(qr_img, (16, 10))
-                
-                drw = ImageDraw.Draw(img)
-                y = 108
-                for line in info_text.split('\n'):
-                    w = self._text_w(F_SMALL, line)
-                    drw.text(((WIDTH - w) // 2, y), line, font=F_SMALL, fill=WHITE)
-                    y += 10
-                self._present(img)
-            else:
-                self._draw_center("Network Info", sub=info_text)
-
+                    self.qr_pages.append({
+                        "qr_text": f"http://{ip}:5050",
+                        "info_text": f"On '{ssid}', go to:\nhttp://{ip}:5050"
+                    })
         finally:
             self._busy = False
-            self.state = self.MODAL
-            self._bind_modal_inputs(self._modal_ack)
+            if self.qr_pages:
+                self.state = self.QR_CODE_VIEWER
+                self.qr_page_idx = 0
+            else:
+                self._draw_center("Network Info", sub="Not connected.")
+                time.sleep(2)
+                self.state = self.HOME
+            self.render()
+
+    def _render_qr_viewer(self):
+        """Renders the currently selected QR code page."""
+        if not self.qr_pages or not (0 <= self.qr_page_idx < len(self.qr_pages)):
+            self._abort_to_home()
+            return
+
+        page = self.qr_pages[self.qr_page_idx]
+        qr_text = page["qr_text"]
+        info_text = page["info_text"]
+
+        qr = qrcode.QRCode(version=1, border=2)
+        qr.add_data(qr_text)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        qr_img = qr_img.resize((96, 96), Image.NEAREST)
+
+        img = self._blank()
+        img.paste(qr_img, (16, 10))
+
+        drw = ImageDraw.Draw(img)
+        y = 108
+        for line in info_text.split('\n'):
+            w = self._text_w(F_SMALL, line)
+            drw.text(((WIDTH - w) // 2, y), line, font=F_SMALL, fill=WHITE)
+            y += 10
+
+        drw.text((2, HEIGHT - 12), "< L/R >", font=F_SMALL, fill=GRAY)
+        drw.text((WIDTH - 2 - self._text_w(F_SMALL, "Exit"), HEIGHT - 12), "Exit", font=F_SMALL, fill=GRAY)
+
+        self._present(img)
 
     # ---------- MODAL helpers (show URL until any key pressed) ----------
     def _bind_modal_inputs(self, handler):
@@ -924,6 +939,9 @@ class UI:
             if self.stills_list:
                 self.stills_idx = (self.stills_idx - 1) % len(self.stills_list)
                 self.render()
+        elif self.state == self.QR_CODE_VIEWER:
+            self.qr_page_idx = (self.qr_page_idx - 1) % len(self.qr_pages)
+            self.render()
             
     def _logical_right(self):
         if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN, self.SCH_INT, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM):
@@ -936,6 +954,9 @@ class UI:
             if self.stills_list:
                 self.stills_idx = (self.stills_idx + 1) % len(self.stills_list)
                 self.render()
+        elif self.state == self.QR_CODE_VIEWER:
+            self.qr_page_idx = (self.qr_page_idx + 1) % len(self.qr_pages)
+            self.render()
 
     # ---------- screen power ----------
     def _sleep_screen(self):
@@ -1042,6 +1063,10 @@ class UI:
                 self.state = self.SETTINGS_MENU
                 self.menu_idx = 0
                 self.render()
+            return
+        
+        elif self.state == self.QR_CODE_VIEWER:
+            self._abort_to_home()
             return
         
         # elif self.state == self.STILLS_VIEWER:
@@ -1715,7 +1740,11 @@ class UI:
                                 footer="OK select, L/R choose",
                                 highlight_idxes=set(), dividers=False)
                 return
-
+            
+            if self.state == self.QR_CODE_VIEWER:
+                self._render_qr_viewer()
+                return
+            
             self._clear()
         except Exception as e:
             log("render error:", repr(e))
@@ -1739,4 +1768,55 @@ def main():
     time.sleep(1.0)
 
     while True:
-      
+        # --- THIS IS THE NEW LOGIC ---
+        # Check for the flag file to control screen power
+        if os.path.exists(LCD_OFF_FLAG):
+            if not ui._screen_off:
+                ui._sleep_screen()
+            time.sleep(2) # Sleep longer when screen is off
+            continue # Skip the rest of the loop
+        elif ui._screen_off:
+            # If flag is gone but screen is off, wake it
+            ui._wake_screen()
+        # --- END OF NEW LOGIC ---
+
+        if ui._busy or ui.state == ui.MODAL:
+            time.sleep(0.1)
+            continue
+
+        st = ui._status()
+        is_active = st.get("active", False)
+        is_encoding = st.get("encoding", False)
+
+        if is_encoding:
+            if ui.state != UI.ENCODING:
+                ui.state = UI.ENCODING
+        elif is_active:
+            if ui.state != UI.CAPTURING:
+                ui.state = UI.CAPTURING
+                ui.menu_idx = 0
+        elif ui.state in (UI.CAPTURING, UI.ENCODING):
+             ui.state = UI.HOME
+             ui.menu_idx = 0
+
+        ui.render()
+
+        if ui.state == UI.ENCODING:
+            ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+
+        time.sleep(1.0)
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            print("DEBUG on", file=sys.stderr, flush=True)
+        # Ensure stdout/stderr are not buffered under systemd
+        try:
+            import sys as _sys
+            _sys.stdout.reconfigure(line_buffering=True)
+            _sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+        main()
+    except KeyboardInterrupt:
+        pass
