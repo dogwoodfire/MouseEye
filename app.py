@@ -1084,7 +1084,7 @@ def capture_still():
         print("[capture_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
         # Always rotate stills 90° counter-clockwise (project requirement)
-        _rotate_file_in_place(path, deg=90)
+        _rotate_file_in_place(path, deg=180)
 
         # Return the captured image directly for the LCD to display
         return send_file(path, mimetype='image/jpeg')
@@ -1109,7 +1109,7 @@ def take_web_still():
         ]
         print("[take_web_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
-        _rotate_file_in_place(path, deg=90)
+        _rotate_file_in_place(path, deg=180)
         
         # Redirect to the new preview page for this image
         return redirect(url_for("still_preview", filename=filename))
@@ -1426,7 +1426,7 @@ def test_capture():
     try:
         subprocess.run(cmd, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _rotate_file_in_place(path, deg=90)
+        _rotate_file_in_place(path, deg=180)
         return send_file(path, mimetype="image/jpeg")
     except Exception:
         abort(500)
