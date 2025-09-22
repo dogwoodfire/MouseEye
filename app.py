@@ -240,6 +240,18 @@ def _rot_flags_for(bin_path: str):
     flags += _mirror_flags_from_prefs()
     return flags
 
+def _dims_for_rotation():
+    """
+    Return (width, height) strings that match the *output* orientation.
+    For 90/270 degrees we must swap W/H for some camera stacks, otherwise
+    rpicam/libcamera can fail to configure the stream.
+    """
+    deg = _current_cam_rotate_deg()
+    w, h = CAPTURE_WIDTH, CAPTURE_HEIGHT
+    if deg in (90, 270):
+        return (CAPTURE_HEIGHT, CAPTURE_WIDTH)
+    return (w, h)
+
 app = Flask(__name__)
 app.jinja_env.globals.update(datetime=datetime)
 
@@ -313,7 +325,7 @@ def _start_encode_worker_once():
                     "-framerate", str(fps),
                     "-pattern_type", "glob",
                     "-i", os.path.join(sess_dir, "*.jpg"),
-                    "-s", f"{CAPTURE_WIDTH}x{CAPTURE_HEIGHT}", # Set size
+                    # "-s", f"{CAPTURE_WIDTH}x{CAPTURE_HEIGHT}", # Set size
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p",
@@ -648,7 +660,7 @@ def _capture_loop(sess_dir, interval):
     cmd = [
         CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)),
         "-o", jpg_pattern,
-        "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+        "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
         "--quality", CAPTURE_QUALITY,
         "--nopreview",
         "--exposure", "normal",       # Add this line for consistent exposure
@@ -1012,7 +1024,7 @@ def capture_still():
         # Build and run the capture command
         cmd = [
             CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", path,
-            "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+            "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
             "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
         ]
         print("[capture_still] cmd:", " ".join(cmd))
@@ -1036,7 +1048,7 @@ def take_web_still():
 
         cmd = [
             CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", path,
-            "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+            "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
             "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
         ]
         print("[take_web_still] cmd:", " ".join(cmd))
@@ -1348,7 +1360,7 @@ def test_capture():
     os.close(fd)
     cmd = [
         CAMERA_STILL, *(_rot_flags_for(CAMERA_STILL)), "-o", path,
-        "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+        "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
         "--quality", CAPTURE_QUALITY,
         "--immediate", "--nopreview"
     ]
@@ -1404,7 +1416,8 @@ def live_mjpg():
         # If the process doesn't exist or has exited, start a new one.
         if LIVE_PROC is None or LIVE_PROC.poll() is not None:
             _force_release_camera() # Clean up any stale processes first
-
+            w, h = _dims_for_rotation()
+            cmd = build_cmd(w, h)
             def build_cmd(w, h):
                 base = os.path.basename(vid_bin)
                 rot = _rot_flags_for(vid_bin)
