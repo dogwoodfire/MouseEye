@@ -258,19 +258,19 @@ def _local_ipv4s():
         return []
 
 def _current_wifi_ssid():
-    """Finds the active Wi-Fi network's SSID via `nmcli`."""
+    """Finds the active Wi-Fi network's SSID via a more reliable nmcli command."""
     try:
-        # Use `nmcli device wifi list` and find the line marked with an asterisk
-        cmd = ["nmcli", "dev", "wifi", "list"]
-        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=0.8)
+        # This command is more precise and easier to parse than `dev wifi list`.
+        # It asks for the SSID and TYPE of active connections, then we find the Wi-Fi one.
+        cmd = ["nmcli", "-t", "-f", "SSID,TYPE", "connection", "show", "--active"]
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=1.5)
         for line in out.splitlines():
             line = line.strip()
-            if line.startswith('*'):
-                # Output is like: * SSID  MODE  CHAN  RATE  SIGNAL  BARS  SECURITY
-                # We split the line and take the second element, which is the SSID
-                parts = line.split()
-                if len(parts) > 1:
-                    return parts[1]
+            if ":wifi" in line or ":802-11-wireless" in line:
+                # Line is formatted as "MySSID:wifi"
+                ssid = line.split(':')[0]
+                if ssid:
+                    return ssid
     except Exception:
         pass
     return ""
@@ -736,17 +736,14 @@ class UI:
         self._busy = True
         self._draw_center("Generating", sub="QR Code...")
         
-        # The 'try' statement has been removed from here
         st = _http_json(AP_STATUS_URL) or {}
         ap_on = bool(st.get("on"))
         
         if ap_on:
-            # --- New 2-Page Viewer for AP Mode ---
+            # --- This block is for the 2-page AP viewer ---
             self.qr_pages = []
             ssid = st.get("ssid") or st.get("name") or "Pi-Hotspot"
             ip = st.get("ip") or "10.42.0.1"
-            
-            # Get password from the API response
             password = st.get("password", "")
 
             if password:
@@ -762,16 +759,17 @@ class UI:
             
             self.state = self.QR_CODE_VIEWER
             self.qr_page_idx = 0
-            self.render() # Renders the new multi-page viewer
-
+            self.render()
+            
+            # --- THIS IS THE FIX ---
+            # Enter a modal state where any key press will exit.
             self._bind_modal_inputs(self._modal_ack)
-        
+            
         else:
-            # --- Modal for Wi-Fi Client Mode ---
+            # --- This block is for the 1-page Wi-Fi viewer ---
             ssid = _current_wifi_ssid() or "Wi-Fi"
             ips  = st.get("ips") or _local_ipv4s()
             ip   = ips[0] if ips else ""
-            # This call handles its own state and busy flag
             self._show_connect_url_modal(ssid, ip, ips)
 
     # ---------- MODAL helpers (show URL until any key pressed) ----------
