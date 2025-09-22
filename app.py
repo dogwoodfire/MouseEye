@@ -218,23 +218,26 @@ def _rotate_file_in_place(path: str, deg: int = None):
 
 # --- Orient stills based on aspect ratio ---
 def _rotate_still_to_canonical(path: str):
-    """Rotate the saved JPEG so that:
-    - Landscape images end up 180° CCW total
-    - Portrait images end up 270° CCW total (i.e., 90° CCW more than landscape)
-    This matches the observed behavior the user reported.
+    """Rotate the saved JPEG so final orientation follows lcd_prefs.json (rot_deg).
+    - If UI/LCD is landscape (0 or 180): rotate 180° CCW.
+    - If UI/LCD is portrait (90 or 270): rotate 270° CCW.
     Always clears EXIF Orientation to 1.
     """
     try:
         with Image.open(path) as im:
-            # Normalize any incoming EXIF first
-            im = ImageOps.exif_transpose(im)
-            w, h = im.size
-            # Decide target rotation (degrees CCW) based on aspect
-            deg = 180 if w >= h else 270  # landscape: 180 CCW; portrait: 270 CCW
+            im = ImageOps.exif_transpose(im)  # normalize any incoming EXIF first
+
+            ui = _ui_deg()  # 0/90/180/270 from lcd_prefs.json
+            if ui in (0, 180):
+                deg = 180     # landscape LCD → 180° CCW
+            else:
+                deg = 270     # portrait LCD   → 270° CCW
+
             if deg % 360 != 0:
                 im = im.rotate(deg, expand=True)
+
             exif = im.getexif()
-            exif[ORIENT_TAG] = 1
+            exif[ORIENT_TAG] = 1  # Orientation=Normal
             im.save(path, exif=exif)
     except Exception as e:
         print(f"[_rotate_still_to_canonical] failed for {path}: {e}")
