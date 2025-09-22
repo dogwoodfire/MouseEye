@@ -700,8 +700,18 @@ def sync_time_route():
 def ap_enable():
     """Enables the Wi-Fi radio and brings the hotspot connection up."""
     # Returns a tuple: (bool: success, str: message)
-    _nmcli("radio", "wifi", "on")
+    print("[AP Control] Ensuring Wi-Fi radio is on...")
+    ok, out = _nmcli("radio", "wifi", "on")
+    if not ok and "already enabled" not in out:
+         print(f"[AP ERROR] Failed to turn on wifi radio: {out}")
+         # Don't abort, `con up` might still work
+
+    print("[AP Control] Bringing up hotspot connection...")
     ok, out = _nmcli("con", "up", HOTSPOT_NAME)
+    if not ok:
+        print(f"[AP ERROR] 'nmcli con up {HOTSPOT_NAME}' failed: {out}")
+    else:
+        print("[AP Control] Hotspot enabled successfully.")
     return ok, out
 
 def ap_disable():
@@ -721,16 +731,22 @@ def ap_disable():
 @app.post("/ap/toggle")
 def ap_toggle():
     """Toggles the hotspot on or off and returns a detailed JSON response."""
-    if ap_is_on():
+    print("[AP Control] Toggle request received.")
+    is_currently_on = ap_is_on()
+    print(f"[AP Control] AP is currently on: {is_currently_on}")
+
+    if is_currently_on:
         ok, message = ap_disable()
     else:
         ok, message = ap_enable()
     
+    final_status = ap_is_on()
+    print(f"[AP Control] Toggle action finished. Final status is on: {final_status}. Success: {ok}")
     if ok:
-        return jsonify({"on": ap_is_on(), "message": "Success"})
+        return jsonify({"on": final_status, "message": "Success"})
     else:
         # If it fails, return the actual error message from nmcli
-        return jsonify({"on": ap_is_on(), "error": "toggle_failed", "message": message}), 500
+        return jsonify({"on": final_status, "error": "toggle_failed", "message": message}), 500
 
 @app.post("/ap/on")
 def ap_on():
@@ -2740,4 +2756,34 @@ def schedule_delete_json():
     Delete a schedule by id. Accepts form or JSON:
       - form: id=<sid>
       - json: {"id": "<sid>"}
-    Returns 2
+    Returns 204 on success (even if id didn’t exist), 400 if no id supplied.
+    """
+    sid = request.form.get("id") or (request.json or {}).get("id")
+    if not sid:
+        return ("missing id", 400)
+
+    with _sched_lock:
+        # stop timers and remove
+        _cancel_timers_for(sid)
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return ("", 204)
+
+# ================== /Simple Scheduler ==================
+# Load persisted schedule and re-arm timers on process start
+try:
+    if _load_sched_state():
+        _arm_timers_all()
+except Exception:
+    pass
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", "5050"))
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+
+
+
+# # ---------- Main ----------
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5050) 

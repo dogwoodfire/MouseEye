@@ -258,21 +258,22 @@ def _local_ipv4s():
         return []
 
 def _current_wifi_ssid():
-    """Finds the active Wi-Fi network's SSID via a more reliable nmcli command."""
+    """Finds the active Wi-Fi network's SSID using the iwgetid command."""
     try:
-        # This command is more precise and easier to parse than `dev wifi list`.
-        # It asks for the SSID and TYPE of active connections, then we find the Wi-Fi one.
-        cmd = ["nmcli", "-t", "-f", "SSID,TYPE", "connection", "show", "--active"]
-        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=1.5)
-        for line in out.splitlines():
-            line = line.strip()
-            if ":wifi" in line or ":802-11-wireless" in line:
-                # Line is formatted as "MySSID:wifi"
-                ssid = line.split(':')[0]
-                if ssid:
-                    return ssid
+        # iwgetid -r is the most direct and reliable way to get the current SSID
+        cmd = ["iwgetid", "-r"]
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=0.8)
+        return out.strip()
     except Exception:
-        pass
+        # Fallback for if iwgetid is not installed or fails
+        try:
+            cmd = ["nmcli", "-t", "-f", "SSID,TYPE", "connection", "show", "--active"]
+            out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=1.5)
+            for line in out.splitlines():
+                if ":wifi" in line or ":802-11-wireless" in line:
+                    return line.split(':')[0]
+        except Exception:
+            pass
     return ""
 
 # ----------------- Schedules (read: prefer backend JSON) -----------------
