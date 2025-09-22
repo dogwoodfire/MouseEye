@@ -741,31 +741,27 @@ class UI:
         ap_on = bool(st.get("on"))
         
         if ap_on:
-            # --- START OF HARD-CODED FIX ---
-            # Replace these placeholder values with your actual hotspot details.
+            # --- START OF SIMPLIFIED TEST CODE ---
+            # Using your hard-coded values for the test
             ssid = "cyclopi_camera"
             password = "Steropes-123"
-            ip = "10.42.0.1"  # This is the default for Pi hotspots, change if yours is different.
-            # --- END OF HARD-CODED FIX ---
+            ip = "10.42.0.1"
 
-            # The rest of the logic uses the hard-coded variables above
             self.qr_pages = []
             if password:
+                # We are ONLY adding the Wi-Fi connection page for this test.
                 self.qr_pages.append({
                     "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
-                    "info_text": f"1/2: Scan to connect to\n'{ssid}'"
+                    "info_text": f"Scan to connect to\n'{ssid}'" # Page indicator "1/2" removed
                 })
-
-            self.qr_pages.append({
-                "qr_text": f"http://{ip}:5050",
-                "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
-            })
+            
+            # The code that added the second page for the IP address has been removed.
+            # --- END OF SIMPLIFIED TEST CODE ---
 
             self.state = self.QR_CODE_VIEWER
             self.qr_page_idx = 0
             self.render()
             self._bind_modal_inputs(self._modal_ack)
-            
         else:
             # --- This block is for the 1-page Wi-Fi viewer ---
             ssid = _current_wifi_ssid() or "Wi-Fi"
