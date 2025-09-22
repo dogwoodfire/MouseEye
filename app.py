@@ -325,7 +325,6 @@ def _start_encode_worker_once():
                     "-framerate", str(fps),
                     "-pattern_type", "glob",
                     "-i", os.path.join(sess_dir, "*.jpg"),
-                    # "-s", f"{CAPTURE_WIDTH}x{CAPTURE_HEIGHT}", # Set size
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p",
@@ -909,7 +908,7 @@ def index():
 
     disk_info = _disk_stats()
     temp_info = _get_cpu_temp()
-    high_temp_warning=_has_overheated_since_boot
+    high_temp_warning = bool(_has_overheated_since_boot())
 
     return render_template_string(
         TPL_INDEX,
@@ -1417,7 +1416,7 @@ def live_mjpg():
         if LIVE_PROC is None or LIVE_PROC.poll() is not None:
             _force_release_camera() # Clean up any stale processes first
             w, h = _dims_for_rotation()
-            cmd = build_cmd(w, h)
+
             def build_cmd(w, h):
                 base = os.path.basename(vid_bin)
                 rot = _rot_flags_for(vid_bin)
@@ -1431,6 +1430,8 @@ def live_mjpg():
                         vid_bin, "--nopreview", "--codec", "mjpeg", "--width", str(w), "--height", str(h),
                         "--framerate", "30", *rot, "-t", "0", "-o", "-",
                     ]
+
+            cmd = build_cmd(w, h)
             
             cmd = build_cmd(CAPTURE_WIDTH, CAPTURE_HEIGHT)
             env = dict(os.environ)
@@ -1895,7 +1896,7 @@ TPL_INDEX = r"""
   {% endfor %}
 
 <div class="footer card">
-    {% if high_temp_warning is sameas true %} %}
+    {% if high_temp_warning is sameas true %}
     <div class="row" style="background-color: #fef2f2; color: #991b1b; padding: 8px; border-radius: 8px; margin-bottom: 10px;">
       <span>⚠️ Temp Warning: Device has throttled due to overheating since last reboot.</span>
     </div>
