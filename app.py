@@ -1077,8 +1077,7 @@ def capture_still():
         ]
         print("[capture_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
-        if _needs_transpose():
-            _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
+        _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
 
         # Return the captured image directly for the LCD to display
         return send_file(path, mimetype='image/jpeg')
@@ -1103,8 +1102,7 @@ def take_web_still():
         ]
         print("[take_web_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
-        if _needs_transpose():
-            _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
+        _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
         
         # Redirect to the new preview page for this image
         return redirect(url_for("still_preview", filename=filename))
@@ -1421,6 +1419,7 @@ def test_capture():
     try:
         subprocess.run(cmd, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _rotate_file_in_place(path, deg=STILLS_SOFT_ROTATE_CCW)
         return send_file(path, mimetype="image/jpeg")
     except Exception:
         abort(500)
