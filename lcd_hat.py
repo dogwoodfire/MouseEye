@@ -740,39 +740,39 @@ class UI:
         st = _http_json(AP_STATUS_URL) or {}
         ap_on = bool(st.get("on"))
         
-        # if ap_on:
-        #     # --- START OF HARD-CODED FIX ---
-        #     # This completely bypasses the backend for AP details.
-        #     # Replace these placeholder values with your actual hotspot details.
-        #     ssid = "cyclopi_camera"
-        #     password = "Steropes-123"
-        #     ip = "10.42.0.1"  # This is the default for Pi hotspots, change if yours is different.
-        #     # --- END OF HARD-CODED FIX ---
+        if ap_on:
+            # --- START OF HARD-CODED FIX ---
+            # This completely bypasses the backend for AP details.
+            # Replace these placeholder values with your actual hotspot details.
+            ssid = "cyclopi_camera"
+            password = "Steropes-123"
+            ip = "10.42.0.1"  # This is the default for Pi hotspots, change if yours is different.
+            # --- END OF HARD-CODED FIX ---
 
-        #     # The rest of the logic uses the hard-coded variables above
-        #     self.qr_pages = []
-        #     if password:
-        #         self.qr_pages.append({
-        #             "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
-        #             "info_text": f"1/2: Scan to connect to\n'{ssid}'"
-        #         })
+            # The rest of the logic uses the hard-coded variables above
+            self.qr_pages = []
+            if password:
+                self.qr_pages.append({
+                    "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
+                    "info_text": f"1/2: Scan to connect to\n'{ssid}'"
+                })
 
-        #     self.qr_pages.append({
-        #         "qr_text": f"http://{ip}:5050",
-        #         "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
-        #     })
+            self.qr_pages.append({
+                "qr_text": f"http://{ip}:5050",
+                "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
+            })
 
-        #     self.state = self.QR_CODE_VIEWER
-        #     self.qr_page_idx = 0
-        #     self.render()
-        #     self._bind_modal_inputs(self._modal_ack)
+            self.state = self.QR_CODE_VIEWER
+            self.qr_page_idx = 0
+            self.render()
+            self._bind_modal_inputs(self._modal_ack)
             
-        # else:
-        # --- This block is for the 1-page Wi-Fi viewer (this part works) ---
-        ssid = _current_wifi_ssid() or "Wi-Fi"
-        ips  = st.get("ips") or _local_ipv4s()
-        ip   = ips[0] if ips else ""
-        self._show_connect_url_modal(ssid, ip, ips)
+        else:
+            # --- This block is for the 1-page Wi-Fi viewer (this part works) ---
+            ssid = _current_wifi_ssid() or "Wi-Fi"
+            ips  = st.get("ips") or _local_ipv4s()
+            ip   = ips[0] if ips else ""
+            self._show_connect_url_modal(ssid, ip, ips)
 
     # ---------- MODAL helpers (show URL until any key pressed) ----------
     def _bind_modal_inputs(self, handler):
