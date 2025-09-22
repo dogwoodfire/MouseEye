@@ -261,7 +261,7 @@ def _rotate_copy_to(src_path: str, dst_path: str, deg: int = None):
             exif = im.getexif()
             exif[ORIENT_TAG] = 1
             tmp = dst_path + ".tmp"
-            im.save(tmp, exif=exif)
+            im.save(tmp, format="JPEG", exif=exif)
             os.replace(tmp, dst_path)  # atomic
     except Exception as e:
         print(f"[_rotate_copy_to] failed from {src_path} -> {dst_path}: {e}")
