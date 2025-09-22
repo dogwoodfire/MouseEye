@@ -1685,6 +1685,48 @@ class UI:
         except Exception as e:
             log("render error:", repr(e))
 
+    def _render_qr_viewer(self):
+        """Draws the current page of the multi-page QR code viewer."""
+        if not self.qr_pages:
+            self._draw_center("No QR data", "Press OK to exit.")
+            return
+
+        # Get the data for the current page
+        page_data = self.qr_pages[self.qr_page_idx]
+        qr_text = page_data.get("qr_text", "")
+        info_text = page_data.get("info_text", "")
+
+        # --- Generate QR Code (adapted from your _show_connect_url_modal) ---
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=2,
+        )
+        qr.add_data(qr_text)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        qr_img = qr_img.resize((96, 96), Image.NEAREST)
+
+        # --- Draw the screen ---
+        img = self._blank()
+        img.paste(qr_img, (16, 0))  # Paste QR code at the top
+        drw = ImageDraw.Draw(img)
+
+        # Draw the multi-line info text underneath the QR code
+        y_pos = 98
+        for line in info_text.split('\n'):
+            line_w = self._text_w(F_SMALL, line)
+            drw.text(((WIDTH - int(line_w)) // 2, y_pos), line, font=F_SMALL, fill=WHITE)
+            y_pos += 12  # Increment y for the next line
+
+        self._present(img)
+
+
+    # show "sleeping" for a beat, then turn panel off
+    def _draw_center_sleep_then_off(self):
+        prev_state = self.state
+
     # show "sleeping" for a beat, then turn panel off
     def _draw_center_sleep_then_off(self):
         prev_state = self.state
