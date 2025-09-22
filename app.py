@@ -1815,7 +1815,7 @@ TPL_INDEX = r"""
   {% endfor %}
 
 <div class="footer card">
-    {% if high_temp_warning %}
+    {% if high_temp_warning is sameas true %} %}
     <div class="row" style="background-color: #fef2f2; color: #991b1b; padding: 8px; border-radius: 8px; margin-bottom: 10px;">
       <span>⚠️ Temp Warning: Device has throttled due to overheating since last reboot.</span>
     </div>
