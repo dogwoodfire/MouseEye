@@ -103,6 +103,15 @@ def ap_is_on():
     except Exception:
         return False
 
+def _ap_password(conn_name):
+    """Gets the Wi-Fi password for a given nmcli connection name."""
+    try:
+        # Use the existing sudo nmcli helper
+        ok, out = _nmcli("-s", "-g", "802-11-wireless-security.psk", "con", "show", conn_name)
+        return out.strip() if ok and out else ""
+    except Exception:
+        return ""
+
 def _set_system_time(time_str):
     """Sets the system time from a string (e.g., ISO 8601 format)."""
     try:
@@ -733,13 +742,16 @@ def ap_status_json():
     dev = _ap_active_device() if on else ""
     ip  = _ipv4_for_device(dev) if dev else ""
     ssid = _ap_ssid(dev) if on else None
+    # --- ADD THIS LINE ---
+    password = _ap_password(HOTSPOT_NAME) if on else ""
     return jsonify({
         "on": on,
         "name": HOTSPOT_NAME,
         "device": dev,
-        "ip": ip,                # single best IP for the AP interface
-        "ips": _all_ipv4_local(), # all local IPv4s (fallback/diagnostic)
-        "ssid": ssid,            # SSID of the AP (if active)
+        "ip": ip,
+        "ips": _all_ipv4_local(),
+        "ssid": ssid,
+        "password": password,  # <-- AND ADD THIS KEY
     })
 
 def _ap_status_quick():
