@@ -2438,26 +2438,26 @@ def _get_cpu_temp():
 
 def _has_overheated_since_boot():
     """Checks the Pi's firmware for any throttling flags since the last boot."""
+    # This is a diagnostic version of the function.
+    status_file = "/tmp/throttled_status.txt"
     try:
-        # `vcgencmd get_throttled` is the most reliable way to check.
-        # It returns a hex code like 'throttled=0x0'.
-        # A value of 0x0 means no issues have occurred since boot.
-        # Any other value indicates throttling (under-voltage, temp limit, etc.).
         cmd = ["vcgencmd", "get_throttled"]
         out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
-        
-        # The output is 'throttled=0x...'. We split on '=' and parse the hex.
         hex_val_str = out.split('=')[1].strip()
         
-        # If the value is anything other than 0, a throttling event has happened.
         if int(hex_val_str, 16) != 0:
+            with open(status_file, "w") as f:
+                f.write(f"THROTTLED: TRUE, value={hex_val_str}")
             return True
             
-    except Exception:
-        # If the command fails for any reason, assume no overheating.
+    except Exception as e:
+        with open(status_file, "w") as f:
+            f.write(f"THROTTLED: FALSE, exception={e}")
         return False
         
-    # If we get here, the value was 0x0, so no throttling.
+    # If we get here, the value was 0x0.
+    with open(status_file, "w") as f:
+        f.write("THROTTLED: FALSE, value=0x0")
     return False
     
 @app.get("/cpu_temp")
