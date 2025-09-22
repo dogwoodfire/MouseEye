@@ -229,9 +229,9 @@ def _rotate_still_to_canonical(path: str):
 
             ui = _ui_deg()  # 0/90/180/270 from lcd_prefs.json
             if ui == 90 :
-                deg = 0     # landscape LCD → 180° CCW
+                deg = 270     # landscape LCD → 180° CCW
             else:
-                deg = 90     # portrait LCD   → 270° CCW
+                deg = 0     # portrait LCD   → 270° CCW
 
             if deg % 360 != 0:
                 im = im.rotate(deg, expand=True)
