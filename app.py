@@ -154,6 +154,34 @@ LCD_OFF_FLAG = os.path.join(BASE, "lcd_off.flag")
 
 CAMERA_STILL = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
 FFMPEG       = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
+PREFS_FILE = "/home/pi/timelapse/lcd_prefs.json"
+
+def _current_cam_rotate_deg():
+    """
+    Priority:
+      1) env CAM_ROTATE_DEG (if set)
+      2) lcd_prefs.json key 'rot_deg' (your LCD app writes this)
+      3) fallback 0
+    Only 0/90/180/270 are accepted.
+    """
+    # env override
+    env = os.environ.get("CAM_ROTATE_DEG")
+    if env is not None:
+        try:
+            deg = int(env)
+            return deg if deg in (0, 90, 180, 270) else 0
+        except Exception:
+            return 0
+
+    # prefs file
+    try:
+        import json
+        from pathlib import Path
+        data = json.loads(Path(PREFS_FILE).read_text())
+        deg = int(data.get("rot_deg", 0))
+        return deg if deg in (0, 90, 180, 270) else 0
+    except Exception:
+        return 0
 
 # capture defaults
 CAPTURE_INTERVAL_SEC = 10
@@ -186,15 +214,13 @@ CAM_ROTATE_DEG = int(os.environ.get("CAM_ROTATE_DEG", "180"))
 def _rot_flags_for(bin_path: str):
     """
     Return CLI flags to rotate frames for rpicam-* or libcamera-*.
-    Uses --rotation <deg>, which is supported by both families.
+    Uses --rotation <deg>, supported by both families.
     """
-    try:
-        deg = int(CAM_ROTATE_DEG)
-    except Exception:
-        deg = 0
-    if deg not in (0, 90, 180, 270):
-        deg = 0
-    return ["--rotation", str(deg)] if deg else []
+    deg = _current_cam_rotate_deg()
+    flags = (["--rotation", str(deg)] if deg else [])
+    # If you added mirror prefs:
+    # flags += _mirror_flags_from_prefs()
+    return flags
 
 app = Flask(__name__)
 app.jinja_env.globals.update(datetime=datetime)
