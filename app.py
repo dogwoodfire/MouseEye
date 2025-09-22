@@ -775,8 +775,6 @@ def ap_status_json():
     try:
         # Use the corrected field name for your system
         ok, out = _nmcli("-t", "-s", "-f", "GENERAL.DEVICES,802-11-wireless.ssid,802-11-wireless-security.psk", "con", "show", HOTSPOT_NAME)
-        
-        # --- START OF NEW ROBUST PARSING LOGIC ---
         if ok and out:
             # Create a dictionary from the multi-line output
             lines = out.strip().split('\n')
@@ -790,7 +788,6 @@ def ap_status_json():
             device = data.get("GENERAL.DEVICES", "").strip()
             ssid = data.get("802-11-wireless.ssid", "").strip()
             password = data.get("802-11-wireless-security.psk", "").strip()
-        # --- END OF NEW ROBUST PARSING LOGIC ---
 
         if device:
             ip = _ipv4_for_device(device)
