@@ -202,6 +202,7 @@ def _ui_deg():
 def _needs_transpose():
     return _ui_deg() in (90, 270)
 
+# --- Helper: Rotate file in place by degrees CCW and normalize EXIF ---
 def _rotate_file_in_place(path: str, deg: int = None):
     """Rotate pixels CCW and normalize EXIF. If deg is None, uses UI setting."""
     if deg is None:
@@ -214,6 +215,29 @@ def _rotate_file_in_place(path: str, deg: int = None):
         exif = im.getexif()
         exif[ORIENT_TAG] = 1  # Orientation=Normal
         im.save(path, exif=exif)
+
+# --- Orient stills based on aspect ratio ---
+def _rotate_still_to_canonical(path: str):
+    """Rotate the saved JPEG so that:
+    - Landscape images end up 180° CCW total
+    - Portrait images end up 270° CCW total (i.e., 90° CCW more than landscape)
+    This matches the observed behavior the user reported.
+    Always clears EXIF Orientation to 1.
+    """
+    try:
+        with Image.open(path) as im:
+            # Normalize any incoming EXIF first
+            im = ImageOps.exif_transpose(im)
+            w, h = im.size
+            # Decide target rotation (degrees CCW) based on aspect
+            deg = 180 if w >= h else 270  # landscape: 180 CCW; portrait: 270 CCW
+            if deg % 360 != 0:
+                im = im.rotate(deg, expand=True)
+            exif = im.getexif()
+            exif[ORIENT_TAG] = 1
+            im.save(path, exif=exif)
+    except Exception as e:
+        print(f"[_rotate_still_to_canonical] failed for {path}: {e}")
 
 # --- Optional hflip/vflip flags from prefs ---
 def _mirror_flags_from_prefs():
@@ -1083,8 +1107,8 @@ def capture_still():
         ]
         print("[capture_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
-        # Always rotate stills 90° counter-clockwise (project requirement)
-        _rotate_file_in_place(path, deg=180)
+        # Orient still according to aspect (landscape: 180° CCW, portrait: 270° CCW)
+        _rotate_still_to_canonical(path)
 
         # Return the captured image directly for the LCD to display
         return send_file(path, mimetype='image/jpeg')
@@ -1109,7 +1133,7 @@ def take_web_still():
         ]
         print("[take_web_still] cmd:", " ".join(cmd))
         subprocess.run(cmd, check=True, timeout=10)
-        _rotate_file_in_place(path, deg=180)
+        _rotate_still_to_canonical(path)
         
         # Redirect to the new preview page for this image
         return redirect(url_for("still_preview", filename=filename))
@@ -1426,7 +1450,7 @@ def test_capture():
     try:
         subprocess.run(cmd, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _rotate_file_in_place(path, deg=180)
+        _rotate_still_to_canonical(path)
         return send_file(path, mimetype="image/jpeg")
     except Exception:
         abort(500)
