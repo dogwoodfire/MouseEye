@@ -2437,21 +2437,28 @@ def _get_cpu_temp():
         return None
 
 def _has_overheated_since_boot():
-    """Checks system logs for CPU throttling messages since the last boot."""
+    """Checks the Pi's firmware for any throttling flags since the last boot."""
     try:
-        # journalctl -b shows logs for the current boot
-        # We grep for "throttled", which the kernel logs on high temperature.
-        cmd = "journalctl -b | grep -i 'throttled'"
-        # We use shell=True for the pipe, and check the return code.
-        # A return code of 0 means grep found a match.
-        result = subprocess.run(cmd, shell=True, check=True, capture_output=True)
-        return True # A match was found
-    except subprocess.CalledProcessError:
-        # A non-zero return code means grep found no matches
+        # `vcgencmd get_throttled` is the most reliable way to check.
+        # It returns a hex code like 'throttled=0x0'.
+        # A value of 0x0 means no issues have occurred since boot.
+        # Any other value indicates throttling (under-voltage, temp limit, etc.).
+        cmd = ["vcgencmd", "get_throttled"]
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+        
+        # The output is 'throttled=0x...'. We split on '=' and parse the hex.
+        hex_val_str = out.split('=')[1].strip()
+        
+        # If the value is anything other than 0, a throttling event has happened.
+        if int(hex_val_str, 16) != 0:
+            return True
+            
+    except Exception:
+        # If the command fails for any reason, assume no overheating.
         return False
-    except Exception as e:
-        print(f"Error checking for overheat messages: {e}")
-        return False
+        
+    # If we get here, the value was 0x0, so no throttling.
+    return False
     
 @app.get("/cpu_temp")
 def cpu_temp_api():
