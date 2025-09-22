@@ -739,15 +739,15 @@ class UI:
         Shows a 2-page QR viewer when AP is ON.
         Shows a single URL QR modal when AP is OFF (Wi-Fi client mode).
         """
-        if self._busy:
-            return
+        if self._busy and not threading.main_thread().name in str(threading.current_thread()):
+             return
         self._busy = True
         self._draw_center("Generating", sub="QR Code...")
-
+        
         try:
             st = _http_json(AP_STATUS_URL) or {}
             ap_on = bool(st.get("on"))
-
+            
             if ap_on:
                 # --- New 2-Page Viewer for AP Mode ---
                 self.qr_pages = []
@@ -764,16 +764,16 @@ class UI:
                         "qr_text": f"WIFI:T:WPA;S:{ssid};P:{password};;",
                         "info_text": f"1/2: Scan to connect to\n'{ssid}'"
                     })
-
+                
                 self.qr_pages.append({
                     "qr_text": f"http://{ip}:5050",
                     "info_text": f"2/2: Scan to open URL\nhttp://{ip}:5050"
                 })
-
+                
                 self.state = self.QR_CODE_VIEWER
                 self.qr_page_idx = 0
                 self.render() # Renders the new multi-page viewer
-
+            
             else:
                 # --- OLD Modal for Wi-Fi Client Mode ---
                 ssid = _current_wifi_ssid() or "Wi-Fi"
@@ -784,7 +784,6 @@ class UI:
 
         finally:
             # The busy flag is released by the function that exits the viewer
-            # or automatically if we are not in a modal state.
             if self.state not in (self.MODAL, self.QR_CODE_VIEWER):
                 self._busy = False
 
@@ -1037,11 +1036,6 @@ class UI:
             self.render()
             return
         
-        # elif self.state == self.STILLS_VIEWER:
-        #     self.state = self.HOME
-        #     self.render()
-        #     return
-        
         elif self.state == self.SETTINGS_MENU:
             sel = self.settings_menu_items[self.menu_idx]
             if sel == "Screen off":
@@ -1050,7 +1044,7 @@ class UI:
                 self.toggle_rotation()
             elif sel == "Shutdown Camera":
                 self.state = self.SHUTDOWN_CONFIRM
-                self.confirm_idx = 1  # Default to "No"
+                self.confirm_idx = 1
                 self.render()
             elif sel == "‹ Back":
                 self.state = self.HOME

@@ -790,7 +790,7 @@ def index():
 
     disk_info = _disk_stats()
     temp_info = _get_cpu_temp()
-    high_temp_warning=_has_overheated_since_boot, 
+    high_temp_warning=_has_overheated_since_boot
 
     return render_template_string(
         TPL_INDEX,
@@ -810,6 +810,7 @@ def index():
         idle_now=idle_now,
         ap_status=_ap_status_quick(),
         temp=temp_info,
+        high_temp_warning=high_temp_warning,
     )
 
 @app.route("/start", methods=["POST"])
@@ -2728,4 +2729,4 @@ if __name__ == "__main__":
 
 # # ---------- Main ----------
 # if __name__ == "__main__":
-#     app.run(host="0.0.0.0", port=5050) 
+#     app.run(host="0.0.0.0", port=5050)                                                                                                                                                                                                                                                                                                                                                                             
