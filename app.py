@@ -1176,7 +1176,7 @@ def stop_timelapse():
 @app.route("/stop", methods=["GET","POST"], endpoint="stop_route")
 def stop_route():
     stop_timelapse()
-    return ("", 204)
+    return redirect(url_for("index"))
 
 @app.post("/shutdown")
 def shutdown_device():
@@ -2094,16 +2094,21 @@ TPL_INDEX = r"""
       <input name="duration_minutes" type="number" min="0" step="1" placeholder="mins" style="width:60px">
     </div>
     
-    <div class="row">
-      <button class="btn-strong" type="submit"
-              {% if current_session %}disabled title="Stop current capture first"{% endif %}>
-        ▶️ Start
-      </button>
-      <form action="{{ url_for('stop_route') }}" method="post" style="display:inline;">
-        <button class="btn" type="submit" {% if not current_session %}disabled aria-disabled="true"{% endif %}>⏹ Stop</button>
-        </form>
-    </div>
-  </form>
+  <div class="row">
+    <button class="btn-strong" type="submit"
+            {% if current_session %}disabled title="Stop current capture first"{% endif %}>
+      ▶️ Start
+    </button>
+  </div>
+</form>
+
+<div class="card" style="margin-top:-10px; border-top-left-radius: 0; border-top-right-radius: 0;">
+  <div class="row">
+    <form action="{{ url_for('stop_route') }}" method="post" style="display:inline;">
+      <button class="btn" type="submit" {% if not current_session %}disabled aria-disabled="true"{% endif %}>⏹ Stop</button>
+    </form>
+  </div>
+</div>
     {% if next_sched %}
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:center;">
