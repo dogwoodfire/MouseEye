@@ -1789,4 +1789,45 @@ def main():
             try:
                 ui._unbind_inputs()
                 if ui.bl is not None:
-                    ui.bl.value = 1.0  # keep backli
+                    ui.bl.value = 1.0  # keep backlight on for visibility
+                ui._draw_center("Shutting down…", "Wait ~90S\nbefore disconnect")
+            except Exception:
+                pass
+            # Stop re-rendering and wait for power to cut
+            while True:
+                time.sleep(0.25)
+
+        if is_encoding:
+            if ui.state != UI.ENCODING:
+                ui.state = UI.ENCODING
+        elif is_active:
+            if ui.state != UI.CAPTURING:
+                ui.state = UI.CAPTURING
+                ui.menu_idx = 0
+        elif ui.state in (UI.CAPTURING, UI.ENCODING):
+             ui.state = UI.HOME
+             ui.menu_idx = 0
+
+        ui.render()
+
+        # Slow down LCD updates while encoding to avoid fighting with ffmpeg
+        sleep_sec = 1.0
+        if ui.state == UI.ENCODING:
+            sleep_sec = 3.0  # static screen; even fewer SPI writes
+
+        time.sleep(sleep_sec)
+
+if __name__ == "__main__":
+    try:
+        if DEBUG:
+            print("DEBUG on", file=sys.stderr, flush=True)
+        # Ensure stdout/stderr are not buffered under systemd
+        try:
+            import sys as _sys
+            _sys.stdout.reconfigure(line_buffering=True)
+            _sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+        main()
+    except KeyboardInterrupt:
+        pass
