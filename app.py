@@ -1108,15 +1108,38 @@ def stop_route():
 
 @app.post("/shutdown")
 def shutdown_device():
-    """Safely shuts down the Raspberry Pi."""
+    """Safely shuts down the Raspberry Pi with a user-friendly page."""
     try:
-        print("[SHUTDOWN] Shutdown command received. Shutting down now.")
-        # We use subprocess.run and don't wait for it to complete,
-        # as the system will be shutting down.
-        subprocess.Popen(["sudo", "/sbin/shutdown", "-h", "now"])
-        return jsonify({"message": "Shutdown initiated."}), 202
+        # Trigger shutdown a moment *after* we return the page so it renders.
+        delay = 3  # seconds
+        subprocess.Popen(
+            ["/bin/sh", "-c", f"sleep {delay}; sudo /sbin/shutdown -h now"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+        # Return a simple HTML page with clear instructions
+        html = """
+        <!doctype html>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Shutting down…</title>
+        <style>
+          body{margin:0;background:#0b0b0b;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh}
+          .card{background:#111827;border:1px solid #374151;border-radius:12px;padding:20px;max-width:560px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+          h1{margin:0 0 8px;font-size:20px}
+          p{margin:6px 0;color:#cbd5e1}
+          .dots::after{content:".";animation:dot 1.2s steps(1,end) infinite}
+          @keyframes dot{0%{content:"."}33%{content:".."}66%{content:"..."}}
+        </style>
+        <div class="card">
+          <h1>Shutting down<span class="dots"></span></h1>
+          <p>Please wait. The system will power off shortly.</p>
+          <p><strong>Do not unplug power</strong> until the green LED stops blinking and turns off.</p>
+          <p>If the page closes or becomes unresponsive, that's normal during shutdown.</p>
+        </div>
+        """
+        return html, 202, {"Content-Type": "text/html; charset=utf-8"}
     except Exception as e:
-        print(f"[SHUTDOWN] Error initiating shutdown: {e}")
+        # Fallback to JSON if something goes wrong
         return jsonify({"error": "Failed to initiate shutdown", "message": str(e)}), 500
 
 @app.post("/capture_still")
