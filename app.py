@@ -820,7 +820,7 @@ def _capture_loop(sess_dir, interval):
     cmd = [
         CAMERA_STILL,
         "-o", jpg_pattern,
-        "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
+        "--width", "1920", "--height", "1080",
         "--quality", CAPTURE_QUALITY,
         "--nopreview",
         "--exposure", "normal",       # Add this line for consistent exposure
@@ -1282,7 +1282,7 @@ def capture_still():
         # Build and run the capture command (no hardware rotation for stills)
         cmd = [
             CAMERA_STILL, "-o", path,
-            "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
+            "--width", "3280", "--height", "2464",
             "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
         ]
         print("[capture_still] cmd:", " ".join(cmd))
@@ -1308,7 +1308,7 @@ def take_web_still():
 
         cmd = [
             CAMERA_STILL, "-o", path,
-            "--width", _dims_for_rotation()[0], "--height", _dims_for_rotation()[1],
+            "--width", "3280", "--height", "2464",
             "--quality", CAPTURE_QUALITY, "--nopreview", "--immediate"
         ]
         print("[take_web_still] cmd:", " ".join(cmd))
