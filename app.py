@@ -472,6 +472,7 @@ def _start_encode_worker_once():
                 prio = ["ionice", "-c2", "-n", "7", "nice", "-n", "19"]
 
                 ui_deg = _ui_deg()  # 0/90/180/270 CCW from prefs
+                force_sw_landscape = (ui_deg in (0, 180))
 
                 # Build the hardware-encode command first.
                 # We avoid any padding; we scale to a sane width that preserves aspect.
