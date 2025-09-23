@@ -480,9 +480,9 @@ def _start_encode_worker_once():
                 # For portrait orientation, fix width = 720, keep height dynamic
                 # For landscape, fix width = 1280, keep height dynamic
                 if ui_deg in (90, 270):
-                    vf_filter = "scale=720:-2"   # vertical video, preserve aspect
+                    vf_filter = "scale=720:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
                 else:
-                    vf_filter = "scale=1280:-2"  # horizontal video, preserve aspect
+                    vf_filter = "scale=1280:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
 
                 # Always scale to 1280x720 (letterbox/crop to fit), hardware encode
                 common = [
