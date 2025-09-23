@@ -436,37 +436,15 @@ def _start_encode_worker_once():
 
                 _jobs[sess] = {"status": "encoding", "progress": 0}
 
-                # Prefer V4L2 M2M hardware encoder if ffmpeg reports it, else libx264.
-                hw_encoder = "h264_v4l2m2m"
-                use_hw = False
-                try:
-                    p = subprocess.run([FFMPEG, "-hide_banner", "-encoders"],
-                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                       text=True, timeout=2)
-                    use_hw = (hw_encoder in (p.stdout or ""))
-                except Exception:
-                    use_hw = False
-
+                # Fixed, safe pipeline: always use hardware encoder at 1280x720
+                # This avoids OOM and produces universally playable H.264.
                 # Use numbered sequence input (cheaper than globbing thousands of files)
                 seq = os.path.join(sess_dir, "%06d.jpg")
-
-                # If frames are already modest (e.g., 1640x1232), skip scaling.
-                # Only pillarbox to 1920x1080 when input is not 16:9 and you want a 16:9 mp4.
-                vf = []
-                try:
-                    from PIL import Image
-                    first = frames[0]
-                    with Image.open(first) as im:
-                        w, h = im.size
-                    if _needs_pillarbox(w, h):
-                        vf = ["-vf", "scale=-2:1080,pad=1920:1080:(1920-iw)/2:0:black"]
-                except Exception:
-                    # If probe fails, skip filters to keep CPU low
-                    vf = []
 
                 # Best-effort gentle priorities
                 prio = ["ionice", "-c2", "-n", "7", "nice", "-n", "19"]
 
+                # Always scale to 1280x720 (letterbox/crop to fit), hardware encode
                 common = [
                     FFMPEG, "-y",
                     "-nostdin", "-loglevel", "error",
@@ -474,18 +452,15 @@ def _start_encode_worker_once():
                     "-framerate", str(fps),
                     "-start_number", "0",
                     "-i", seq,
-                    *vf,
+                    "-vf", "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
                     "-vsync", "vfr",
                     "-pix_fmt", "yuv420p",
                     "-movflags", "+faststart",
+                    "-c:v", "h264_v4l2m2m",
+                    "-b:v", "2000k",
                 ]
 
-                if use_hw:
-                    codec = ["-c:v", "h264_v4l2m2m", "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k"]
-                else:
-                    codec = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
-
-                cmd = prio + common + codec + [out]
+                cmd = prio + common + [out]
 
                 # Spawn ffmpeg without pipes to avoid blocking/backpressure
                 log_path = os.path.join(sess_dir, "encode.log")
