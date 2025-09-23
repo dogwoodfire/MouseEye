@@ -2154,7 +2154,7 @@ TPL_INDEX = r"""
     
     <div style="flex:1;min-width:140px;max-width:200px;">
       <div class="thumb" style="width:100%;height:auto;aspect-ratio:4/3;">
-        <img id="active-preview" src="{{ url_for('preview', sess=current_session) }}?t={{ remaining_sec or 0 }}" alt="preview" style="width:100%;height:100%;object-fit:cover;display:block;">
+        <div id="active-preview-placeholder" class="placeholder">⏳ capturing…</div>
       </div>
     </div>
 
@@ -2744,6 +2744,7 @@ function applyBusyFromJobs(jobs) {
   setInterval(pollActive, 2000);
 });
 
+</script>
 {% if current_session %}
 <script>
 // --- Active session updater (preview, frames, time, progress, interval, fps) ---
@@ -2752,7 +2753,8 @@ function applyBusyFromJobs(jobs) {
   const framesEl = document.getElementById('active-frames');
   const timeEl = document.getElementById('active-time');
   const barEl = document.getElementById('active-bar');
-  const imgEl = document.getElementById('active-preview');
+  let imgEl = document.getElementById('active-preview');
+  const phEl  = document.getElementById('active-preview-placeholder');
   const intEl = document.getElementById('active-interval');
   const fpsEl = document.getElementById('active-fps');
 
@@ -2785,10 +2787,38 @@ function applyBusyFromJobs(jobs) {
       barEl && (barEl.style.width = '100%');
     }
 
-    // refresh preview (cache-bust)
-    if (imgEl) {
-      const base = `{{ url_for('preview', sess=current_session) }}`;
-      imgEl.src = base + '?t=' + Date.now();
+    // refresh preview (create img on first frame, else show placeholder)
+    const base = `{{ url_for('preview', sess=current_session) }}`;
+    if ((st.frames|0) > 0) {
+      if (!imgEl) {
+        // swap placeholder for an <img>
+        const ph = document.getElementById('active-preview-placeholder');
+        const img = document.createElement('img');
+        img.id = 'active-preview';
+        img.alt = 'preview';
+        img.loading = 'lazy';
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'cover';
+        if (ph && ph.parentNode) ph.parentNode.replaceChild(img, ph);
+        imgEl = img;
+      }
+      if (imgEl) {
+        imgEl.src = base + '?t=' + Date.now();
+      }
+    } else {
+      // No frames yet: ensure placeholder is present and no stale image remains
+      if (!document.getElementById('active-preview-placeholder')) {
+        const img = imgEl; // may be null
+        const ph = document.createElement('div');
+        ph.id = 'active-preview-placeholder';
+        ph.className = 'placeholder';
+        ph.textContent = '⏳ capturing…';
+        if (img && img.parentNode) {
+          img.parentNode.replaceChild(ph, img);
+          imgEl = null;
+        }
+      }
     }
   }
 
