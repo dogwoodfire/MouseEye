@@ -447,7 +447,7 @@ def _start_encode_worker_once():
                     *vf,
                     "-crf", "20",
                     "-c:v", "libx264",
-                    "-preset", "faster",
+                    "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p",
                     out
                 ]
