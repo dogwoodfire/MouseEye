@@ -475,8 +475,8 @@ def _start_encode_worker_once():
                     # Portrait: scale portrait width; no pad
                     vf_hw = "scale=720:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
                 else:
-                    # Landscape
-                    vf_hw = "scale=1280:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
+                    # Landscape 4:3 → best HW-safe quality without >1080 height
+                    vf_hw = "scale=1440:1080,scale=trunc(iw/16)*16:trunc(ih/16)*16"
 
                 hw_cmd = [
                     FFMPEG, "-y", "-nostdin", "-loglevel", "error",
@@ -561,7 +561,7 @@ def _start_encode_worker_once():
                             "-framerate", str(fps),
                             "-start_number", "0",
                             "-i", seq,
-                            "-vf", "scale=1280:-2",
+                            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
                             "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
                             out,
