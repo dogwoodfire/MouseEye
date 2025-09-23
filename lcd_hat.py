@@ -435,6 +435,11 @@ class UI:
         except Exception:
             pass
 
+    def prepare_for_encode_shutdown(self):
+        """Call this before stopping the service so the LCD freezes on the encoding screen."""
+        self._draw_encoding()
+        time.sleep(0.5)
+
     # ---------- clears / present ----------
     def _request_hard_clear(self):
         self._need_hard_clear = True
@@ -1831,9 +1836,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-    def prepare_for_encode_shutdown(self):
-        """
-        Call this method before the service is stopped to show the encoding screen.
-        """
-        self._draw_encoding()
-        time.sleep(0.5)
