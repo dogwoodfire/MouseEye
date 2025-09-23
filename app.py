@@ -488,7 +488,10 @@ def _start_encode_worker_once():
                 cmd = prio + common + codec + [out]
 
                 # Spawn ffmpeg without pipes to avoid blocking/backpressure
-                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                log_path = os.path.join(sess_dir, "encode.log")
+                with open(log_path, "w") as log_file:
+                    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
+                    rc = proc.wait()
                 rc = proc.wait()
                 if rc == 0 and os.path.exists(out):
                     _jobs[sess] = {"status": "done", "progress": 100}
