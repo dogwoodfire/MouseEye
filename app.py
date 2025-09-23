@@ -437,7 +437,7 @@ def _start_encode_worker_once():
                 if shutil.which("nice"):   prio += ["nice", "-n", "19"]
 
                 # No encode-time rotation: frames are already oriented at capture.
-                vf = ["-vf", "scale=1920:-2"]
+                vf = ["-vf", "scale=-2:1080,pad=1920:1080:(1920-iw)/2:0:black"]
 
                 # Prefer V4L2 M2M hardware encoder if ffmpeg reports it, else libx264.
                 hw_encoder = "h264_v4l2m2m"
@@ -820,7 +820,7 @@ def _capture_loop(sess_dir, interval):
     cmd = [
         CAMERA_STILL,
         "-o", jpg_pattern,
-        "--width", "1920", "--height", "1080",
+        "--width", "1640", "--height", "1232",
         "--quality", CAPTURE_QUALITY,
         "--nopreview",
         "--exposure", "normal",       # Add this line for consistent exposure
