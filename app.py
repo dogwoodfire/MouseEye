@@ -130,13 +130,13 @@ def _set_system_time(time_str):
 
 # Allow override at runtime; default to Pi path
 BASE = os.environ.get("TL_BASE", "/home/pi/timelapse")
+SHUTDOWN_FLAG = os.path.join(BASE, "shutting_down.flag")
+# Clear any stale shutdown flag right away (idempotent at import-time)
 try:
     if os.path.exists(SHUTDOWN_FLAG):
         os.remove(SHUTDOWN_FLAG)
 except Exception:
     pass
-
-SHUTDOWN_FLAG = os.path.join(BASE, "shutting_down.flag")
 
 def _ensure_dirs(base_root: str):
     """Ensure sessions and stills directories exist."""
@@ -351,6 +351,16 @@ def _dims_for_rotation():
 
 app = Flask(__name__)
 app.jinja_env.globals.update(datetime=datetime)
+
+# Robust clear of shutdown flag at startup (in case import-time missed it)
+@app.before_first_request
+def _boot_clear_shutdown_flag():
+    """Ensure any stale shutdown flag is removed on fresh boot/reload."""
+    try:
+        if os.path.exists(SHUTDOWN_FLAG):
+            os.remove(SHUTDOWN_FLAG)
+    except Exception:
+        pass
 
 # --- schedule_addon absolute-path import & init ---
 # try:
@@ -1171,7 +1181,7 @@ def shutdown_device():
             if (left === 0) {
               clearInterval(timer);
               title.textContent = "It should be safe to unplug (double-check LED)";
-              statusEl.textContent = "If the ACT LED is off and there’s no activity, you may disconnect power.";
+              statusEl.textContent = "If the ACT LED is off and there's no activity, you may disconnect power.";
             }
           }, 1000);
 
@@ -1191,7 +1201,7 @@ def shutdown_device():
             } catch(e) {
               if (!gone) {
                 gone = true;
-                statusEl.textContent = "Device is offline — shutdown likely complete. Verify ACT LED is off.";
+                statusEl.textContent = "Device is offline — system shutdown in progress. Verify ACT LED is off before disconnecting power.";
               }
             }
           }
