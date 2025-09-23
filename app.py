@@ -32,6 +32,26 @@ def _nmcli(*args, timeout=6):
         return False, str(e)
 import re
 
+def _lcd_is_active():
+    try:
+        p = subprocess.run(
+            ["systemctl", "is-active", "--quiet", "timelapse-lcd.service"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.5
+        )
+        return (p.returncode == 0)
+    except Exception:
+        return False
+
+def _lcd_service(action):
+    # action = "stop" or "start"
+    try:
+        subprocess.run(
+            ["sudo", "systemctl", action, "timelapse-lcd.service"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3
+        )
+    except Exception:
+        pass
+
 def _ap_ssid(dev):
     # 1) From the live device (most reliable for active AP)
     if dev:
@@ -425,6 +445,9 @@ def _start_encode_worker_once():
                 continue
             sess, fps = task
             try:
+                lcd_was_active = _lcd_is_active()
+                if lcd_was_active:
+                    _lcd_service("stop")
                 sess_dir = _session_path(sess)
                 out = _video_path(sess_dir)
                 frames = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
@@ -475,6 +498,8 @@ def _start_encode_worker_once():
             except Exception:
                 _jobs[sess] = {"status": "error", "progress": 0}
             finally:
+                if lcd_was_active:
+                    _lcd_service("start")
                 _encode_q.task_done()
     threading.Thread(target=_encode_worker, daemon=True).start()
 
