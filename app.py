@@ -452,10 +452,11 @@ def _start_encode_worker_once():
 
                 common = [
                     FFMPEG, "-y",
-                    "-threads", "1",               # keep CPU predictable
+                    "-threads", "1",
                     "-framerate", str(fps),
                     "-pattern_type", "glob",
                     "-i", os.path.join(sess_dir, "*.jpg"),
+                    "-vsync", "vfr",
                     "-pix_fmt", "yuv420p",
                 ]
 
@@ -2058,8 +2059,10 @@ TPL_INDEX = r"""
       </div>
       <div class="progress show" id="active-prog" aria-label="progress"><div class="bar" id="active-bar"></div></div>
       <div class="controls" style="margin-top:6px;">
-        <a class="btn" href="#" onclick="return stopClick(event)">⏹ Stop</a>
-      </div>
+        <form action="{{ url_for('stop_route') }}" method="post" style="display:inline;">
+            <button class="btn" type="submit">⏹ Stop</button>
+        </form>
+        </div>
     </div>
   </div>
 </div>
@@ -2096,12 +2099,9 @@ TPL_INDEX = r"""
               {% if current_session %}disabled title="Stop current capture first"{% endif %}>
         ▶️ Start
       </button>
-      <a class="btn {% if not current_session %}disabled{% endif %}"
-        href="#"
-        onclick="return stopClick(event)"
-        {% if not current_session %}aria-disabled="true"{% endif %}>
-        ⏹ Stop
-      </a>
+      <form action="{{ url_for('stop_route') }}" method="post" style="display:inline;">
+        <button class="btn" type="submit" {% if not current_session %}disabled aria-disabled="true"{% endif %}>⏹ Stop</button>
+        </form>
     </div>
   </form>
     {% if next_sched %}
