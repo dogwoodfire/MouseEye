@@ -81,19 +81,25 @@ def _poll_status_worker():
     global _STATUS_CACHE
     while True:
         try:
-            status = _http_json(STATUS_URL, timeout=0.8)
-            ap_on = _ap_poll_cache(period=5.0) # Refresh AP status less frequently
+            # Use a short timeout so we don't get stuck if backend is busy
+            status = _http_json(STATUS_URL, timeout=0.5)
+            ap_on = _ap_poll_cache(period=10.0)  # refresh AP badge less often
 
             with _STATUS_LOCK:
-                if status: # Only update if poll was successful
+                if status:  # Only update if poll was successful
                     _STATUS_CACHE = status
                 _STATUS_CACHE['ap_on'] = ap_on
 
+            # Back off polling when encoding to reduce load
+            enc = False
+            with _STATUS_LOCK:
+                enc = bool(_STATUS_CACHE.get('encoding'))
         except Exception as e:
             log(f"Poll worker error: {e}")
-        
-        # Poll less frequently to reduce load
-        time.sleep(1.5)
+            enc = True  # if in doubt, back off a bit
+
+        # Poll less frequently to reduce load (much slower while encoding)
+        time.sleep(5.0 if enc else 1.5)
 
 def _ap_poll_cache(period=30.0):
     """Refresh AP status cache at most once per `period` seconds.
@@ -223,6 +229,9 @@ IMG_ICON_PHOTO = icon_photo.resize(ICON_SIZE)
 
 icon_settings = TablerIcons.load(OutlineIcon.SETTINGS, stroke_width=STROKE_WEIGHT, color="white")
 IMG_ICON_SETTINGS = icon_settings.resize(ICON_SIZE)
+
+icon_encode = TablerIcons.load(OutlineIcon.MOVIE, stroke_width=STROKE_WEIGHT, color="white")
+IMG_ICON_ENCODE = icon_encode.resize(ICON_SIZE_LARGE)
 
 
 # ----------------- HTTP helpers -----------------
@@ -531,12 +540,19 @@ class UI:
             drw.text((2, y), line, font=F_SMALL, fill=GRAY); y += 12
         self._present(img)
 
-    def _draw_encoding(self, spin_idx=0):
+    def _draw_encoding(self):
         img = self._blank(); drw = ImageDraw.Draw(img)
-        msg = "Encoding..."; sp = SPINNER[spin_idx % len(SPINNER)]
-        tw = self._text_w(F_TITLE, msg); sw = self._text_w(F_TITLE, sp)
-        drw.text(((WIDTH-int(tw))//2, 40), msg, font=F_TITLE, fill=YELL)
-        drw.text(((WIDTH-int(sw))//2, 62), sp,  font=F_TITLE, fill=YELL)
+        msg = "Encoding…"
+        tw = self._text_w(F_TITLE, msg)
+        drw.text(((WIDTH-int(tw))//2, 20), msg, font=F_TITLE, fill=YELL)
+        try:
+            # Center the static encoding icon
+            ix, iy = IMG_ICON_ENCODE.size
+            img.paste(IMG_ICON_ENCODE, ((WIDTH - ix)//2, 44), mask=IMG_ICON_ENCODE)
+        except Exception:
+            # Fallback: simple bar
+            drw.rectangle((16, 60, WIDTH-16, 84), outline=YELL)
+            drw.rectangle((18, 62, WIDTH-18, 82), fill=YELL)
         self._present(img)
 
     def _overlay_ap(self, base_img):
@@ -1460,7 +1476,7 @@ class UI:
         st = self._status() or {}
         if st.get("encoding"):
             self.state = self.ENCODING
-            self._draw_encoding(self._spin_idx)
+            self._draw_encoding()
             return
 
         status = "Idle"
@@ -1557,7 +1573,7 @@ class UI:
                 self._draw_capturing_screen()
                 return
             if self.state == self.ENCODING:
-                self._draw_encoding(self._spin_idx); return
+                self._draw_encoding(); return
 
             if self.state == self.HOME:
                 self._render_home(); return
@@ -1794,10 +1810,12 @@ def main():
 
         ui.render()
 
+        # Slow down LCD updates while encoding to avoid fighting with ffmpeg
+        sleep_sec = 1.0
         if ui.state == UI.ENCODING:
-            ui._spin_idx = (ui._spin_idx + 1) % len(SPINNER)
+            sleep_sec = 3.0  # static screen; even fewer SPI writes
 
-        time.sleep(1.0)
+        time.sleep(sleep_sec)
 
 if __name__ == "__main__":
     try:
