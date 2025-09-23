@@ -294,9 +294,9 @@ def _mirror_flags_from_prefs():
 
 # capture defaults
 CAPTURE_INTERVAL_SEC = 10
-CAPTURE_WIDTH   = "1296"
-CAPTURE_HEIGHT  = "972"
-CAPTURE_QUALITY = "90"
+CAPTURE_WIDTH   = "3280"
+CAPTURE_HEIGHT  = "2464"
+CAPTURE_QUALITY = "95"
 #
 # Rotation policy:
 # - 180° is handled in hardware (rpicam --rotation 180).
@@ -435,8 +435,9 @@ def _start_encode_worker_once():
                     "-pattern_type", "glob",
                     "-i", os.path.join(sess_dir, "*.jpg"),
                     *vf,
+                    "-crf", "20",
                     "-c:v", "libx264",
-                    "-preset", "ultrafast",
+                    "-preset", "faster",
                     "-pix_fmt", "yuv420p",
                     out
                 ]
