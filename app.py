@@ -130,6 +130,13 @@ def _set_system_time(time_str):
 
 # Allow override at runtime; default to Pi path
 BASE = os.environ.get("TL_BASE", "/home/pi/timelapse")
+try:
+    if os.path.exists(SHUTDOWN_FLAG):
+        os.remove(SHUTDOWN_FLAG)
+except Exception:
+    pass
+
+SHUTDOWN_FLAG = os.path.join(BASE, "shutting_down.flag")
 
 def _ensure_dirs(base_root: str):
     """Ensure sessions and stills directories exist."""
@@ -1110,6 +1117,12 @@ def stop_route():
 def shutdown_device():
     """Safely shuts down the Raspberry Pi with a user-friendly page."""
     try:
+        # Create a 'shutting down' flag for the LCD
+        try:
+            with open(SHUTDOWN_FLAG, "w") as f:
+                f.write(str(int(time.time())))
+        except Exception:
+            pass
         # Trigger shutdown a moment *after* we return the page so it renders.
         delay = 3  # seconds
         subprocess.Popen(
@@ -1439,7 +1452,6 @@ def download(sess):
     if not os.path.exists(p): abort(404)
     return send_file(p, as_attachment=True, download_name=f"{sess}.mp4")
 
-# In app.py, replace the existing lcd_status function with this one.
 
 @app.get("/lcd_status")
 def lcd_status():
@@ -1481,13 +1493,15 @@ def lcd_status():
             "disk": _disk_stats(),
             "next_sched": next_sched_info,
             "live_idle": _idle_now(),
+            "shutting_down": os.path.exists(SHUTDOWN_FLAG),
         })
     except Exception:
         # never crash the LCD
         return jsonify({
             "active": False, "session": "", "frames": 0,
             "start_ts": None, "end_ts": None, "encoding": False,
-            "disk": _disk_stats(), "next_sched": None, "live_idle": True
+            "disk": _disk_stats(), "next_sched": None, "live_idle": True,
+            "shutting_down": os.path.exists(SHUTDOWN_FLAG),
         })
 
 @app.get("/test_capture")
