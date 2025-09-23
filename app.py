@@ -2140,15 +2140,26 @@ TPL_INDEX = r"""
 <div class="card active" id="active-session-card" style="margin-top:10px;">
   <div class="row" style="justify-content:space-between;align-items:flex-start;gap:12px;">
     <div style="flex:1;min-width:140px;max-width:200px;">
-      <div class="thumb" style="width:100%;height:auto;aspect-ratio:4/3;">
-        <img id="active-preview" src="{{ url_for('preview', sess=current_session) }}?t={{ remaining_sec or 0 }}" alt="preview" style="width:100%;height:100%;object-fit:cover;display:block;">
-      </div>
+        <div class="thumb">
+            {% if s.has_frame %}
+                <img id="preview-{{ s.name }}" src="{{ url_for('preview', sess=s.name) }}?ts={{ s.latest }}" alt="preview" loading="lazy">
+            {% else %}
+                <div id="preview-placeholder-{{ s.name }}" class="placeholder">⏳ capturing…</div>
+            {% endif %}
+            </div>
     </div>
     <div class="meta" style="flex:2;min-width:220px;gap:8px;">
       <div class="name">🔵 Active timelapse: <strong>{{ current_session }}</strong></div>
-      <div class="sub" id="active-stats">
-        <span>Frame: <span id="active-frames">0</span></span>
-        <span id="active-time" style="margin-left:8px;"></span>
+      <div class="sub">
+        <span id="frames-{{ s.name }}">{{ s.count }} frame{{ '' if s.count==1 else 's' }}</span>
+        {% if s.has_video %} • 🎞 ready{% endif %}
+        {% if current_session == s.name %}
+          {# The time-left span is hidden by default unless a remaining time exists #}
+          <span id="timeleft-{{ s.name }}"
+                {% if remaining_min is none %}style="display:none;"{% endif %}>
+            {% if remaining_min is not none %} • ⏳ {{ remaining_min }}m{{ remaining_sec_padded }}s left{% endif %}
+          </span>
+        {% endif %}
       </div>
       <div class="sub" id="active-meta">
         <span>⏱ Interval: <strong id="active-interval">{{ active_interval if active_interval is not none else interval_default }}</strong>s</span>
