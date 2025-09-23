@@ -1115,45 +1115,93 @@ def stop_route():
 
 @app.post("/shutdown")
 def shutdown_device():
-    """Safely shuts down the Raspberry Pi with a user-friendly page."""
     try:
-        # Create a 'shutting down' flag for the LCD
+        # Optional: set a flag for the LCD as you already do
         try:
             with open(SHUTDOWN_FLAG, "w") as f:
                 f.write(str(int(time.time())))
         except Exception:
             pass
-        # Trigger shutdown a moment *after* we return the page so it renders.
-        delay = 3  # seconds
+
+        # Schedule the actual shutdown a few seconds after we return this page
         subprocess.Popen(
-            ["/bin/sh", "-c", f"sleep {delay}; sudo /sbin/shutdown -h now"],
+            ["/bin/sh", "-c", "sleep 3; sudo /sbin/shutdown -h now"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
 
-        # Return a simple HTML page with clear instructions
+        # Serve a client-side countdown page
         html = """
         <!doctype html>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Shutting down…</title>
         <style>
-          body{margin:0;background:#0b0b0b;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh}
+          body{margin:0;background:#0b0b0b;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
           .card{background:#111827;border:1px solid #374151;border-radius:12px;padding:20px;max-width:560px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
           h1{margin:0 0 8px;font-size:20px}
           p{margin:6px 0;color:#cbd5e1}
-          .dots::after{content:".";animation:dot 1.2s steps(1,end) infinite}
-          @keyframes dot{0%{content:"."}33%{content:".."}66%{content:"..."}}
+          .timer{font-variant-numeric: tabular-nums}
+          .dim{color:#94a3b8}
         </style>
         <div class="card">
-          <h1>Shutting down<span class="dots"></span></h1>
-          <p>Please wait. The system will power off shortly.</p>
+          <h1 id="title">Shutting down…</h1>
+          <p class="dim">Please wait. The system will power off shortly.</p>
           <p><strong>Do not unplug power</strong> until the green LED stops blinking and turns off.</p>
-          <p>If the page closes or becomes unresponsive, that's normal during shutdown.</p>
+          <p class="timer">Estimated time remaining: <span id="eta">01:30</span></p>
+          <p id="status" class="dim">Checking device status…</p>
+          <noscript><p><strong>Note:</strong> JavaScript is disabled; wait 90 seconds and verify the ACT LED is off before unplugging.</p></noscript>
         </div>
+        <script>
+          const SECS = 90;             // conservative window
+          const PING_MS = 2000;        // heartbeat interval
+          let left = SECS;
+          const eta = document.getElementById('eta');
+          const statusEl = document.getElementById('status');
+          const title = document.getElementById('title');
+
+          function fmt(s){
+            const m = Math.floor(s/60), r = s%60;
+            return String(m).padStart(2,'0') + ":" + String(r).padStart(2,'0');
+          }
+          eta.textContent = fmt(left);
+
+          // Countdown timer
+          const timer = setInterval(()=>{
+            left = Math.max(0, left-1);
+            eta.textContent = fmt(left);
+            if (left === 0) {
+              clearInterval(timer);
+              title.textContent = "It should be safe to unplug (double-check LED)";
+              statusEl.textContent = "If the ACT LED is off and there’s no activity, you may disconnect power.";
+            }
+          }, 1000);
+
+          // Heartbeat ping: while the Pi is still alive, this will succeed.
+          // When it starts failing, we assume the system has halted.
+          let gone = false;
+          async function ping(){
+            try {
+              const ctrl = new AbortController();
+              setTimeout(()=>ctrl.abort(), 800);
+              const r = await fetch('/lcd_status', {cache:'no-store', signal: ctrl.signal});
+              if (r.ok) {
+                if (!gone) statusEl.textContent = "Device is shutting down…";
+              } else {
+                throw new Error('bad status');
+              }
+            } catch(e) {
+              if (!gone) {
+                gone = true;
+                statusEl.textContent = "Device is offline — shutdown likely complete. Verify ACT LED is off.";
+              }
+            }
+          }
+          const hb = setInterval(ping, PING_MS);
+          ping();
+        </script>
         """
-        return html, 202, {"Content-Type": "text/html; charset=utf-8"}
+        return html, 202, {"Content-Type":"text/html; charset=utf-8"}
     except Exception as e:
-        # Fallback to JSON if something goes wrong
-        return jsonify({"error": "Failed to initiate shutdown", "message": str(e)}), 500
+        return jsonify({"error":"Failed to initiate shutdown","message":str(e)}), 500
 
 @app.post("/capture_still")
 def capture_still():

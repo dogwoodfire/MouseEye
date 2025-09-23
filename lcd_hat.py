@@ -1774,7 +1774,7 @@ def main():
                 ui._unbind_inputs()
                 if ui.bl is not None:
                     ui.bl.value = 1.0  # keep backlight on for visibility
-                ui._draw_center("Shutting down…", "Wait until green LED turns off")
+                ui._draw_center("Shutting down…", "Wait ~90S\nbefore disconnect")
             except Exception:
                 pass
             # Stop re-rendering and wait for power to cut
