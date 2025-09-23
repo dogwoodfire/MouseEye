@@ -444,10 +444,12 @@ def _start_encode_worker_once():
                 _encode_q.task_done()
                 continue
             sess, fps = task
+            lcd_was_active = False
             try:
                 lcd_was_active = _lcd_is_active()
                 if lcd_was_active:
                     _lcd_service("stop")
+
                 sess_dir = _session_path(sess)
                 out = _video_path(sess_dir)
                 frames = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
@@ -459,64 +461,132 @@ def _start_encode_worker_once():
 
                 _jobs[sess] = {"status": "encoding", "progress": 0}
 
-                # Fixed, safe pipeline: always use hardware encoder at 1280x720
-                # This avoids OOM and produces universally playable H.264.
-                # Use numbered sequence input (cheaper than globbing thousands of files)
+                # Input sequence (numbered files are cheaper than huge globs)
                 seq = os.path.join(sess_dir, "%06d.jpg")
 
-                # Best-effort gentle priorities
+                # Nice/IOnice to keep system responsive
                 prio = ["ionice", "-c2", "-n", "7", "nice", "-n", "19"]
 
-                # Choose output canvas based on current UI/camera orientation.
-                # If the LCD is set to portrait (90/270), make a portrait video (720x1280).
-                # Otherwise, make a landscape video (1280x720).
-                ui_deg = _ui_deg()  # CCW 0/90/180/270
-                if ui_deg in (90, 270):
-                    target_w, target_h = 720, 1280   # portrait canvas
-                else:
-                    target_w, target_h = 1280, 720   # landscape canvas
+                ui_deg = _ui_deg()  # 0/90/180/270 CCW from prefs
 
-                # Preserve the whole frame: scale to fit (no crop) and pad to target canvas.
-                # For portrait orientation, fix width = 720, keep height dynamic
-                # For landscape, fix width = 1280, keep height dynamic
+                # Build the hardware-encode command first.
+                # We avoid any padding; we scale to a sane width that preserves aspect.
                 if ui_deg in (90, 270):
-                    vf_filter = "scale=720:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
+                    # Portrait: scale portrait width; no pad
+                    vf_hw = "scale=720:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
                 else:
-                    vf_filter = "scale=1280:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
+                    # Landscape
+                    vf_hw = "scale=1280:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
 
-                # Always scale to 1280x720 (letterbox/crop to fit), hardware encode
-                common = [
-                    FFMPEG, "-y",
-                    "-nostdin", "-loglevel", "error",
+                hw_cmd = [
+                    FFMPEG, "-y", "-nostdin", "-loglevel", "error",
                     "-threads", "1",
                     "-framerate", str(fps),
                     "-start_number", "0",
                     "-i", seq,
-                    "-vf", vf_filter,
+                    "-vf", vf_hw,
                     "-vsync", "vfr",
                     "-pix_fmt", "yuv420p",
                     "-movflags", "+faststart",
                     "-c:v", "h264_v4l2m2m",
                     "-b:v", "2000k",
+                    out,
                 ]
 
-                cmd = prio + common + [out]
-
-                # Spawn ffmpeg without pipes to avoid blocking/backpressure
                 log_path = os.path.join(sess_dir, "encode.log")
+
+                # Try hardware first
+                rc = 1
                 with open(log_path, "w") as log_file:
-                    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
-                    rc = proc.wait()
-                if rc == 0 and os.path.exists(out):
+                    log_file.write("[encode] Trying hardware encoder (h264_v4l2m2m)\n")
+                    log_file.flush()
+                    try:
+                        proc = subprocess.Popen(prio + hw_cmd, stdout=log_file, stderr=log_file)
+                        rc = proc.wait()
+                    except Exception as e:
+                        log_file.write(f"[encode] HW launch failed: {e}\n")
+                        rc = 1
+
+                if rc == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
                     _jobs[sess] = {"status": "done", "progress": 100}
                 else:
-                    _jobs[sess] = {"status": "error", "progress": 0}
+                    # Hardware failed — fall back to software x264 (robust on all Pis)
+                    with open(log_path, "a") as log_file:
+                        log_file.write("[encode] HW failed; falling back to software libx264\n")
+
+                    # Build software path commands. For portrait we do a two-step so the final file is truly vertical
+                    # without padding: encode a landscape-friendly stream then tag rotate, which many players honor.
+                    if ui_deg in (90, 270):
+                        temp_land = os.path.join(sess_dir, "temp_landscape.mp4")
+                        sw_step1 = [
+                            FFMPEG, "-y", "-nostdin", "-loglevel", "error",
+                            "-threads", "1",
+                            "-framerate", str(fps),
+                            "-start_number", "0",
+                            "-i", seq,
+                            "-vf", "transpose=1,scale=1280:-2",  # rotate into landscape, then scale
+                            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                            temp_land,
+                        ]
+                        sw_step2 = [
+                            FFMPEG, "-y", "-nostdin", "-loglevel", "error",
+                            "-i", temp_land, "-c", "copy", "-metadata:s:v:0", "rotate=270", out
+                        ]
+                        rc1 = rc2 = 1
+                        with open(log_path, "a") as log_file:
+                            try:
+                                p1 = subprocess.Popen(prio + sw_step1, stdout=log_file, stderr=log_file)
+                                rc1 = p1.wait()
+                            except Exception as e:
+                                log_file.write(f"[encode] SW step1 failed: {e}\n")
+                            try:
+                                if rc1 == 0:
+                                    p2 = subprocess.Popen(prio + sw_step2, stdout=log_file, stderr=log_file)
+                                    rc2 = p2.wait()
+                            except Exception as e:
+                                log_file.write(f"[encode] SW step2 failed: {e}\n")
+                        # Clean temp if present
+                        try:
+                            if os.path.exists(temp_land):
+                                os.remove(temp_land)
+                        except Exception:
+                            pass
+                        rc = 0 if (rc1 == 0 and rc2 == 0 and os.path.exists(out) and os.path.getsize(out) > 0) else 1
+                    else:
+                        # Landscape single-pass SW
+                        sw_cmd = [
+                            FFMPEG, "-y", "-nostdin", "-loglevel", "error",
+                            "-threads", "1",
+                            "-framerate", str(fps),
+                            "-start_number", "0",
+                            "-i", seq,
+                            "-vf", "scale=1280:-2",
+                            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                            out,
+                        ]
+                        with open(log_path, "a") as log_file:
+                            try:
+                                p = subprocess.Popen(prio + sw_cmd, stdout=log_file, stderr=log_file)
+                                rc = p.wait()
+                            except Exception as e:
+                                log_file.write(f"[encode] SW encode failed: {e}\n")
+                                rc = 1
+
+                    if rc == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
+                        _jobs[sess] = {"status": "done", "progress": 100}
+                    else:
+                        _jobs[sess] = {"status": "error", "progress": 0}
             except Exception:
                 _jobs[sess] = {"status": "error", "progress": 0}
             finally:
-                if lcd_was_active:
-                    _lcd_service("start")
-                _encode_q.task_done()
+                try:
+                    if lcd_was_active:
+                        _lcd_service("start")
+                finally:
+                    _encode_q.task_done()
+
     threading.Thread(target=_encode_worker, daemon=True).start()
 
 _start_encode_worker_once()
