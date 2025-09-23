@@ -437,7 +437,7 @@ def _start_encode_worker_once():
                 if shutil.which("nice"):   prio += ["nice", "-n", "19"]
 
                 # No encode-time rotation: frames are already oriented at capture.
-                vf = []
+                vf = ["-vf", "scale=1920:-2"]
 
                 # Prefer V4L2 M2M hardware encoder if ffmpeg reports it, else libx264.
                 hw_encoder = "h264_v4l2m2m"
@@ -461,7 +461,7 @@ def _start_encode_worker_once():
                 ]
 
                 if use_hw:
-                    cmd = prio + common + [
+                    cmd = prio + common + vf + [
                         "-c:v", "h264_v4l2m2m",
                         "-b:v", "4000k",            # tune to taste
                         "-maxrate", "4000k",
@@ -469,7 +469,7 @@ def _start_encode_worker_once():
                         out
                     ]
                 else:
-                    cmd = prio + common + [
+                    cmd = prio + common + vf + [
                         "-c:v", "libx264",
                         "-preset", "veryfast",      # nicer quality than ultrafast; still light
                         "-crf", "23",
