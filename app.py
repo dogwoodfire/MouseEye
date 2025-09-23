@@ -507,6 +507,9 @@ _capture_stop_timer = None
 _capture_end_ts     = None
 _capture_start_ts   = None 
 _active_schedule_id = None
+_capture_interval = None
+_capture_fps = None
+
   #---------- LCD Power Control ----------
 @app.get("/lcd_power_status")
 def lcd_power_status():
@@ -549,7 +552,11 @@ def session_status(sess):
     return jsonify({
         "active": active,
         "frames": frames_count,
-        "remaining_sec": remaining_sec
+        "remaining_sec": remaining_sec,
+        "start_ts": (_capture_start_ts if active else None),
+        "end_ts": (_capture_end_ts if active else None),
+        "interval": (_capture_interval if active else None),
+        "fps": (_capture_fps if active else None),
     })
 
 # ---------- Helpers ----------
@@ -733,10 +740,16 @@ def _action_processor_thread():
                 interval = sched.get('interval', 10)
                 sess_name = sched.get('sess', '')
                 _active_schedule_id = payload['schedule']['id']
+                # UI: capture metadata
+                globals()['_capture_interval'] = interval
+                globals()['_capture_fps'] = sched.get('fps', DEFAULT_FPS)
             else:
                 interval = payload.get('interval', 10)
                 sess_name = payload.get('name', '')
                 _active_schedule_id = None
+                # UI: capture metadata
+                globals()['_capture_interval'] = interval
+                globals()['_capture_fps'] = DEFAULT_FPS
                 if 'duration_min' in payload:
                     _capture_end_ts = time.time() + payload['duration_min'] * 60
                     _capture_stop_timer = threading.Timer(payload['duration_min'] * 60, stop_timelapse)
@@ -757,6 +770,8 @@ def _action_processor_thread():
             
             stop_timelapse()
             _active_schedule_id = None
+            globals()['_capture_interval'] = None
+            globals()['_capture_fps'] = None
 
             if schedule_that_stopped and schedule_that_stopped.get('auto_encode') and session_to_stop:
                 time.sleep(1.5)
@@ -1068,6 +1083,10 @@ def index():
         ap_status=_ap_status_quick(),
         temp=temp_info,
         high_temp_warning=high_temp_warning,
+        active_start_ts=_capture_start_ts,
+        active_end_ts=_capture_end_ts,
+        active_interval=_capture_interval,
+        active_fps=_capture_fps,
     )
 
 @app.route("/start", methods=["POST"])
@@ -1123,10 +1142,11 @@ def stop_timelapse():
         _capture_thread.join(timeout=5.0)
 
     # Reset state
-    _capture_thread = None
     _current_session = None
     _capture_end_ts = None
     _capture_start_ts = None
+    globals()['_capture_interval'] = None
+    globals()['_capture_fps'] = None
     _stop_event = threading.Event()
 
 @app.route("/stop", methods=["GET","POST"], endpoint="stop_route")
@@ -1995,6 +2015,32 @@ TPL_INDEX = r"""
         </div>
       </div>
     </div>
+{% if current_session %}
+<div class="card active" id="active-session-card" style="margin-top:10px;">
+  <div class="row" style="justify-content:space-between;align-items:flex-start;gap:12px;">
+    <div style="flex:1;min-width:140px;max-width:200px;">
+      <div class="thumb" style="width:100%;height:auto;aspect-ratio:4/3;">
+        <img id="active-preview" src="{{ url_for('preview', sess=current_session) }}?t={{ remaining_sec or 0 }}" alt="preview" style="width:100%;height:100%;object-fit:cover;display:block;">
+      </div>
+    </div>
+    <div class="meta" style="flex:2;min-width:220px;gap:8px;">
+      <div class="name">🔵 Active timelapse: <strong>{{ current_session }}</strong></div>
+      <div class="sub" id="active-stats">
+        <span>Frame: <span id="active-frames">0</span></span>
+        <span id="active-time" style="margin-left:8px;"></span>
+      </div>
+      <div class="sub" id="active-meta">
+        <span>⏱ Interval: <strong id="active-interval">{{ active_interval if active_interval is not none else interval_default }}</strong>s</span>
+        <span style="margin-left:8px;">🎞 FPS: <strong id="active-fps">{{ active_fps if active_fps is not none else default_fps }}</strong></span>
+      </div>
+      <div class="progress show" id="active-prog" aria-label="progress"><div class="bar" id="active-bar"></div></div>
+      <div class="controls" style="margin-top:6px;">
+        <a class="btn" href="#" onclick="return stopClick(event)">⏹ Stop</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 <div class="card" style="font-weight:600;font-size:20px;border-radius: 10px 10px 0px 0px;margin-bottom:3px">Camera 📷</div>
     <div class="card" style="border-radius: 0px 0px 10px 10px;">
     <div class="row">
@@ -2554,6 +2600,79 @@ function applyBusyFromJobs(jobs) {
   pollActive();
   setInterval(pollActive, 2000);
 });
+
+{% if current_session %}
+<script>
+// --- Active session updater (preview, frames, time, progress, interval, fps) ---
+(function(){
+  const sess = {{ current_session|tojson }};
+  const framesEl = document.getElementById('active-frames');
+  const timeEl = document.getElementById('active-time');
+  const barEl = document.getElementById('active-bar');
+  const imgEl = document.getElementById('active-preview');
+  const intEl = document.getElementById('active-interval');
+  const fpsEl = document.getElementById('active-fps');
+
+  function fmtDur(s){
+    s = Math.max(0, Math.floor(s||0));
+    const m = Math.floor(s/60), r = s%60;
+    return `${m}m${String(r).padStart(2,'0')}s`;
+  }
+
+  function updateActive(st){
+    if (!st || !st.active) return;
+    framesEl && (framesEl.textContent = st.frames || 0);
+    if (typeof st.interval === 'number' && intEl) intEl.textContent = st.interval;
+    if (typeof st.fps === 'number' && fpsEl) fpsEl.textContent = st.fps;
+
+    const now = Math.floor(Date.now()/1000);
+    const start = st.start_ts || 0;
+    const end   = st.end_ts || 0;
+
+    if (st.remaining_sec != null) {
+      const rem = Math.max(0, st.remaining_sec|0);
+      timeEl && (timeEl.textContent = `• ${fmtDur(rem)} left`);
+      const total = (end && start) ? Math.max(1, end - start) : Math.max(1, rem);
+      const done  = Math.max(0, total - rem);
+      const pct   = Math.max(0, Math.min(100, Math.round(done*100/total)));
+      barEl && (barEl.style.width = pct + '%');
+    } else {
+      const elapsed = (start ? Math.max(0, now - start) : 0);
+      timeEl && (timeEl.textContent = `• running ${fmtDur(elapsed)}`);
+      barEl && (barEl.style.width = '100%');
+    }
+
+    // refresh preview (cache-bust)
+    if (imgEl) {
+      const base = `{{ url_for('preview', sess=current_session) }}`;
+      imgEl.src = base + '?t=' + Date.now();
+    }
+  }
+
+  async function pollActiveCard(){
+    try{
+      const r = await fetch({{ url_for('session_status', sess='__X__') | tojson }}.replace('__X__', encodeURIComponent(sess)), {cache:'no-store'});
+      if (!r.ok) return;
+      const st = await r.json();
+      updateActive(st);
+    }catch(_){}
+  }
+
+  // Initial paint using server-provided values
+  updateActive({
+    active:true,
+    frames:0,
+    remaining_sec: {{ remaining_sec if remaining_sec is not none else 'null' }},
+    start_ts: {{ active_start_ts if active_start_ts is not none else '0' }},
+    end_ts:   {{ active_end_ts if active_end_ts is not none else '0' }},
+    interval: {{ active_interval if active_interval is not none else 'null' }},
+    fps:      {{ active_fps if active_fps is not none else 'null' }},
+  });
+  setInterval(pollActiveCard, 1000);
+  pollActiveCard();
+})();
+</script>
+{% endif %}
 </script>
 """
 
