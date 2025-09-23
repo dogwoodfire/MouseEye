@@ -1,3 +1,8 @@
+# --- Encode helpers ---
+def _needs_pillarbox(w, h):
+    """Return True if a 4:3 frame should be pillarboxed to 16:9 for MP4 output."""
+    # treat anything not close to 16:9 as needing pillarbox
+    return (abs(w * 9 - h * 16) > 8)
 # -*- coding: utf-8 -*-
 import os, time, threading, subprocess, shutil, glob, json, mimetypes
 from datetime import datetime
@@ -431,65 +436,59 @@ def _start_encode_worker_once():
 
                 _jobs[sess] = {"status": "encoding", "progress": 0}
 
-                # be tolerant if ionice/nice not installed
-                prio = []
-                if shutil.which("ionice"): prio += ["ionice", "-c3"]
-                if shutil.which("nice"):   prio += ["nice", "-n", "19"]
-
-                # No encode-time rotation: frames are already oriented at capture.
-                vf = ["-vf", "scale=-2:1080,pad=1920:1080:(1920-iw)/2:0:black"]
-
                 # Prefer V4L2 M2M hardware encoder if ffmpeg reports it, else libx264.
                 hw_encoder = "h264_v4l2m2m"
                 use_hw = False
                 try:
                     p = subprocess.run([FFMPEG, "-hide_banner", "-encoders"],
-                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                    text=True, timeout=2)
+                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                       text=True, timeout=2)
                     use_hw = (hw_encoder in (p.stdout or ""))
                 except Exception:
                     use_hw = False
-                # Before building cmd:
+
+                # Use numbered sequence input (cheaper than globbing thousands of files)
+                seq = os.path.join(sess_dir, "%06d.jpg")
+
+                # If frames are already modest (e.g., 1640x1232), skip scaling.
+                # Only pillarbox to 1920x1080 when input is not 16:9 and you want a 16:9 mp4.
+                vf = []
+                try:
+                    from PIL import Image
+                    first = frames[0]
+                    with Image.open(first) as im:
+                        w, h = im.size
+                    if _needs_pillarbox(w, h):
+                        vf = ["-vf", "scale=-2:1080,pad=1920:1080:(1920-iw)/2:0:black"]
+                except Exception:
+                    # If probe fails, skip filters to keep CPU low
+                    vf = []
+
+                # Best-effort gentle priorities
                 prio = ["ionice", "-c2", "-n", "7", "nice", "-n", "19"]
+
                 common = [
                     FFMPEG, "-y",
+                    "-nostdin", "-loglevel", "error",
                     "-threads", "1",
                     "-framerate", str(fps),
-                    "-pattern_type", "glob",
-                    "-i", os.path.join(sess_dir, "*.jpg"),
+                    "-start_number", "0",
+                    "-i", seq,
+                    *vf,
                     "-vsync", "vfr",
                     "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart",
                 ]
 
                 if use_hw:
-                    cmd = prio + common + [
-                        "-c:v", "h264_v4l2m2m",
-                        "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k",
-                        out
-                    ]
+                    codec = ["-c:v", "h264_v4l2m2m", "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k"]
                 else:
-                    cmd = prio + common + [
-                        "-c:v", "libx264",
-                        "-preset", "veryfast",
-                        "-crf", "23",
-                        out
-                    ]
+                    codec = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
 
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True)
-                while True:
-                    line = proc.stdout.readline()
-                    if not line and proc.poll() is not None:
-                        break
-                    if "frame=" in line:
-                        try:
-                            parts = line.split("frame=")[-1].strip().split()
-                            frame_num = int(parts[0])
-                            prog = int((frame_num / max(1, total_frames)) * 99)
-                            _jobs[sess]["progress"] = max(0, min(99, prog))
-                        except Exception:
-                            pass
+                cmd = prio + common + codec + [out]
 
+                # Spawn ffmpeg without pipes to avoid blocking/backpressure
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 rc = proc.wait()
                 if rc == 0 and os.path.exists(out):
                     _jobs[sess] = {"status": "done", "progress": 100}
