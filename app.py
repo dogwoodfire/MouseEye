@@ -477,8 +477,12 @@ def _start_encode_worker_once():
                     target_w, target_h = 1280, 720   # landscape canvas
 
                 # Preserve the whole frame: scale to fit (no crop) and pad to target canvas.
-                vf_filter = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease," \
-                            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2"
+                # For portrait orientation, fix width = 720, keep height dynamic
+                # For landscape, fix width = 1280, keep height dynamic
+                if ui_deg in (90, 270):
+                    vf_filter = "scale=720:-2"   # vertical video, preserve aspect
+                else:
+                    vf_filter = "scale=1280:-2"  # horizontal video, preserve aspect
 
                 # Always scale to 1280x720 (letterbox/crop to fit), hardware encode
                 common = [
