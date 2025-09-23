@@ -471,17 +471,22 @@ def _start_encode_worker_once():
                 # Nice/IOnice to keep system responsive
                 prio = ["ionice", "-c2", "-n", "7", "nice", "-n", "19"]
 
-                ui_deg = _ui_deg()  # 0/90/180/270 CCW from prefs
-                force_sw_landscape = (ui_deg in (0, 180))
+                # Determine actual orientation by probing the first *rotated* frame.
+                try:
+                    with Image.open(frames[0]) as _probe_im:
+                        _fw, _fh = _probe_im.size
+                    is_portrait = (_fh > _fw)
+                except Exception:
+                    # Fallback to UI hint if probe fails
+                    is_portrait = (_ui_deg() in (90, 270))
 
-                # Build the hardware-encode command first.
-                # We avoid any padding; we scale to a sane width that preserves aspect.
-                if ui_deg in (90, 270):
-                    # Portrait: scale portrait width; no pad
-                    vf_hw = "scale=720:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
+                # Build the hardware-encode filter chain (no padding)
+                if is_portrait:
+                    # portrait: downscale width a bit, align, and force square pixels
+                    vf_hw = "scale=720:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16,setsar=1"
                 else:
-                    # Landscape 4:3 → best HW-safe quality without >1080 height
-                    vf_hw = "scale=1440:1080,scale=trunc(iw/16)*16:trunc(ih/16)*16"
+                    # landscape: keep native size (aligned), and force square pixels
+                    vf_hw = "scale=trunc(iw/16)*16:trunc(ih/16)*16,setsar=1"
 
                 hw_cmd = [
                     FFMPEG, "-y", "-nostdin", "-loglevel", "error",
@@ -503,6 +508,12 @@ def _start_encode_worker_once():
                 # Try hardware first
                 rc = 1
                 with open(log_path, "w") as log_file:
+                    # Log detected orientation and probe size (if available)
+                    try:
+                        log_file.write(f"[encode] Detected orientation: {'portrait' if is_portrait else 'landscape'} (probe {_fw}x{_fh})\n")
+                    except Exception:
+                        log_file.write(f"[encode] Detected orientation: {'portrait' if is_portrait else 'landscape'}\n")
+
                     log_file.write("[encode] Trying hardware encoder (h264_v4l2m2m)\n")
                     log_file.flush()
                     try:
@@ -521,7 +532,7 @@ def _start_encode_worker_once():
 
                     # Build software path commands. For portrait we do a two-step so the final file is truly vertical
                     # without padding: encode a landscape-friendly stream then tag rotate, which many players honor.
-                    if ui_deg in (90, 270):
+                    if is_portrait:
                         temp_land = os.path.join(sess_dir, "temp_landscape.mp4")
                         sw_step1 = [
                             FFMPEG, "-y", "-nostdin", "-loglevel", "error",
