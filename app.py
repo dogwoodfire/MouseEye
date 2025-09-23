@@ -439,18 +439,41 @@ def _start_encode_worker_once():
                 # No encode-time rotation: frames are already oriented at capture.
                 vf = []
 
-                cmd = prio + [
+                # Prefer V4L2 M2M hardware encoder if ffmpeg reports it, else libx264.
+                hw_encoder = "h264_v4l2m2m"
+                use_hw = False
+                try:
+                    p = subprocess.run([FFMPEG, "-hide_banner", "-encoders"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    text=True, timeout=2)
+                    use_hw = (hw_encoder in (p.stdout or ""))
+                except Exception:
+                    use_hw = False
+
+                common = [
                     FFMPEG, "-y",
+                    "-threads", "1",               # keep CPU predictable
                     "-framerate", str(fps),
                     "-pattern_type", "glob",
                     "-i", os.path.join(sess_dir, "*.jpg"),
-                    *vf,
-                    "-crf", "20",
-                    "-c:v", "libx264",
-                    "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p",
-                    out
                 ]
+
+                if use_hw:
+                    cmd = prio + common + [
+                        "-c:v", "h264_v4l2m2m",
+                        "-b:v", "4000k",            # tune to taste
+                        "-maxrate", "4000k",
+                        "-bufsize", "8000k",
+                        out
+                    ]
+                else:
+                    cmd = prio + common + [
+                        "-c:v", "libx264",
+                        "-preset", "veryfast",      # nicer quality than ultrafast; still light
+                        "-crf", "23",
+                        out
+                    ]
 
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, text=True)
