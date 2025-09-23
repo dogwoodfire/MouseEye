@@ -353,7 +353,6 @@ app = Flask(__name__)
 app.jinja_env.globals.update(datetime=datetime)
 
 # Robust clear of shutdown flag at startup (in case import-time missed it)
-@app.before_first_request
 def _boot_clear_shutdown_flag():
     """Ensure any stale shutdown flag is removed on fresh boot/reload."""
     try:
@@ -361,6 +360,17 @@ def _boot_clear_shutdown_flag():
             os.remove(SHUTDOWN_FLAG)
     except Exception:
         pass
+
+# Flask 3.x removed before_first_request on the app instance. Prefer before_serving if available.
+try:
+    if hasattr(app, "before_serving"):
+        app.before_serving(_boot_clear_shutdown_flag)
+    else:
+        # Fallback: run once at import time
+        _boot_clear_shutdown_flag()
+except Exception:
+    # Last resort: run now; import-time clear above should have handled it anyway.
+    _boot_clear_shutdown_flag()
 
 # --- schedule_addon absolute-path import & init ---
 # try:
