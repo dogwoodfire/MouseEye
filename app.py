@@ -467,6 +467,19 @@ def _start_encode_worker_once():
                 # Best-effort gentle priorities
                 prio = ["ionice", "-c2", "-n", "7", "nice", "-n", "19"]
 
+                # Choose output canvas based on current UI/camera orientation.
+                # If the LCD is set to portrait (90/270), make a portrait video (720x1280).
+                # Otherwise, make a landscape video (1280x720).
+                ui_deg = _ui_deg()  # CCW 0/90/180/270
+                if ui_deg in (90, 270):
+                    target_w, target_h = 720, 1280   # portrait canvas
+                else:
+                    target_w, target_h = 1280, 720   # landscape canvas
+
+                # Preserve the whole frame: scale to fit (no crop) and pad to target canvas.
+                vf_filter = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease," \
+                            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2"
+
                 # Always scale to 1280x720 (letterbox/crop to fit), hardware encode
                 common = [
                     FFMPEG, "-y",
@@ -475,7 +488,7 @@ def _start_encode_worker_once():
                     "-framerate", str(fps),
                     "-start_number", "0",
                     "-i", seq,
-                    "-vf", "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
+                    "-vf", vf_filter,
                     "-vsync", "vfr",
                     "-pix_fmt", "yuv420p",
                     "-movflags", "+faststart",
@@ -490,7 +503,6 @@ def _start_encode_worker_once():
                 with open(log_path, "w") as log_file:
                     proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
                     rc = proc.wait()
-                rc = proc.wait()
                 if rc == 0 and os.path.exists(out):
                     _jobs[sess] = {"status": "done", "progress": 100}
                 else:
