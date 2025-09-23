@@ -322,6 +322,10 @@ CAPTURE_INTERVAL_SEC = 10
 CAPTURE_WIDTH   = "3280"
 CAPTURE_HEIGHT  = "2464"
 CAPTURE_QUALITY = "95"
+
+# timelapse-only capture size (4:3 to avoid cropping)
+TL_WIDTH  = "1640"         # or "1920"
+TL_HEIGHT = "1232"         # or "1440"
 #
 # Rotation policy:
 # - 180° is handled in hardware (rpicam --rotation 180).
@@ -908,7 +912,7 @@ def _capture_loop(sess_dir, interval):
     cmd = [
         CAMERA_STILL,
         "-o", jpg_pattern,
-        "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
+        "--width", TL_WIDTH, "--height", TL_HEIGHT,
         "--quality", CAPTURE_QUALITY,
         "--nopreview",
         "--exposure", "normal",       # Add this line for consistent exposure
