@@ -822,7 +822,7 @@ def _capture_loop(sess_dir, interval):
     cmd = [
         CAMERA_STILL,
         "-o", jpg_pattern,
-        "--width", "1640", "--height", "1232",
+        "--width", CAPTURE_WIDTH, "--height", CAPTURE_HEIGHT,
         "--quality", CAPTURE_QUALITY,
         "--nopreview",
         "--exposure", "normal",       # Add this line for consistent exposure
