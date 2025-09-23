@@ -432,10 +432,26 @@ import queue
 _encode_q = queue.Queue()
 _action_q = queue.Queue()
 
-def _start_encode_worker_once():
+ddef _start_encode_worker_once():
     if getattr(_start_encode_worker_once, "_started", False):
         return
     _start_encode_worker_once._started = True
+
+    def _run_cmd_logged(cmd, log_path):
+        """Run a subprocess and append its command + rc to the session encode.log."""
+        try:
+            with open(log_path, "a") as lf:
+                lf.write("\n=== RUN ===\n")
+                lf.write(" ".join(cmd) + "\n")
+                lf.flush()
+                proc = subprocess.run(cmd, stdout=lf, stderr=lf, check=False)
+                lf.write(f"\n=== RC: {proc.returncode} ===\n")
+                lf.flush()
+                return proc.returncode
+        except Exception as e:
+            with open(log_path, "a") as lf:
+                lf.write(f"\n[run_cmd] Exception: {e}\n")
+            return 9999
 
     def _encode_worker():
         while True:
@@ -443,80 +459,179 @@ def _start_encode_worker_once():
             if not task:
                 _encode_q.task_done()
                 continue
+
             sess, fps = task
+            sess_dir = _session_path(sess)
+            out_mp4  = _video_path(sess_dir)
+            seq      = os.path.join(sess_dir, "%06d.jpg")
+            log_path = os.path.join(sess_dir, "encode.log")
+
+            lcd_was_active = False
             try:
+                # Prep log
+                with open(log_path, "w") as lf:
+                    lf.write(f"[{datetime.now()}] Encode start for {sess}\n")
+
+                # Stop LCD to free CPU/IO
                 lcd_was_active = _lcd_is_active()
                 if lcd_was_active:
                     _lcd_service("stop")
-                sess_dir = _session_path(sess)
-                out = _video_path(sess_dir)
+
+                # Basic checks
                 frames = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
-                total_frames = len(frames)
-                if total_frames == 0:
-                    _jobs[sess] = {"status": "error", "progress": 0}
+                if not frames:
+                    _jobs[sess] = {"status": "error", "progress": 0, "reason": "no_frames"}
                     _encode_q.task_done()
                     continue
 
                 _jobs[sess] = {"status": "encoding", "progress": 0}
 
-                # Fixed, safe pipeline: always use hardware encoder at 1280x720
-                # This avoids OOM and produces universally playable H.264.
-                # Use numbered sequence input (cheaper than globbing thousands of files)
-                seq = os.path.join(sess_dir, "%06d.jpg")
+                # Decide orientation based on UI rotation
+                ui_deg = _ui_deg()  # 0/90/180/270 (CCW)
+                is_portrait = ui_deg in (90, 270)
 
-                # Best-effort gentle priorities
+                # Gentle priorities
                 prio = ["ionice", "-c2", "-n", "7", "nice", "-n", "19"]
 
-                # Choose output canvas based on current UI/camera orientation.
-                # If the LCD is set to portrait (90/270), make a portrait video (720x1280).
-                # Otherwise, make a landscape video (1280x720).
-                ui_deg = _ui_deg()  # CCW 0/90/180/270
-                if ui_deg in (90, 270):
-                    target_w, target_h = 720, 1280   # portrait canvas
+                # Build HW-first commands
+                # We always scale-by-width preserving aspect (no crop, no pad).
+                # Portrait path: transpose -> encode landscape -> rotate back via metadata (lossless).
+                if is_portrait:
+                    # Step A: encode to temp (landscape frames by transpose=1)
+                    temp_hw = os.path.join(sess_dir, "temp_hw.mp4")
+                    vf_hw   = "transpose=1,scale=1280:-2"
+
+                    hw_cmd_A = prio + [
+                        FFMPEG, "-y", "-nostdin", "-loglevel", "info",
+                        "-threads", "1",
+                        "-framerate", str(fps),
+                        "-start_number", "0",
+                        "-i", seq,
+                        "-vf", vf_hw,
+                        "-vsync", "vfr",
+                        "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart",
+                        "-c:v", "h264_v4l2m2m",
+                        "-b:v", "2000k",
+                        temp_hw,
+                    ]
+
+                    # Step B: lossless rotate 270° via metadata flag
+                    hw_cmd_B = prio + [
+                        FFMPEG, "-y", "-nostdin", "-loglevel", "info",
+                        "-i", temp_hw,
+                        "-c", "copy",
+                        "-metadata:s:v:0", "rotate=270",
+                        out_mp4,
+                    ]
+
+                    rcA = _run_cmd_logged(hw_cmd_A, log_path)
+                    if rcA == 0:
+                        rcB = _run_cmd_logged(hw_cmd_B, log_path)
+                        if rcB == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 0:
+                            _jobs[sess] = {"status": "done", "progress": 100}
+                            # Clean temp
+                            try: os.remove(temp_hw)
+                            except Exception: pass
+                            _encode_q.task_done()
+                            continue
+                    # HW failed → fall back to SW below
+
                 else:
-                    target_w, target_h = 1280, 720   # landscape canvas
+                    # Landscape: single-pass HW encode
+                    vf_hw = "scale=1280:-2"
+                    hw_cmd = prio + [
+                        FFMPEG, "-y", "-nostdin", "-loglevel", "info",
+                        "-threads", "1",
+                        "-framerate", str(fps),
+                        "-start_number", "0",
+                        "-i", seq,
+                        "-vf", vf_hw,
+                        "-vsync", "vfr",
+                        "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart",
+                        "-c:v", "h264_v4l2m2m",
+                        "-b:v", "2000k",
+                        out_mp4,
+                    ]
+                    rc = _run_cmd_logged(hw_cmd, log_path)
+                    if rc == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 0:
+                        _jobs[sess] = {"status": "done", "progress": 100}
+                        _encode_q.task_done()
+                        continue
+                    # HW failed → fall back to SW below
 
-                # Preserve the whole frame: scale to fit (no crop) and pad to target canvas.
-                # For portrait orientation, fix width = 720, keep height dynamic
-                # For landscape, fix width = 1280, keep height dynamic
-                if ui_deg in (90, 270):
-                    vf_filter = "scale=720:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
+                # ========= Software fallback (libx264, ultrafast) =========
+                if is_portrait:
+                    temp_sw = os.path.join(sess_dir, "temp_sw.mp4")
+                    # Slightly smaller width for safety on Pi CPUs
+                    vf_sw_A = "transpose=1,scale=720:-2"
+                    sw_cmd_A = prio + [
+                        FFMPEG, "-y", "-nostdin", "-loglevel", "info",
+                        "-threads", "1",
+                        "-framerate", str(fps),
+                        "-start_number", "0",
+                        "-i", seq,
+                        "-vf", vf_sw_A,
+                        "-vsync", "vfr",
+                        "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart",
+                        "-c:v", "libx264",
+                        "-preset", "ultrafast",
+                        "-crf", "23",
+                        temp_sw,
+                    ]
+                    sw_cmd_B = prio + [
+                        FFMPEG, "-y", "-nostdin", "-loglevel", "info",
+                        "-i", temp_sw,
+                        "-c", "copy",
+                        "-metadata:s:v:0", "rotate=270",
+                        out_mp4,
+                    ]
+                    rcA = _run_cmd_logged(sw_cmd_A, log_path)
+                    if rcA == 0:
+                        rcB = _run_cmd_logged(sw_cmd_B, log_path)
+                        if rcB == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 0:
+                            _jobs[sess] = {"status": "done", "progress": 100}
+                            try: os.remove(temp_sw)
+                            except Exception: pass
+                            _encode_q.task_done()
+                            continue
                 else:
-                    vf_filter = "scale=1280:-2,scale=trunc(iw/16)*16:trunc(ih/16)*16"
+                    vf_sw = "scale=1280:-2"
+                    sw_cmd = prio + [
+                        FFMPEG, "-y", "-nostdin", "-loglevel", "info",
+                        "-threads", "1",
+                        "-framerate", str(fps),
+                        "-start_number", "0",
+                        "-i", seq,
+                        "-vf", vf_sw,
+                        "-vsync", "vfr",
+                        "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart",
+                        "-c:v", "libx264",
+                        "-preset", "ultrafast",
+                        "-crf", "23",
+                        out_mp4,
+                    ]
+                    rc = _run_cmd_logged(sw_cmd, log_path)
+                    if rc == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 0:
+                        _jobs[sess] = {"status": "done", "progress": 100}
+                        _encode_q.task_done()
+                        continue
 
-                # Always scale to 1280x720 (letterbox/crop to fit), hardware encode
-                common = [
-                    FFMPEG, "-y",
-                    "-nostdin", "-loglevel", "error",
-                    "-threads", "1",
-                    "-framerate", str(fps),
-                    "-start_number", "0",
-                    "-i", seq,
-                    "-vf", vf_filter,
-                    "-vsync", "vfr",
-                    "-pix_fmt", "yuv420p",
-                    "-movflags", "+faststart",
-                    "-c:v", "h264_v4l2m2m",
-                    "-b:v", "2000k",
-                ]
+                # If we reach here, both HW and SW failed.
+                _jobs[sess] = {"status": "error", "progress": 0}
 
-                cmd = prio + common + [out]
-
-                # Spawn ffmpeg without pipes to avoid blocking/backpressure
-                log_path = os.path.join(sess_dir, "encode.log")
-                with open(log_path, "w") as log_file:
-                    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
-                    rc = proc.wait()
-                if rc == 0 and os.path.exists(out):
-                    _jobs[sess] = {"status": "done", "progress": 100}
-                else:
-                    _jobs[sess] = {"status": "error", "progress": 0}
-            except Exception:
+            except Exception as e:
+                with open(log_path, "a") as lf:
+                    lf.write(f"\n[worker] Exception: {e}\n")
                 _jobs[sess] = {"status": "error", "progress": 0}
             finally:
                 if lcd_was_active:
                     _lcd_service("start")
                 _encode_q.task_done()
+
     threading.Thread(target=_encode_worker, daemon=True).start()
 
 _start_encode_worker_once()
@@ -2646,647 +2761,4 @@ function applyBusyFromJobs(jobs) {
   // Initial UI state + start polling loops
   applyControlState();
   pollJobsAndUpdateUI();
-  setInterval(pollJobsAndUpdateUI, 1000);
-
-  pollActive();
-  setInterval(pollActive, 2000);
-});
-
-{% if current_session %}
-<script>
-// --- Active session updater (preview, frames, time, progress, interval, fps) ---
-(function(){
-  const sess = {{ current_session|tojson }};
-  const framesEl = document.getElementById('active-frames');
-  const timeEl = document.getElementById('active-time');
-  const barEl = document.getElementById('active-bar');
-  const imgEl = document.getElementById('active-preview');
-  const intEl = document.getElementById('active-interval');
-  const fpsEl = document.getElementById('active-fps');
-
-  function fmtDur(s){
-    s = Math.max(0, Math.floor(s||0));
-    const m = Math.floor(s/60), r = s%60;
-    return `${m}m${String(r).padStart(2,'0')}s`;
-  }
-
-  function updateActive(st){
-    if (!st || !st.active) return;
-    framesEl && (framesEl.textContent = st.frames || 0);
-    if (typeof st.interval === 'number' && intEl) intEl.textContent = st.interval;
-    if (typeof st.fps === 'number' && fpsEl) fpsEl.textContent = st.fps;
-
-    const now = Math.floor(Date.now()/1000);
-    const start = st.start_ts || 0;
-    const end   = st.end_ts || 0;
-
-    if (st.remaining_sec != null) {
-      const rem = Math.max(0, st.remaining_sec|0);
-      timeEl && (timeEl.textContent = `• ${fmtDur(rem)} left`);
-      const total = (end && start) ? Math.max(1, end - start) : Math.max(1, rem);
-      const done  = Math.max(0, total - rem);
-      const pct   = Math.max(0, Math.min(100, Math.round(done*100/total)));
-      barEl && (barEl.style.width = pct + '%');
-    } else {
-      const elapsed = (start ? Math.max(0, now - start) : 0);
-      timeEl && (timeEl.textContent = `• running ${fmtDur(elapsed)}`);
-      barEl && (barEl.style.width = '100%');
-    }
-
-    // refresh preview (cache-bust)
-    if (imgEl) {
-      const base = `{{ url_for('preview', sess=current_session) }}`;
-      imgEl.src = base + '?t=' + Date.now();
-    }
-  }
-
-  async function pollActiveCard(){
-    try{
-      const r = await fetch({{ url_for('session_status', sess='__X__') | tojson }}.replace('__X__', encodeURIComponent(sess)), {cache:'no-store'});
-      if (!r.ok) return;
-      const st = await r.json();
-      updateActive(st);
-    }catch(_){}
-  }
-
-  // Initial paint using server-provided values
-  updateActive({
-    active:true,
-    frames:0,
-    remaining_sec: {{ remaining_sec if remaining_sec is not none else 'null' }},
-    start_ts: {{ active_start_ts if active_start_ts is not none else '0' }},
-    end_ts:   {{ active_end_ts if active_end_ts is not none else '0' }},
-    interval: {{ active_interval if active_interval is not none else 'null' }},
-    fps:      {{ active_fps if active_fps is not none else 'null' }},
-  });
-  setInterval(pollActiveCard, 1000);
-  pollActiveCard();
-})();
-</script>
-{% endif %}
-</script>
-"""
-
-TPL_STILLS = r"""
-<!doctype html>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Stills Gallery</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 0; background:#f8fafc; color: #111827;}
-  header { background:#fff; border-bottom:1px solid #e5e7eb; padding: 10px 12px; display:flex; gap:10px; align-items:center; }
-  header h1 { margin: 0; font-size: 18px; }
-  main { padding: 12px; max-width: 1200px; margin: 0 auto; }
-  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-  .photo-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
-  .photo-card img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; }
-  .photo-card .info { padding: 8px; }
-  .photo-card .info a { color: #111827; text-decoration: none; }
-  .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 10px; font-size:14px; text-decoration:none; }
-  .btn-del { background-color:#fee2e2; border-color:#fecaca; color:#991b1b; }
-  .footer { position: sticky; bottom: 0; background:#fff; border-top:1px solid #e5e7eb; padding:15px; }
-  .card { background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; padding: 12px; margin: 12px 0px; box-shadow: 0 1px 2px rgba(0,0,0,.04);}
-</style>
-    <header>
-      <a class="btn" href="{{ url_for('index') }}">← Back to Timelapse</a>
-      <h1>📷 Stills Gallery</h1>
-
-    </header>
-<main>
-  {% if not stills %}
-    <p>No stills captured yet. Press KEY3 on the device to take one.</p>
-  {% else %}
-    <div class="gallery">
-    {% for filename in stills %}
-      <div class="photo-card">
-        <a href="{{ url_for('serve_still', filename=filename) }}" target="_blank">
-          <img src="{{ url_for('serve_still', filename=filename) }}" alt="{{ filename }}" loading="lazy">
-        </a>
-        <div class="info">
-          <div style="font-size: 12px; margin-bottom: 8px;">{{ filename }}</div>
-          <form action="{{ url_for('delete_still', filename=filename) }}" method="post" onsubmit="return confirm('Delete this image?');">
-            <button class="btn btn-del" type="submit">Delete</button>
-          </form>
-        </div>
-      </div>
-    {% endfor %}
-    </div>
-  {% endif %}
-{% if stills %}
-<div class="footer card">
-
-    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-      <a class="btn" href="{{ url_for('download_stills_zip') }}">⬇️ Download All (.zip)</a>
-
-      <form action="{{ url_for('delete_all_stills') }}" method="post" onsubmit="return confirm('Are you sure you want to permanently delete ALL still images? This cannot be undone.');">
-        <button type="submit" class="btn btn-del">🗑️ Delete All</button>
-      </form>
-    </div>
-</div>
-{% endif %}
-</main>
-"""
-TPL_STILL_PREVIEW = r"""
-<!doctype html>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Still Preview</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 0; background:#f8fafc; color: #111827;}
-  header { background:#fff; border-bottom:1px solid #e5e7eb; padding: 10px 12px; display:flex; gap:10px; align-items:center; }
-  header h1 { margin: 0; font-size: 18px; }
-  main { padding: 12px; max-width: 1200px; margin: 0 auto; text-align: center; }
-  img { max-width: 100%; height: auto; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; }
-  .btn { border:1px solid #e5e7eb; background: #f3f4f6; color: #111827; border-radius:10px; padding:8px 0px; font-size:14px; text-decoration:none; margin: 0 5px; display: inline-flex; align-items: center; justify-content: center; }
-  .button-bar { display: flex; gap: 10px; margin-top: 0px; }
-  .button-bar .btn { flex: 1; margin: 0; }
-</style>
-<header>
-  <h1>📷 Photo Preview</h1>
-</header>
-<main>
-  <img src="{{ url_for('serve_still', filename=filename) }}" alt="Captured still image">
-  <div class="button-bar">
-    <a class="btn" href="{{ url_for('index') }}">← Back to Home</a>
-    <a class="btn" href="{{ url_for('stills_gallery') }}">🖼️ View Gallery</a>
-    <a class="btn" href="{{ url_for('serve_still', filename=filename) }}" download>⬇️ Download</a>
-  </div>
-</main>
-"""
-
-# ======== Simple Scheduler ========
-import threading, time, urllib.request, urllib.parse
-
-_sched_lock = threading.Lock()
-_sched_state = {}       # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
-_sched_start_t = None   # handle to the scheduled start timer
-_sched_stop_t  = None   # handle to the scheduled stop timer
-
-def _get_next_schedule():
-    """Return a dict for the next (or currently active) schedule, or None."""
-    now = int(time.time())
-    
-    # Only consider schedules that haven't ended more than 60 seconds ago.
-    # This grace period gives the stop logic a chance to fire.
-    upcoming = [(sid, st) for sid, st in _schedules.items()
-                if int(st.get("end_ts", 0)) > now - 60]
-    
-    if not upcoming:
-        return None
-
-    # Sort so a currently-active one comes first; otherwise the earliest start
-    def _key(item):
-        st = item[1]
-        start = int(st.get("start_ts", 0))
-        # active ones sort as 'now'; future ones by their start time
-        return (max(start, now), start)
-
-    sid, st = sorted(upcoming, key=_key)[0]
-    try:
-        start_h = datetime.fromtimestamp(int(st["start_ts"])).strftime("%a %Y-%m-%d %H:%M")
-        end_h   = datetime.fromtimestamp(int(st["end_ts"])).strftime("%a %Y-%m-%d %H:%M")
-    except Exception:
-        start_h = end_h = "?"
-
-    return {
-        "id": sid,
-        "start_human": start_h,
-        "end_human": end_h,
-        "interval": int(st.get("interval", 10)),
-        "fps": int(st.get("fps", 24)),
-        "sess": (st.get("sess") or None),
-        "auto_encode": bool(st.get("auto_encode", False)),
-        "active_now": int(st.get("start_ts", 0)) <= now < int(st.get("end_ts", 0)),
-    }
-
-def _disk_stats(path=BASE):
-    """Return total/used/free and percents for the filesystem containing `path`."""
-    st = shutil.disk_usage(path)
-    total = st.total
-    free  = st.free
-    used  = total - free
-    to_gb = lambda b: round(b / (1024**3), 1)
-    pct_used = int((used / total) * 100) if total else 0
-    pct_free = 100 - pct_used
-    return {
-        "total_gb": to_gb(total),
-        "free_gb":  to_gb(free),
-        "used_gb":  to_gb(used),
-        "pct_used": pct_used,
-        "pct_free": pct_free,
-    }
-
-def _thumb_for(sess_dir, jpg_path):
-    # thumbs in sessions/<name>/thumbs/<filename>.jpg
-    tdir = os.path.join(sess_dir, "thumbs")
-    os.makedirs(tdir, exist_ok=True)
-    return os.path.join(tdir, os.path.basename(jpg_path))
-
-def _make_thumb(src_jpg, dst_jpg, width=320):
-    # use ffmpeg to generate a small preview; very light
-    cmd = [FFMPEG, "-y", "-i", src_jpg, "-vf", f"scale={width}:-1", "-q:v", "5", dst_jpg]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-def _free_mb(path):
-    st = shutil.disk_usage(path)
-    return int(st.free / (1024 * 1024))
-
-def _enough_space(required_mb=500):
-    # Require at least this many MB free before we start or encode
-    return _free_mb(SESSIONS_DIR) >= required_mb
-
-def _sched_http_post(path, data=None, timeout=5):
-    try:
-        url = f"http://127.0.0.1:5050{path}"
-        if data is None: 
-            data = {}
-        payload = urllib.parse.urlencode(data).encode()
-        req = urllib.request.Request(url, data=payload, method="POST")
-        urllib.request.urlopen(req, timeout=timeout).read(1)
-        return True
-    except Exception:
-        return False
-    
-def _get_cpu_temp():
-    """Reads the CPU temperature and returns it as a string, or None on error."""
-    try:
-        # vcgencmd is the standard command-line tool to get Pi hardware info
-        out = subprocess.check_output(["vcgencmd", "measure_temp"], text=True)
-        # Output is typically "temp=45.6'C", so we split on '=' and "'"
-        return out.split("=")[1].split("'")[0]
-    except (FileNotFoundError, IndexError):
-        # Handle cases where the command isn't found or output is unexpected
-        return None
-    except Exception as e:
-        print(f"Error reading CPU temp: {e}")
-        return None
-
-import subprocess
-
-def _has_overheated_since_boot():
-    """Return True if the Pi firmware reports *overheating* since last boot."""
-    try:
-        out = subprocess.check_output(
-            ["vcgencmd", "get_throttled"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-        # Expect format like: 'throttled=0x50005'
-        hex_val_str = out.split("=", 1)[1]
-        flags = int(hex_val_str, 16)
-
-        # Bit 3 = currently soft temp limit, bit 19 = has occurred since boot
-        OVERHEAT_MASK = 0x8 | 0x80000
-        return bool(flags & OVERHEAT_MASK)
-
-    except subprocess.CalledProcessError:
-        # Command executed but failed
-        return False
-    except FileNotFoundError:
-        # vcgencmd not installed or not in PATH
-        # Decide: raise, warn, or assume False
-        return False
-    except Exception as e:
-        # Unexpected format or other issue
-        # Safer to log error instead of silently swallowing
-        print(f"Error checking throttled state: {e}")
-        return False
-    
-@app.get("/cpu_temp")
-def cpu_temp_api():
-    """API endpoint to get the current CPU temperature."""
-    temp = _get_cpu_temp()
-    return jsonify({"temp": temp}) if temp else jsonify({"error": "Unavailable"}), 503
-
-@app.get("/qr_info")
-def qr_info():
-    """Provides network info for QR code generation."""
-    try:
-        is_ap = ap_is_on() #
-        if is_ap:
-            dev = _ap_active_device() #
-            ssid = _ap_ssid(dev) or HOTSPOT_NAME #
-            ip = _ipv4_for_device(dev) #
-            mode = "AP"
-        else:
-            ssid = _current_wifi_ssid() #
-            ips = _all_ipv4_local() #
-            ip = ips[0] if ips else ""
-            mode = "Wi-Fi"
-        
-        return jsonify({
-            "mode": mode,
-            "ssid": ssid or "Unknown",
-            "ip": ip or "Not Connected",
-            "url": f"http://{ip}:5050" if ip else ""
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-
-
-# ================== Simple Scheduler (ASCII-safe, single copy) ==================
-import threading, time
-from datetime import datetime
-from flask import render_template_string, request, redirect, url_for
-
-# _sched_lock = threading.Lock()
-# _sched_state = {}        # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
-# _sched_start_t = None    # threading.Timer
-# _sched_stop_t  = None
-
-SCHED_TPL = '''<!doctype html>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Schedules</title>
-<style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px}
-  h2{margin:0 0 12px}
-  form{display:grid;gap:10px;max-width:440px;margin-bottom:18px}
-  label{font-weight:600}
-  input,select,button{padding:10px;font-size:16px}
-  .cards{display:grid;gap:10px;max-width:760px}
-  .card{background:#f6f9ff;border:1px solid #d7e4ff;border-radius:8px;padding:12px}
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .muted{color:#6b7280}
-  .danger{background:#f06767;color:#fff;border:0;border-radius:10px;text-decoration:none;}
-  .link{padding:8px 12px;background:#eee;border-radius:10px;text-decoration:none;color:#111}
-  .full{width:100%}
-</style>
-
-<h2>Create a new schedule</h2>
-<form method="post" action="{{ url_for('schedule_arm') }}">
-  <label>Start (local time)</label>
-  <input type="datetime-local" name="start_local" required>
-  <label>Duration (hours & minutes)</label>
-  <div class="row">
-    <input type="number" name="duration_hr"  value=""  min="0" placeholder="hrs" style="width:120px">
-    <input type="number" name="duration_min" value="" min="0" placeholder="mins" style="width:120px">
-  </div>
-  <label>Interval (seconds)</label>
-  <input type="number" name="interval" value="{{ interval_default }}" min="1">
-  <label>FPS</label>
-  <select name="fps">
-    {% for f in fps_choices %}
-      <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
-    {% endfor %}
-  </select>
-  <label style="display:flex;gap:8px;align-items:center;margin-top:6px;">
-    <input type="checkbox" name="auto_encode" checked>
-    Auto-encode when finished
-  </label>
-  <label>Session name (optional)</label>
-  <input type="text" name="sess_name" placeholder="(auto)">
-  <button type="submit">Create Schedule</button>
-  <a class="link" href="{{ url_for('index') }}">← Back</a>
-</form>
-
-<h2>Upcoming & Active Schedules</h2>
-<div class="cards">
-  {% if not schedules %}
-    <div class="muted">No upcoming schedules.</div>
-  {% endif %}
-  {% for sid, sc in schedules %}
-  <div class="card">
-    <div><b>ID:</b> {{ sid }}</div>
-    {% if sc.sess %}<div><b>Session:</b> {{ sc.sess }}</div>{% endif %}
-    <div><b>Start:</b> {{ sc.start_h }}</div>
-    <div><b>End:</b>   {{ sc.end_h }}</div>
-    <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
-    <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
-    <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Cancel this schedule?')">
-      <button class="danger" type="submit">Cancel</button>
-    </form>
-  </div>
-  {% endfor %}
-</div>
-
-<h2 style="margin-top:24px;">Past Schedules</h2>
-{% if past_schedules %}
-  <form action="{{ url_for('delete_past_schedules') }}" method="post" onsubmit="return confirm('Are you sure you want to delete all past schedule records?');" style="margin-bottom: 12px;">
-    <button type="submit" class="danger" style="max-width: 1000px;">🗑️ Delete All Past Schedules</button>
-  </form>
-{% endif %}
-<div class="cards">
-  {% if not past_schedules %}
-    <div class="muted">No past schedules.</div>
-  {% endif %}
-  {% for sid, sc in past_schedules %}
-  <div class="card" style="opacity: 0.7;">
-    <div><b>ID:</b> {{ sid }}</div>
-    {% if sc.sess %}<div><b>Session:</b> {{ sc.sess }}</div>{% endif %}
-    <div><b>Start:</b> {{ sc.start_h }}</div>
-    <div><b>End:</b>   {{ sc.end_h }}</div>
-    <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
-    <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
-    <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Delete this past schedule record?')">
-      <button class="danger" type="submit">Delete Record</button>
-    </form>
-  </div>
-  {% endfor %}
-</div>
-'''
-
-def _sched_fire_start(interval, fps, sess_name=""):
-    try:
-        from flask import current_app
-        app = current_app._get_current_object()
-    except Exception:
-        app = globals().get('app')
-    if not app:
-        return
-    with app.app_context():
-        with app.test_client() as c:
-            c.post('/start', data={'interval': interval, 'fps': fps, 'name': sess_name})
-
-def _sched_fire_stop(sess_name="", fps=24, auto_encode=False):
-    # This function runs in a background timer thread.
-    # It's more reliable to call our app's functions directly
-    # than to simulate HTTP requests.
-
-    # First, get the name of the session that is currently running.
-    session_to_stop = _current_session
-
-    # Only proceed if there is an active session.
-    if not session_to_stop:
-        return
-
-    # Now, stop the timelapse.
-    stop_timelapse()
-
-    # Wait a moment for the stop to fully process.
-    time.sleep(1.5)
-
-    # If auto-encode is enabled for this schedule, queue the job.
-    if auto_encode:
-        # Check if the session that was stopped is the one we expected
-        # or if a session name was passed from the schedule.
-        session_to_encode = session_to_stop or sess_name
-        if session_to_encode:
-            print(f"[schedule] Auto-encoding session {session_to_encode} at {fps}fps")
-            _encode_q.put((session_to_encode, fps))
-
-@app.after_request
-def _no_store_for_diag(resp):
-    if request.path in ("/live_diag", "/live_status", "/live_debug"):
-        resp.headers["Cache-Control"] = "no-store"
-    return resp
-
-@app.get("/disk")
-def disk():
-    return jsonify(_disk_stats())
-
-@app.get("/schedule")
-def schedule_page():
-    # build view models for upcoming/active and past schedules
-    now_ts = int(time.time())
-    upcoming_schedules = []
-    past_schedules = []
-    
-    sorted_items = sorted(_schedules.items(), key=lambda kv: kv[1].get("start_ts", 0))
-    
-    for sid, st in sorted_items:
-        try:
-            start_h = datetime.fromtimestamp(int(st["start_ts"])).strftime("%a %Y-%m-%d %H:%M")
-            end_h   = datetime.fromtimestamp(int(st["end_ts"])).strftime("%a %Y-%m-%d %H:%M")
-        except Exception:
-            start_h = end_h = "?"
-        
-        # Create a view model object
-        vm = dict(st)
-        vm["start_h"] = start_h
-        vm["end_h"]   = end_h
-        
-        # Sort into the correct list based on end time
-        if int(st.get("end_ts", 0)) < now_ts:
-            past_schedules.append((sid, vm))
-        else:
-            upcoming_schedules.append((sid, vm))
-
-    return render_template_string(
-        SCHED_TPL,
-        fps_choices=globals().get("FPS_CHOICES", [10, 24, 30]),
-        default_fps=globals().get("DEFAULT_FPS", 24),
-        interval_default=globals().get("CAPTURE_INTERVAL_SEC", 10),
-        schedules=upcoming_schedules,
-        past_schedules=past_schedules # Pass the new list to the template
-    )
-
-@app.post("/schedule/arm")
-def schedule_arm():
-    start_local = request.form.get("start_local", "").strip()
-    hr_str  = request.form.get("duration_hr",  "0") or "0"
-    min_str = request.form.get("duration_min", "0") or "0" # <-- THE FIX IS HERE
-
-    try: dur_hr = int(hr_str.strip())
-    except: dur_hr = 0
-    try: dur_min = int(min_str.strip())
-    except: dur_min = 0
-    duration_min = max(1, dur_hr * 60 + dur_min)
-
-    try: interval = int(request.form.get("interval", "10") or 10)
-    except: interval = 10
-    try: fps = int(request.form.get("fps", "24") or 24)
-    except: fps = 24
-    
-    auto_encode = bool(request.form.get("auto_encode"))
-    sess_name = (request.form.get("sess_name") or "").strip()
-
-    try:
-        # Use a timezone-aware conversion to avoid DST bugs
-        local_tz = pytz.timezone('Europe/London')
-        start_dt = local_tz.localize(datetime.strptime(start_local, "%Y-%m-%dT%H:%M"))
-        start_ts = int(start_dt.timestamp())
-        end_ts = start_ts + duration_min * 60
-    except Exception:
-        # Fallback to current time + 1 minute if there is an error
-        start_ts = int(time.time()) + 60
-        end_ts = start_ts + duration_min * 60
-
-    sid = uuid.uuid4().hex[:8]
-    now_ts = int(time.time())
-    
-    with _sched_lock:
-        _schedules[sid] = dict(
-            start_ts=start_ts, end_ts=end_ts,
-            interval=interval, fps=fps,
-            sess=sess_name, auto_encode=auto_encode,
-            created_ts=now_ts,
-        )
-        _save_sched_state()
-
-    return redirect(url_for("schedule_page"))
-
-@app.post("/schedule/cancel/<sid>")
-def schedule_cancel_id(sid):
-    with _sched_lock:
-        _schedules.pop(sid, None)
-        _save_sched_state()
-    return redirect(url_for("schedule_page"))
-
-@app.get("/schedule/list")
-def schedule_list_json():
-    """
-    Compact JSON for the LCD:
-    [
-      {"id": "abcd1234", "start_ts": 123, "end_ts": 456, "interval": 10, "fps": 24,
-       "sess": "", "auto_encode": true, "created_ts": 123}
-    ]
-    """
-    now = int(time.time())
-    items = []
-    for sid, st in _schedules.items():
-        try:
-            d = dict(st)
-            d["id"] = sid
-            # normalize types
-            d["start_ts"] = int(d.get("start_ts", 0))
-            d["end_ts"]   = int(d.get("end_ts", 0))
-            d["interval"] = int(d.get("interval", 10))
-            d["fps"]      = int(d.get("fps", 24))
-            d["auto_encode"] = bool(d.get("auto_encode", False))
-            d["created_ts"]  = int(d.get("created_ts", d["start_ts"]))
-        except Exception:
-            continue
-        items.append(d)
-
-    items.sort(key=lambda d: d.get("start_ts", 0))
-    resp = jsonify(items)
-    resp.headers["Cache-Control"] = "no-store"
-    return resp
-
-@app.post("/schedule/delete")
-def schedule_delete_json():
-    """
-    Delete a schedule by id. Accepts form or JSON:
-      - form: id=<sid>
-      - json: {"id": "<sid>"}
-    Returns 204 on success (even if id didn’t exist), 400 if no id supplied.
-    """
-    sid = request.form.get("id") or (request.json or {}).get("id")
-    if not sid:
-        return ("missing id", 400)
-
-    with _sched_lock:
-        # stop timers and remove
-        _cancel_timers_for(sid)
-        _schedules.pop(sid, None)
-        _save_sched_state()
-    return ("", 204)
-
-# ================== /Simple Scheduler ==================
-# Load persisted schedule and re-arm timers on process start
-try:
-    if _load_sched_state():
-        _arm_timers_all()
-except Exception:
-    pass
-
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", "5050"))
-    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
-
-
-
-# # ---------- Main ----------
-# if __name__ == "__main__":
-#     app.run(host="0.0.0.0", port=5050) 
+  setInterval(pollJobsAndU
