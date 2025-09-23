@@ -11,6 +11,7 @@ import pytz
 import subprocess
 import io, zipfile
 from os.path import basename
+from lcd_hat import ui
 
 # ---------- Hotspot / AP control (NetworkManager) ----------
 HOTSPOT_NAME = os.environ.get("HOTSPOT_NAME", "Pi-Hotspot")
@@ -452,6 +453,10 @@ def _start_encode_worker_once():
             try:
                 lcd_was_active = _lcd_is_active()
                 if lcd_was_active:
+                    try:
+                        ui.prepare_for_encode_shutdown()
+                    except Exception as e:
+                        print(f"[lcd] Could not prepare LCD for encode: {e}")
                     _lcd_service("stop")
 
                 sess_dir = _session_path(sess)
