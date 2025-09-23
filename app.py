@@ -449,7 +449,8 @@ def _start_encode_worker_once():
                     use_hw = (hw_encoder in (p.stdout or ""))
                 except Exception:
                     use_hw = False
-
+                # Before building cmd:
+                prio = ["ionice", "-c2", "-n", "7", "nice", "-n", "19"]
                 common = [
                     FFMPEG, "-y",
                     "-threads", "1",
@@ -461,17 +462,15 @@ def _start_encode_worker_once():
                 ]
 
                 if use_hw:
-                    cmd = prio + common + vf + [
+                    cmd = prio + common + [
                         "-c:v", "h264_v4l2m2m",
-                        "-b:v", "4000k",            # tune to taste
-                        "-maxrate", "4000k",
-                        "-bufsize", "8000k",
+                        "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k",
                         out
                     ]
                 else:
-                    cmd = prio + common + vf + [
+                    cmd = prio + common + [
                         "-c:v", "libx264",
-                        "-preset", "veryfast",      # nicer quality than ultrafast; still light
+                        "-preset", "veryfast",
                         "-crf", "23",
                         out
                     ]
@@ -1537,6 +1536,12 @@ def encode(sess):
             print(f"Error removing existing video file: {e}")
             _jobs[sess] = {"status":"error","progress":0,"reason":"delete_failed"}
             return redirect(url_for("index"))
+
+    try:
+        _stop_live_proc()
+        _force_release_camera()
+    except Exception:
+        pass
 
     _jobs[sess] = {"status":"queued","progress":0}
     _encode_q.put((sess, fps))
