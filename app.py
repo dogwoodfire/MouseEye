@@ -919,68 +919,61 @@ threading.Thread(target=_action_processor_thread, daemon=True).start()
 
 
 # ---------- Capture thread ----------
-def _capture_loop(sess_dir, interval):
+# ---------- Capture thread ----------
+def _capture_loop(sess_dir, interval, quality='std'):
     global _stop_event, _last_frame_ts
 
     # Use rpicam-still's built-in timelapse mode, but write raw frames to a staging folder.
     raw_dir = os.path.join(sess_dir, "_raw")
     os.makedirs(raw_dir, exist_ok=True)
     jpg_pattern = os.path.join(raw_dir, "%06d.jpg")
+    
     total_run_time_ms = 24 * 3600 * 1000 # 24 hours in ms
 
+    # Choose resolution based on the quality parameter
     width, height = (HQ_WIDTH, HQ_HEIGHT) if quality == 'hq' else (TL_WIDTH, TL_HEIGHT)
 
     cmd = [
         CAMERA_STILL,
         "-o", jpg_pattern,
-        "--width", TL_WIDTH, "--height", TL_HEIGHT,
+        "--width", width, "--height", height, # Use the selected width and height
         "--quality", CAPTURE_QUALITY,
         "--nopreview",
-        "--exposure", "normal",       # Add this line for consistent exposure
-        "--metering", "centre",       # Add this line to measure light from the center
+        "--exposure", "normal",
+        "--metering", "centre",
         "--timelapse", str(int(interval * 1000)),
         "-t", str(total_run_time_ms)
     ]
 
     proc = None
-    # Save the log inside the specific session's directory
     log_path = os.path.join(sess_dir, "capture.log")
 
     try:
-        # Open a log file to capture errors from the camera process
         with open(log_path, "w") as log_file:
             log_file.write(f"Starting capture at {datetime.now()}\n")
             log_file.write(f"Command: {' '.join(cmd)}\n\n")
-            log_file.write("Timelapse: writing RAW frames to _raw/, rotating to session/ atomically (matches stills)\n")
             log_file.flush()
 
-            # Start the camera process, redirecting stderr to our log file
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_file)
+            processed = set()
 
-            # Track which raw frames we've already processed
-            processed = set(glob.glob(os.path.join(raw_dir, "*.jpg")))
-
-            # Wait for the stop event, polling the process to ensure it's still running.
             while not _stop_event.wait(timeout=0.25):
-                # Rotate any new raw frames immediately into the session dir (atomic)
                 try:
                     for src in sorted(glob.glob(os.path.join(raw_dir, "*.jpg"))):
                         if src in processed:
                             continue
                         base = os.path.basename(src)
                         dst  = os.path.join(sess_dir, base)
-                        _rotate_copy_to(src, dst)  # uses the same UI policy as stills
+                        _rotate_copy_to(src, dst)
                         processed.add(src)
                 except Exception as _e:
                     log_file.write(f"Rotation error: {_e}\n")
 
                 if proc.poll() is not None:
-                    # Process exited unexpectedly. The error should be in the log.
                     log_file.write(f"\nProcess exited unexpectedly with code: {proc.returncode}\n")
                     break
 
     except Exception as e:
-        # Log any Python-level errors that occur before or during Popen
         with open(log_path, "a") as log_file:
             log_file.write(f"\nAn error occurred in the capture thread: {e}\n")
 
