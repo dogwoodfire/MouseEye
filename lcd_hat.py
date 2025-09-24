@@ -75,6 +75,42 @@ _STATUS_LOCK = threading.Lock()
 
 STILLS_LIST_URL = f"{LOCAL}/stills_api"
 
+def _draw_message_and_exit(message="Encoding…"):
+    """
+    Initializes the LCD, draws a centered message, and exits.
+    This is used to display a message without the full UI overhead.
+    """
+    try:
+        serial = _mk_serial()
+        device = _mk_device(serial)
+        
+        # Load a font for the message
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", 13)
+        except Exception:
+            font = ImageFont.load_default()
+
+        # Create a blank image and draw the message
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        draw = ImageDraw.Draw(img)
+        
+        # Center the text
+        try:
+            text_width = font.getlength(message)
+        except AttributeError: # Fallback for older Pillow versions
+            text_width, _ = draw.textsize(message, font=font)
+            
+        x = (WIDTH - text_width) / 2
+        y = (HEIGHT - 13) / 2
+        draw.text((x, y), message, font=font, fill=(255, 210, 80)) # Yellow text
+
+        # Display the image
+        device.display(img)
+        time.sleep(0.5) # Allow time for the display to update
+    except Exception as e:
+        # Log any errors to stderr for debugging
+        print(f"[_draw_message_and_exit] Error: {e}", file=sys.stderr)
+
 def _poll_status_worker():
     """
     A daemon thread that polls the backend and updates the shared _STATUS_CACHE.
@@ -406,11 +442,8 @@ class UI:
 
         try:
             # Load and display a custom splash screen image unless a hide flag exists.
-            # When the app starts after an encode we set the 'lcd_hide_splash' flag
-            # so the splash doesn't flash briefly; the flag is removed on normal boot.
             splash_path = "/home/pi/timelapse/splash.png"
             if os.path.exists(LCD_HIDE_SPLASH_FLAG):
-                # don't draw the splash (service restarted after encode)
                 log("LCD: splash suppressed due to hide flag")
                 try:
                     os.remove(LCD_HIDE_SPLASH_FLAG)
@@ -422,6 +455,8 @@ class UI:
                 if splash_img.size != (WIDTH, HEIGHT):
                     splash_img = splash_img.resize((WIDTH, HEIGHT))
                 self._present(splash_img)
+                # THE FIX: The pause is now conditional on the splash being shown.
+                time.sleep(3)
         except Exception:
             # Fallback to text if the image fails to load
             self._draw_center("Booting…")
@@ -1780,31 +1815,8 @@ class UI:
 # 'encoding' image to be drawn before stopping the lcd service.
 
 def _show_encoding_once(text="Encoding…", delay=0.25):
-    try:
-        tmp_ui = UI()
-        try:
-            # Prefer an explicit helper if present, else call the drawing method
-            if hasattr(tmp_ui, "show_encoding"):
-                try:
-                    tmp_ui.show_encoding(text)
-                except Exception:
-                    tmp_ui._draw_encoding()
-            else:
-                # Fallback to the known internal method
-                try:
-                    tmp_ui._draw_encoding()
-                except Exception:
-                    pass
-            time.sleep(delay)
-        finally:
-            # Try a gentle hard clear so the display isn't left in an odd state
-            try:
-                tmp_ui._request_hard_clear()
-            except Exception:
-                pass
-    except Exception:
-        # Intentionally silent - we don't want to raise during imports
-        pass
+    # THE FIX: This function is now much simpler and directly calls the new helper.
+    _draw_message_and_exit(message=text)
 
 
 class _UIShim:
