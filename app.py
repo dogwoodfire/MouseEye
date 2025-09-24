@@ -1,3 +1,4 @@
+# MouseEye/app.py
 # --- Encode helpers ---
 def _needs_pillarbox(w, h):
     """Return True if a 4:3 frame should be pillarboxed to 16:9 for MP4 output."""
@@ -760,7 +761,6 @@ def _list_sessions():
                 "has_video": has_video,
                 "video": os.path.basename(vid) if has_video else "",
                 "count": len(glob.glob(os.path.join(sd, "*.jpg"))),
-                # Add the creation time of the directory for sorting
                 "created_ts": os.path.getctime(sd),
                 "quality": quality,
             })
@@ -918,7 +918,6 @@ def _action_processor_thread():
 threading.Thread(target=_action_processor_thread, daemon=True).start()
 
 
-# ---------- Capture thread ----------
 # ---------- Capture thread ----------
 def _capture_loop(sess_dir, interval, quality='std'):
     global _stop_event, _last_frame_ts
@@ -1233,7 +1232,7 @@ def start():
 
     quality = request.form.get("quality", "std")
 
-    payload = {'interval': interval, 'name': name}
+    payload = {'interval': interval, 'name': name, 'quality': quality}
     if duration_min > 0:
         payload['duration_min'] = duration_min
     
@@ -1991,7 +1990,6 @@ def live_page():
 <main>
   <div class="wrap">
     <div id="msg" class="msg">Loading camera…</div>
-    <!-- Note: no src initially; we set it from JS after the page is shown -->
     <img id="live-img" alt="live view" decoding="async">
   </div>
 </main>
@@ -2311,7 +2309,7 @@ TPL_INDEX = r"""
         {% if s.quality == 'hq' %}
             <span style="background:#eef2ff; color:#4338ca; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:500;">High Quality</span>
         {% endif %}
-        {% if s.has_video %} • 🎞 ready{% endif %}
+        {% if s.has_video and s.quality == 'std' %} • 🎞 ready{% endif %}
         {% if current_session == s.name %}
           {# The time-left span is hidden by default unless a remaining time exists #}
           <span id="timeleft-{{ s.name }}"
@@ -3206,7 +3204,7 @@ SCHED_TPL = '''<!doctype html>
         </label>
     </div>
   <label style="display:flex;gap:8px;align-items:center;margin-top:6px;">
-    <input type="checkbox" name="auto_encode" checked>
+    <input type="checkbox" name="auto_encode" checked id="auto_encode_checkbox">
     Auto-encode when finished
   </label>
   <label>Session name (optional)</label>
@@ -3482,4 +3480,4 @@ if __name__ == "__main__":
 
 # # ---------- Main ----------
 # if __name__ == "__main__":
-#     app.run(host="0.0.0.0", port=5050) 
+#     app.run(host="0.0.0.0", port=5050)
