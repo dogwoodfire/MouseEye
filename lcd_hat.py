@@ -1766,6 +1766,53 @@ class UI:
         self._sleep_screen()
         self.state = prev_state
 
+# ----------------- compatibility helpers -----------------
+# Provide a safe module-level `ui` shim so other processes that do
+# `from lcd_hat import ui` can import something without failing.
+# The shim implements `prepare_for_encode_shutdown()` by creating a
+# short-lived UI instance, drawing the encoding screen, waiting a
+# little for the display to update, and then returning. This avoids
+# raising ImportError while still allowing the app to request the
+# 'encoding' image to be drawn before stopping the lcd service.
+
+def _show_encoding_once(text="Encoding…", delay=0.25):
+    try:
+        tmp_ui = UI()
+        try:
+            # Prefer an explicit helper if present, else call the drawing method
+            if hasattr(tmp_ui, "show_encoding"):
+                try:
+                    tmp_ui.show_encoding(text)
+                except Exception:
+                    tmp_ui._draw_encoding()
+            else:
+                # Fallback to the known internal method
+                try:
+                    tmp_ui._draw_encoding()
+                except Exception:
+                    pass
+            time.sleep(delay)
+        finally:
+            # Try a gentle hard clear so the display isn't left in an odd state
+            try:
+                tmp_ui._request_hard_clear()
+            except Exception:
+                pass
+    except Exception:
+        # Intentionally silent - we don't want to raise during imports
+        pass
+
+
+class _UIShim:
+    """A tiny shim exposing the minimal API consumer code expects.
+    Methods should be callable before a long-lived UI instance exists.
+    """
+    def prepare_for_encode_shutdown(self):
+        _show_encoding_once()
+
+# Expose a module-level `ui` object so `from lcd_hat import ui` works
+ui = _UIShim()
+
 # ----------------- main loop -----------------
 # ----------------- main loop -----------------
 def main():
