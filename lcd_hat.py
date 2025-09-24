@@ -395,7 +395,7 @@ def _delete_schedule_backend(sched_id: str):
 # =====================================================================
 class UI:
     # States
-    HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
+    HOME, TL_INT, TL_HR, TL_MIN, TL_QUAL, TL_ENC, TL_CONFIRM, \
     SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_QUAL, SCH_ENC, SCH_CONFIRM, \
     SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING, SHUTDOWN_CONFIRM, SETTINGS_MENU, STILLS_VIEWER, QR_CODE_VIEWER = range(24)
 
