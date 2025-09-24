@@ -77,14 +77,17 @@ STILLS_LIST_URL = f"{LOCAL}/stills_api"
 
 def _draw_message_and_exit(message="Encoding…"):
     """
-    Initializes the LCD, draws a centered message, and exits.
-    This is used to display a message without the full UI overhead.
+    Initializes the LCD, draws a centered and correctly rotated message, and exits.
     """
     try:
         serial = _mk_serial()
         device = _mk_device(serial)
         
-        # Load a font for the message
+        # Load preferences to get the current rotation
+        prefs = _load_prefs()
+        rot_deg = int(prefs.get("rot_deg", 180))
+
+        # Load font
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", 13)
         except Exception:
@@ -97,18 +100,23 @@ def _draw_message_and_exit(message="Encoding…"):
         # Center the text
         try:
             text_width = font.getlength(message)
-        except AttributeError: # Fallback for older Pillow versions
+        except AttributeError:
             text_width, _ = draw.textsize(message, font=font)
-            
+        
         x = (WIDTH - text_width) / 2
         y = (HEIGHT - 13) / 2
         draw.text((x, y), message, font=font, fill=(255, 210, 80)) # Yellow text
 
-        # Display the image
+        # Rotate the image before displaying
+        if rot_deg == 180:
+            img = img.rotate(180)
+        elif rot_deg == 90:
+            img = img.rotate(-90, expand=True) # Note: luma-lcd expects this rotation
+
+        # Display the final, rotated image
         device.display(img)
-        time.sleep(0.5) # Allow time for the display to update
+        time.sleep(0.5)
     except Exception as e:
-        # Log any errors to stderr for debugging
         print(f"[_draw_message_and_exit] Error: {e}", file=sys.stderr)
 
 def _poll_status_worker():
@@ -1835,7 +1843,7 @@ def main():
     ui = UI()
     poll_thread = threading.Thread(target=_poll_status_worker, daemon=True)
     poll_thread.start()
-    time.sleep(1.0)
+    time.sleep(0.25)
 
     while True:
         # --- THIS IS THE NEW LOGIC ---
