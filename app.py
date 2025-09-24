@@ -761,7 +761,8 @@ def _list_sessions():
                 "video": os.path.basename(vid) if has_video else "",
                 "count": len(glob.glob(os.path.join(sd, "*.jpg"))),
                 # Add the creation time of the directory for sorting
-                "created_ts": os.path.getctime(sd)
+                "created_ts": os.path.getctime(sd),
+                "quality": quality,
             })
     except FileNotFoundError:
         pass # Return an empty list if the directory doesn't exist
@@ -842,7 +843,6 @@ def _action_processor_thread():
     This thread is the ONLY place that starts or stops captures.
     It reads commands from _action_q to ensure all actions are serialized and safe.
     """
-    # --- THIS IS THE FIX ---
     # All global variables that are assigned to in this function MUST be declared at the top.
     global _active_schedule_id, _capture_end_ts, _capture_stop_timer
     global _current_session, _capture_thread, _capture_start_ts
@@ -895,7 +895,7 @@ def _action_processor_thread():
             except Exception as e:
                 print(f"[processor] Error saving quality file: {e}")
 
-            _capture_thread = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
+            _capture_thread = threading.Thread(target=_capture_loop, args=(sess_dir, interval, quality), daemon=True)
             _capture_thread.start()
             
         elif action == 'stop':
