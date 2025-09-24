@@ -478,8 +478,19 @@ def _start_encode_worker_once():
                     lcd_was_active = False
 
                 if lcd_was_active:
-                    # Try to create a small flag file so the lcd service won't draw the splash on restart
+                    # Try to draw an "Encoding…" screen on the LCD before we stop its service.
+                    # We import the `ui` object from lcd_hat at call-time because the lcd
+                    # service may be managed independently and importing earlier caused
+                    # startup import errors for some setups.
                     try:
+                        try:
+                            from lcd_hat import ui as lcd_ui
+                            # This should be a lightweight call that updates the display and returns.
+                            lcd_ui.prepare_for_encode_shutdown()
+                        except Exception:
+                            # If the helper isn't present / import fails, continue gracefully.
+                            pass
+                        # Create a small flag file so the lcd service won't draw the splash on restart
                         open(LCD_HIDE_SPLASH_FLAG, 'w').close()
                     except Exception:
                         pass
