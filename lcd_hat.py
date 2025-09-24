@@ -99,15 +99,20 @@ def _draw_message_and_exit(message="Encoding…"):
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
         draw = ImageDraw.Draw(img)
         
-        # Center the text
+        # Center the icon
+        icon_x = (WIDTH - IMG_ICON_ENCODE.width) // 2
+        icon_y = 25 
+        img.paste(IMG_ICON_ENCODE, (icon_x, icon_y), mask=IMG_ICON_ENCODE)
+        
+        # Position the text below the icon
         try:
             text_width = font.getlength(message)
         except AttributeError:
             text_width, _ = draw.textsize(message, font=font)
         
-        x = (WIDTH - text_width) / 2
-        y = (HEIGHT - 13) / 2
-        draw.text((x, y), message, font=font, fill=(255, 210, 80)) # Yellow text
+        text_x = (WIDTH - text_width) / 2
+        text_y = icon_y + IMG_ICON_ENCODE.height + 10 # 10px padding
+        draw.text((text_x, text_y), message, font=font, fill=(255, 210, 80))
 
         # Rotate the image before displaying
         if rot_deg == 180:
