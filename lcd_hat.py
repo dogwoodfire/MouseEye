@@ -82,11 +82,13 @@ def _draw_message_and_exit(message="Encoding…"):
     try:
         serial = _mk_serial()
         device = _mk_device(serial)
+        device.clear()
         
         # Load preferences to get the current rotation
         prefs = _load_prefs()
         rot_deg = int(prefs.get("rot_deg", 180))
-
+        icon_encode = TablerIcons.load(OutlineIcon.MOVIE, stroke_width=2, color="white")
+        IMG_ICON_ENCODE = icon_encode.resize((45, 45))
         # Load font
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", 13)
@@ -1823,7 +1825,6 @@ class UI:
 # 'encoding' image to be drawn before stopping the lcd service.
 
 def _show_encoding_once(text="Encoding…", delay=0.25):
-    # THE FIX: This function is now much simpler and directly calls the new helper.
     _draw_message_and_exit(message=text)
 
 
