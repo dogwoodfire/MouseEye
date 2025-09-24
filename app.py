@@ -184,6 +184,7 @@ def _ensure_dirs(base_root: str):
 BASE, SESSIONS_DIR, STILLS_DIR = _ensure_dirs(BASE)
 STILLS_DIR = os.path.join(BASE, "stills")
 LCD_OFF_FLAG = os.path.join(BASE, "lcd_off.flag")
+LCD_HIDE_SPLASH_FLAG = os.path.join(BASE, "lcd_hide_splash.flag")
 
 CAMERA_STILL = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
 FFMPEG       = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
@@ -457,6 +458,11 @@ def _start_encode_worker_once():
                         UI().prepare_for_encode_shutdown()
                     except Exception as e:
                         print(f"[lcd] Could not prepare LCD for encode: {e}")
+                    # Create a small flag file to instruct the lcd service to skip showing the boot/splash image
+                    try:
+                        open(LCD_HIDE_SPLASH_FLAG, 'w').close()
+                    except Exception:
+                        pass
                     _lcd_service("stop")
 
                 sess_dir = _session_path(sess)
@@ -604,6 +610,12 @@ def _start_encode_worker_once():
             finally:
                 try:
                     if lcd_was_active:
+                        # Remove the hide-flag so the LCD resumes normal boot/splash behaviour on future restarts
+                        try:
+                            if os.path.exists(LCD_HIDE_SPLASH_FLAG):
+                                os.remove(LCD_HIDE_SPLASH_FLAG)
+                        except Exception:
+                            pass
                         _lcd_service("start")
                 finally:
                     _encode_q.task_done()

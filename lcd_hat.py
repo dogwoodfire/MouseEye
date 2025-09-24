@@ -60,6 +60,7 @@ SCHED_LIST_URL  = f"{LOCAL}/schedule/list"   # preferred if available
 SCHED_FILE      = "/home/pi/timelapse/schedule.json"  # legacy fallback
 QR_INFO_URL     = f"{LOCAL}/qr_info"
 LCD_OFF_FLAG = "/home/pi/timelapse/lcd_off.flag"
+LCD_HIDE_SPLASH_FLAG = "/home/pi/timelapse/lcd_hide_splash.flag"
 
 # AP endpoints (Flask backend should return {"on","name","device","ip","ips":[]})
 AP_STATUS_URL = f"{LOCAL}/ap/status"
@@ -404,20 +405,25 @@ class UI:
         self.qr_page_idx = 0
 
         try:
-            # Load and display a custom splash screen image
+            # Load and display a custom splash screen image unless a hide flag exists.
+            # When the app starts after an encode we set the 'lcd_hide_splash' flag
+            # so the splash doesn't flash briefly; the flag is removed on normal boot.
             splash_path = "/home/pi/timelapse/splash.png"
-            splash_img = Image.open(splash_path).convert("RGB")
-            # Ensure it's the correct size for the display
-            if splash_img.size != (WIDTH, HEIGHT): #
-                splash_img = splash_img.resize((WIDTH, HEIGHT)) #
-            self._present(splash_img)
+            if os.path.exists(LCD_HIDE_SPLASH_FLAG):
+                # don't draw the splash (service restarted after encode)
+                log("LCD: splash suppressed due to hide flag")
+            else:
+                splash_img = Image.open(splash_path).convert("RGB")
+                # Ensure it's the correct size for the display
+                if splash_img.size != (WIDTH, HEIGHT):
+                    splash_img = splash_img.resize((WIDTH, HEIGHT))
+                self._present(splash_img)
         except Exception:
             # Fallback to text if the image fails to load
             self._draw_center("Booting…")
-        
+
         # Keep splash visible for a few seconds before loading the full UI
         time.sleep(3)
-        # --- END of new splash screen code ---
 
     # ---------- panel power helpers ----------
     def _panel_off(self):
