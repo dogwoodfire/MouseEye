@@ -347,6 +347,10 @@ CAPTURE_QUALITY = "95"
 # timelapse-only capture size (4:3 to avoid cropping)
 TL_WIDTH  = "1640"         # or "1920"
 TL_HEIGHT = "1232"         # or "1440"
+
+HQ_WIDTH = "3280"
+HQ_HEIGHT = "2464"
+
 #
 # Rotation policy:
 # - 180° is handled in hardware (rpicam --rotation 180).
@@ -737,6 +741,16 @@ def _list_sessions():
             jpg = _session_latest_jpg(sd)
             vid = _video_path(sd)
             has_video = os.path.exists(vid)
+
+            quality = 'std' # Default to standard
+            quality_file = os.path.join(sd, 'quality.json')
+            if os.path.exists(quality_file):
+                try:
+                    with open(quality_file, 'r') as f:
+                        data = json.load(f)
+                        quality = data.get('quality', 'std')
+                except Exception:
+                    pass # Keep default if file is corrupted
             
             out.append({
                 "name": d,
@@ -844,6 +858,8 @@ def _action_processor_thread():
 
             print("[processor] Processing START command.")
             _stop_live_proc()
+
+            quality = payload.get('quality', 'std')
             
             if 'schedule' in payload:
                 sched = _schedules.get(payload['schedule']['id'], {})
@@ -853,6 +869,7 @@ def _action_processor_thread():
                 # UI: capture metadata
                 globals()['_capture_interval'] = interval
                 globals()['_capture_fps'] = sched.get('fps', DEFAULT_FPS)
+                quality = sched.get('quality', 'std')
             else:
                 interval = payload.get('interval', 10)
                 sess_name = payload.get('name', '')
@@ -871,6 +888,13 @@ def _action_processor_thread():
             _capture_start_ts = time.time()
             sess_dir = _session_path(_current_session)
             os.makedirs(sess_dir, exist_ok=True)
+
+            try:
+                with open(os.path.join(sess_dir, 'quality.json'), 'w') as f:
+                    json.dump({'quality': quality}, f)
+            except Exception as e:
+                print(f"[processor] Error saving quality file: {e}")
+
             _capture_thread = threading.Thread(target=_capture_loop, args=(sess_dir, interval), daemon=True)
             _capture_thread.start()
             
@@ -903,6 +927,8 @@ def _capture_loop(sess_dir, interval):
     os.makedirs(raw_dir, exist_ok=True)
     jpg_pattern = os.path.join(raw_dir, "%06d.jpg")
     total_run_time_ms = 24 * 3600 * 1000 # 24 hours in ms
+
+    width, height = (HQ_WIDTH, HQ_HEIGHT) if quality == 'hq' else (TL_WIDTH, TL_HEIGHT)
 
     cmd = [
         CAMERA_STILL,
@@ -1211,6 +1237,8 @@ def start():
     hr_str = request.form.get("duration_hours", "0") or "0"
     mn_str = request.form.get("duration_minutes", "0") or "0"
     duration_min = int(hr_str) * 60 + int(mn_str)
+
+    quality = request.form.get("quality", "std")
 
     payload = {'interval': interval, 'name': name}
     if duration_min > 0:
@@ -2223,7 +2251,15 @@ TPL_INDEX = r"""
       <input name="duration_hours" type="number" min="0" step="1" placeholder="hrs" style="width:60px">
       <input name="duration_minutes" type="number" min="0" step="1" placeholder="mins" style="width:60px">
     </div>
-    
+    <div class="row">
+        <label>Image Quality:</label>
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
+            <input type="radio" name="quality" value="std" checked> Standard (for video)
+        </label>
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
+            <input type="radio" name="quality" value="hq"> High (for export)
+        </label>
+    </div>
   <div class="row">
     <button class="btn-strong" type="submit"
             {% if current_session %}disabled title="Stop current capture first"{% endif %}>
@@ -2279,6 +2315,9 @@ TPL_INDEX = r"""
       </div>
       <div class="sub">
         <span id="frames-{{ s.name }}">{{ s.count }} frame{{ '' if s.count==1 else 's' }}</span>
+        {% if s.quality == 'hq' %}
+            <span style="background:#eef2ff; color:#4338ca; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:500;">High Quality</span>
+        {% endif %}
         {% if s.has_video %} • 🎞 ready{% endif %}
         {% if current_session == s.name %}
           {# The time-left span is hidden by default unless a remaining time exists #}
@@ -2290,6 +2329,7 @@ TPL_INDEX = r"""
       </div>
 
     <div class="controls">
+        {% if s.quality == 'std' %}
         <form action="{{ url_for('encode', sess=s.name) }}" method="post" onsubmit="showProgress('{{ s.name }}')">
           <label>🎞 FPS:</label>
             <select name="fps" {% if encoding_active %}disabled{% endif %}>
@@ -2303,8 +2343,10 @@ TPL_INDEX = r"""
             <button class="btn" type="submit">🔄 Re-encode</button>
           {% endif %}
         </form>
-        {% if s.has_video %}
-          <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Download</a>
+        {% endif %}
+        
+        {% if s.has_video and s.quality == 'std' %}
+          <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Video</a>
         {% endif %}
         {% if s.count > 0 %}
           <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}">⬇️ Images (.zip)</a>
@@ -3161,6 +3203,15 @@ SCHED_TPL = '''<!doctype html>
       <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
     {% endfor %}
   </select>
+  <label>Image Quality</label>
+    <div class="row">
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
+            <input type="radio" name="quality" value="std" checked onchange="toggleEncode(this)"> Standard (for video)
+        </label>
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
+            <input type="radio" name="quality" value="hq" onchange="toggleEncode(this)"> High (for export)
+        </label>
+    </div>
   <label style="display:flex;gap:8px;align-items:center;margin-top:6px;">
     <input type="checkbox" name="auto_encode" checked>
     Auto-encode when finished
@@ -3215,6 +3266,18 @@ SCHED_TPL = '''<!doctype html>
   </div>
   {% endfor %}
 </div>
+
+<script>
+    function toggleEncode(radio) {
+        const checkbox = document.getElementById('auto_encode_checkbox');
+        if (radio.value === 'hq') {
+            checkbox.checked = false;
+            checkbox.disabled = true;
+        } else {
+            checkbox.disabled = false;
+        }
+    }
+</script>
 '''
 
 def _sched_fire_start(interval, fps, sess_name=""):
@@ -3322,6 +3385,10 @@ def schedule_arm():
     auto_encode = bool(request.form.get("auto_encode"))
     sess_name = (request.form.get("sess_name") or "").strip()
 
+    quality = request.form.get("quality", "std")
+    if quality == 'hq':
+        auto_encode = False
+
     try:
         # Use a timezone-aware conversion to avoid DST bugs
         local_tz = pytz.timezone('Europe/London')
@@ -3341,6 +3408,7 @@ def schedule_arm():
             start_ts=start_ts, end_ts=end_ts,
             interval=interval, fps=fps,
             sess=sess_name, auto_encode=auto_encode,
+            quality=quality,
             created_ts=now_ts,
         )
         _save_sched_state()

@@ -379,6 +379,7 @@ def _post_schedule_arm(start_dt, duration_hr, duration_min, interval_s, auto_enc
         "fps":          str(int(fps)),
         "auto_encode":  "on" if auto_encode else "",
         "sess_name":    sess_name or "",
+        "quality":      self.wz_quality,
     }
     return _http_post_form(SCHED_ARM_URL, payload)
 
@@ -395,7 +396,7 @@ def _delete_schedule_backend(sched_id: str):
 class UI:
     # States
     HOME, TL_INT, TL_HR, TL_MIN, TL_ENC, TL_CONFIRM, \
-    SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_ENC, SCH_CONFIRM, \
+    SCH_INT, SCH_DATE, SCH_SH, SCH_SM, SCH_EH, SCH_EM, SCH_QUAL, SCH_ENC, SCH_CONFIRM, \
     SCHED_LIST, SCHED_DEL_CONFIRM, ENCODING, MODAL, QR_CODE, CAPTURING, SHUTDOWN_CONFIRM, SETTINGS_MENU, STILLS_VIEWER, QR_CODE_VIEWER = range(24)
 
     def __init__(self):
@@ -435,6 +436,7 @@ class UI:
         self.wz_interval = 10
         self.tl_hours = 0
         self.tl_mins  = 0
+        self.wz_quality = 'std'
         self.sch_date = now.date()
         self.sch_start_h  = now.hour
         self.sch_start_m  = (now.minute + 1) % 60
@@ -1063,6 +1065,8 @@ class UI:
             self.sch_end_m = (self.sch_end_m + (step if delta>0 else -step)) % 60
         elif self.state in (self.TL_ENC, self.SCH_ENC):
             if abs(delta) >= 1: self.wz_encode = not self.wz_encode
+        elif self.state in (self.TL_QUAL, self.SCH_QUAL):
+            if abs(delta) >= 1: self.wz_quality = 'hq' if self.wz_quality == 'std' else 'std'
         self.render()
 
     def ok(self):
@@ -1133,13 +1137,23 @@ class UI:
     
         
         # advance through TL or SCH wizard
-        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_ENC):
-            self.state += 1
+        if self.state in (self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_QUAL, self.TL_ENC):
+           # If we are on the Quality step and chose 'hq', skip the auto-encode step
+            if self.state == self.TL_QUAL and self.wz_quality == 'hq':
+                self.state = self.TL_CONFIRM
+            else:
+                self.state += 1
+
             if self.state == self.TL_CONFIRM: self.confirm_idx = 0
             self.render(); return
 
-        if self.state in (self.SCH_INT, self.SCH_DATE, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM, self.SCH_ENC):
-            self.state += 1
+        if self.state in (self.SCH_INT, self.SCH_DATE, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM, self.SCH_QUAL, self.SCH_ENC):
+            # If we are on the Quality step and chose 'hq', skip the auto-encode step
+            if self.state == self.SCH_QUAL and self.wz_quality == 'hq':
+                self.state = self.SCH_CONFIRM
+            else:
+                self.state += 1
+                
             if self.state == self.SCH_CONFIRM: self.confirm_idx = 0
             self.render(); return
 
@@ -1313,6 +1327,7 @@ class UI:
         self.tl_hours = 0
         self.tl_mins  = 0
         self.wz_encode = True
+        self.wz_quality = 'std'
         self.confirm_idx = 0
         self._request_hard_clear()
         self.state = self.TL_INT
@@ -1333,8 +1348,9 @@ class UI:
                 "duration_min": str(dur_min),
                 "interval":     str(self.wz_interval),
                 "fps":          "24",
-                "auto_encode":  "on" if self.wz_encode else "",
+                "auto_encode":  "on" if (self.wz_encode and self.wz_quality == 'std') else "",
                 "sess_name":    "",
+                "quality":      self.wz_quality # Pass quality to backend
             })
             self._draw_center("Scheduled" if ok else "Failed", "Starts now")
             time.sleep(0.8)
@@ -1355,6 +1371,7 @@ class UI:
         self.sch_end_h    = (now.hour + 1) % 24
         self.sch_end_m    = self.sch_start_m
         self.wz_encode = True
+        self.wz_quality = 'std'
         self.confirm_idx = 0
         self._request_hard_clear()
         self.state = self.SCH_INT
@@ -1379,15 +1396,18 @@ class UI:
             dur_hr, dur_min = divmod(mins, 60)
 
             self._draw_center("Arming…")
-            ok = _post_schedule_arm(
-                start_dt=start,
-                duration_hr=dur_hr,
-                duration_min=dur_min,
-                interval_s=int(self.wz_interval),
-                auto_encode=bool(self.wz_encode),
-                fps=24,
-                sess_name=""
-            )
+            start_local = start.strftime("%Y-%m-%dT%H:%M")
+            payload = {
+                "start_local": start_local,
+                "duration_hr":  str(int(dur_hr)),
+                "duration_min": str(int(dur_min)),
+                "interval":     str(int(self.wz_interval)),
+                "fps":          str(int(24)),
+                "auto_encode":  "on" if (self.wz_encode and self.wz_quality == 'std') else "",
+                "sess_name":    "",
+                "quality":      self.wz_quality
+            }
+            ok = _http_post_form(SCHED_ARM_URL, payload)
             self._draw_center("Scheduled" if ok else "Failed",
                               f"{start.strftime('%y-%m-%d %H:%M')}")
             time.sleep(0.8)
@@ -1489,13 +1509,16 @@ class UI:
         threading.Thread(target=worker, daemon=True).start()
 
     # ---------- render ----------
-    def _draw_confirm_tl(self, interval_s, h, m, auto_encode, hi):
+    def _draw_confirm_tl(self, interval_s, h, m, quality, auto_encode, hi):
         lines = [
             f"Interval:  {interval_s}s",
             f"Duration:  {h}h{m:02d}m",
-            f"Auto-enc.: {'Yes' if auto_encode else 'No'}",
-            "",
+            f"Quality:   {'High' if quality == 'hq' else 'Standard'}",
         ]
+        if quality == 'std':
+            lines.append(f"Auto-enc.: {'Yes' if auto_encode else 'No'}")
+        
+        lines.append("") # Spacer
         yes = "[Yes]" if hi == 0 else " Yes "
         no  = "[No] " if hi == 1 else " No  "
         lines.append(f"{yes}    {no}")
@@ -1503,15 +1526,18 @@ class UI:
                          footer="UP/DOWN choose, OK select",
                          highlight_idxes=set(), dividers=False)
 
-    def _draw_confirm_sch(self, interval_s, sch_date, sh, sm, eh, em, auto_encode, hi):
+    def _draw_confirm_sch(self, interval_s, sch_date, sh, sm, eh, em, quality, auto_encode, hi):
         lines = [
             f"Interval:  {interval_s}s",
             f"Date:      {sch_date.strftime('%y-%m-%d')}",
             f"Start:     {sh:02d}:{sm:02d}",
             f"End:       {eh:02d}:{em:02d}",
-            f"Auto-enc.: {'Yes' if auto_encode else 'No'}",
-            "",
+            f"Quality:   {'High' if quality == 'hq' else 'Standard'}",
         ]
+        if quality == 'std':
+             lines.append(f"Auto-enc.: {'Yes' if auto_encode else 'No'}")
+
+        lines.append("") # Spacer
         yes = "[Yes]" if hi == 0 else " Yes "
         no  = "[No] " if hi == 1 else " No  "
         lines.append(f"{yes}    {no}")
@@ -1605,6 +1631,9 @@ class UI:
         elif self.state == self.TL_MIN:
             self._draw_wizard_page("Duration mins", f"{self.tl_mins:02d}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.TL_QUAL:
+            self._draw_wizard_page("Image Quality", "High" if self.wz_quality == 'hq' else "Standard",
+                                   tips=["High quality disables auto-encode", "UP/DOWN toggle, OK next"])
         elif self.state == self.TL_ENC:
             self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
                                    tips=["UP/DOWN toggle", "OK next"])
@@ -1626,6 +1655,9 @@ class UI:
         elif self.state == self.SCH_EM:
             self._draw_wizard_page("End minute", f"{self.sch_end_m:02d}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
+        elif self.state == self.SCH_QUAL:
+            self._draw_wizard_page("Image Quality", "High" if self.wz_quality == 'hq' else "Standard",
+                                   tips=["High quality disables auto-encode", "UP/DOWN toggle, OK next"])
         elif self.state == self.SCH_ENC:
             self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
                                    tips=["UP/DOWN toggle", "OK next"])
@@ -1683,20 +1715,20 @@ class UI:
                 return
 
             if self.state in (
-                self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_ENC,
+                self.TL_INT, self.TL_HR, self.TL_MIN, self.TL_QUAL, self.TL_ENC,
                 self.SCH_INT, self.SCH_DATE, self.SCH_SH, self.SCH_SM, self.SCH_EH, self.SCH_EM, self.SCH_ENC,
             ):
                 self._render_wz(); return
 
             if self.state == self.TL_CONFIRM:
                 self._draw_confirm_tl(self.wz_interval, self.tl_hours, self.tl_mins,
-                                      self.wz_encode, self.confirm_idx); return
+                                      self.wz_quality, self.wz_encode, self.confirm_idx); return
 
             if self.state == self.SCH_CONFIRM:
                 self._draw_confirm_sch(self.wz_interval, self.sch_date,
                                        self.sch_start_h, self.sch_start_m,
                                        self.sch_end_h, self.sch_end_m,
-                                       self.wz_encode, self.confirm_idx); return
+                                       self.wz_quality, self.wz_encode, self.confirm_idx); return
 
             if self.state == self.SCHED_LIST:
                 self._maybe_hard_clear()
