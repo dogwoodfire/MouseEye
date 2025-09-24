@@ -412,6 +412,10 @@ class UI:
             if os.path.exists(LCD_HIDE_SPLASH_FLAG):
                 # don't draw the splash (service restarted after encode)
                 log("LCD: splash suppressed due to hide flag")
+                try:
+                    os.remove(LCD_HIDE_SPLASH_FLAG)
+                except Exception:
+                    pass
             else:
                 splash_img = Image.open(splash_path).convert("RGB")
                 # Ensure it's the correct size for the display

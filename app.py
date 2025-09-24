@@ -581,11 +581,6 @@ def _start_encode_worker_once():
                 try:
                     # If we previously stopped the LCD service, restart it and remove the hide flag
                     if lcd_was_active:
-                        try:
-                            if os.path.exists(LCD_HIDE_SPLASH_FLAG):
-                                os.remove(LCD_HIDE_SPLASH_FLAG)
-                        except Exception:
-                            pass
                         _lcd_service("start")
                 finally:
                     _encode_q.task_done()
