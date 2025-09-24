@@ -618,6 +618,8 @@ _active_schedule_id = None
 _capture_interval = None
 _capture_fps = None
 
+
+
   #---------- LCD Power Control ----------
 @app.get("/lcd_power_status")
 def lcd_power_status():
@@ -1655,6 +1657,38 @@ def download(sess):
     if not os.path.exists(p): abort(404)
     return send_file(p, as_attachment=True, download_name=f"{sess}.mp4")
 
+@app.get("/download_session_zip/<sess>")
+def download_session_zip(sess):
+    """Creates a ZIP archive of all images in a session and sends it for download."""
+    session_dir = _session_path(sess)
+    if not os.path.isdir(session_dir):
+        abort(404, "Session not found.")
+
+    try:
+        # Find all .jpg files, excluding any in subdirectories like _raw
+        image_files = [f for f in os.listdir(session_dir) if f.lower().endswith('.jpg')]
+        
+        if not image_files:
+            abort(404, "No images found in this session to download.")
+
+        memory_file = io.BytesIO()
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for filename in image_files:
+                file_path = os.path.join(session_dir, filename)
+                # Add file to the zip archive, using just the filename inside the zip
+                zf.write(file_path, basename(file_path))
+        
+        memory_file.seek(0)
+        
+        return send_file(
+            memory_file,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'{_safe_name(sess)}-images.zip'
+        )
+    except Exception as e:
+        print(f"Error creating session ZIP for {sess}: {e}")
+        abort(500, "Failed to create ZIP file.")
 
 @app.get("/lcd_status")
 def lcd_status():
@@ -2271,6 +2305,9 @@ TPL_INDEX = r"""
         </form>
         {% if s.has_video %}
           <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Download</a>
+        {% endif %}
+        {% if s.count > 0 %}
+          <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}">⬇️ Images (.zip)</a>
         {% endif %}
 
         <form action="{{ url_for('rename', sess=s.name) }}" method="post">
