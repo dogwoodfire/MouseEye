@@ -2645,7 +2645,7 @@ TPL_INDEX = r"""
       downloadBtn.style.display = 'none';
     } else if (status === 'done') {
       progWrap.style.display = 'none';
-      label.innerHTML = 'Ready';
+      label.innerHTML = '';
       btn.disabled = false;
       downloadBtn.style.display = 'inline-flex';
     } else if (status === 'error') {
