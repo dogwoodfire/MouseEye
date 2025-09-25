@@ -211,6 +211,16 @@ CAMERA_STILL = shutil.which("rpicam-still") or "/usr/bin/rpicam-still"
 FFMPEG       = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
 PREFS_FILE = os.path.join(BASE, "lcd_prefs.json")
 
+def _get_background_status():
+    """Checks for active background jobs and returns a status string."""
+    for job in _jobs.values():
+        status = job.get("status", "")
+        if status == "encoding":
+            return "Encoding..."
+        if status == "zipping":
+            return "Zipping..."
+    return ""
+
 def _current_cam_rotate_deg():
     """
     Priority:
@@ -1283,6 +1293,7 @@ def index():
     disk_info = _disk_stats()
     temp_info = _get_cpu_temp()
     high_temp_warning = bool(_has_overheated_since_boot())
+    background_status = _get_background_status()
 
     return render_template_string(
         TPL_INDEX,
@@ -1307,6 +1318,7 @@ def index():
         active_end_ts=_capture_end_ts,
         active_interval=_capture_interval,
         active_fps=_capture_fps,
+        background_status=background_status,
     )
 
 @app.route("/start", methods=["POST"])
@@ -2187,7 +2199,7 @@ TPL_INDEX = r"""
   .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 
   button, .btn {
-    border:1px solid var(--border); background: var(--btn); color: var(--btn-text);
+    font-weight: normal;border:1px solid var(--border); background: var(--btn); color: var(--btn-text);
     border-radius:10px; padding:10px 12px; font-size:16px; line-height:1; text-decoration:none; display:inline-flex; align-items:center; gap:8px;
   }
   .btn-strong { background: var(--btn-strong-bg); color: var(--btn-strong-text); border-color: transparent;}
@@ -2492,7 +2504,7 @@ TPL_INDEX = r"""
     {% if temp %}
       <div class="label" id="temp-text">CPU Temp: </br>{{ temp }}°C</div>
     {% endif %}
-  </div>
+    {% if background_status %}  <div class="label" id="background-status" style="color: #3b82f6;">{{ background_status }}</div> {% endif %} </div>
 </div>
 
 {% if current_session %}
