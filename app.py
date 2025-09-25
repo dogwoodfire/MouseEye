@@ -2446,9 +2446,7 @@ TPL_INDEX = r"""
             <div class="bar" style="width:0%" id="zip-bar-{{ s['name'] }}"></div>
         </div>
         <span class="sub" id="zip-label-{{ s['name'] }}"></span>
-        {% if s.count > 0 %}
-          <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}">⬇️ Images (.zip)</a>
-        {% endif %}
+        <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}" id="zip-download-{{ s.name }}" style="display:none;">⬇️ Images (.zip)</a>
 
         <form action="{{ url_for('rename', sess=s.name) }}" method="post">
           <input name="new_name" type="text" placeholder="rename…" {% if current_session == s.name %}disabled title="Stop capture first"{% endif %}>
@@ -2466,7 +2464,6 @@ TPL_INDEX = r"""
     </div>
   </div>
   {% endfor %}
-
 </main>
 
 <div class="footer card">
@@ -2606,7 +2603,6 @@ TPL_INDEX = r"""
 })();
 </script>
 {% endif %}
-
 <script>
 (function(){
   const POLL_MS = 1500;
@@ -2627,12 +2623,12 @@ TPL_INDEX = r"""
     const progWrap = document.getElementById("zip-progress-" + sessName);
     const label = document.getElementById("zip-label-" + sessName);
     const btn = document.getElementById("zip-btn-" + sessName);
+    const downloadBtn = document.getElementById("zip-download-" + sessName);
 
     if (!bar || !progWrap || !label || !btn) return;
 
     if (!entry) {
-      progWrap.classList.remove('show');
-      bar.style.width = '0%';
+      progWrap.style.display = 'none';
       label.textContent = '';
       btn.disabled = false;
       return;
@@ -2642,23 +2638,23 @@ TPL_INDEX = r"""
     const progress = entry.progress || 0;
 
     if (status === 'queued' || status === 'zipping') {
-      progWrap.classList.add('show');
+      progWrap.style.display = 'block';
       bar.style.width = Math.max(1, progress) + '%';
       label.textContent = (status === 'queued') ? 'Queued…' : ('Zipping: ' + progress + '%');
       btn.disabled = true;
+      downloadBtn.style.display = 'none';
     } else if (status === 'done') {
-      progWrap.classList.remove('show');
-      bar.style.width = '100%';
-      label.innerHTML = 'Ready — <a href=\"' + "{{ url_for('download_session_zip', sess='') }}" + sessName + '\">Download ZIP</a>';
+      progWrap.style.display = 'none';
+      label.innerHTML = 'Ready';
       btn.disabled = false;
+      downloadBtn.style.display = 'inline-flex';
     } else if (status === 'error') {
-      progWrap.classList.remove('show');
-      bar.style.width = '0%';
+      progWrap.style.display = 'none';
       label.textContent = 'Error creating ZIP';
       btn.disabled = false;
+      downloadBtn.style.display = 'none';
     } else {
-      progWrap.classList.remove('show');
-      bar.style.width = '0%';
+      progWrap.style.display = 'none';
       label.textContent = '';
       btn.disabled = false;
     }
@@ -2666,16 +2662,13 @@ TPL_INDEX = r"""
 
   async function poll(){
     const jobs = await fetchJobs();
-    // find all session names displayed on the page and update each (cheap approach)
     document.querySelectorAll('[id^=\"zip-btn-\"]').forEach(btn=>{
       const id = btn.id.replace('zip-btn-','');
       updateForSession(jobs, id);
     });
   }
 
-  // Kick off
   setInterval(poll, POLL_MS);
-  // Also poll once immediately after load
   poll();
 })();
 
@@ -2684,7 +2677,6 @@ TPL_INDEX = r"""
   const JOBS_URL = "{{ url_for('jobs') }}";
   const CURRENT_SESSION = "{{ current_session or '' }}";
 
-  // Create / ensure an active-encoding container in the header area
   function ensureActiveEncodingEl(){
     if (document.getElementById('active-encoding-wrap')) return;
     const header = document.querySelector('header') || document.body;
@@ -2709,11 +2701,8 @@ TPL_INDEX = r"""
     }
   }
 
-  // Disable/enable start/encode controls when zipping is in progress
   function setStartEncodeDisabled(disabled){
-    // disable buttons with class names (if present)
     document.querySelectorAll('button.start-btn, button.encode-btn, a.btn.start-btn, a.btn.encode-btn').forEach(b=>{ b.disabled = disabled; if(disabled) b.classList.add('disabled'); else b.classList.remove('disabled'); });
-    // disable forms whose action contains /start or /encode/
     document.querySelectorAll('form').forEach(f=>{
       try{
         const a = f.getAttribute('action') || f.action || '';
@@ -2724,7 +2713,6 @@ TPL_INDEX = r"""
     });
   }
 
-  // Update per-session zip bars and buttons
   function applyJobs(jobs){
     let anyZipActive = false;
     for (const [k,v] of Object.entries(jobs || {})){
@@ -2732,31 +2720,15 @@ TPL_INDEX = r"""
       const sess = k.slice(4);
       const status = (v.status || '').toLowerCase();
       const progress = Number(v.progress || 0);
-
+      
       const bar = document.getElementById('zip-bar-' + sess);
-      const label = document.getElementById('zip-label-' + sess);
-      const btn = document.getElementById('zip-btn-' + sess);
-
       if (status === 'queued' || status === 'zipping'){
         anyZipActive = true;
-        if (bar) { bar.style.width = Math.max(1, progress) + '%'; bar.parentNode.style.display = 'inline-block'; }
-        if (label) { label.textContent = (status === 'queued') ? 'Queued…' : ('Zipping: ' + progress + '%'); }
-        if (btn) { btn.disabled = true; btn.classList && btn.classList.add('disabled'); }
-      } else if (status === 'done'){
-        if (bar) { bar.style.width = '100%'; }
-        if (label) { label.innerHTML = 'Ready — <a href="' + ("{{ url_for('download_session_zip', sess='') }}") + sess + '">Download ZIP</a>'; }
-        if (btn) { btn.disabled = false; btn.classList && btn.classList.remove('disabled'); }
-      } else if (status === 'error'){
-        if (bar) { bar.style.width = '0%'; }
-        if (label) { label.textContent = 'Error creating ZIP'; }
-        if (btn) { btn.disabled = false; btn.classList && btn.classList.remove('disabled'); }
       }
     }
 
-    // disable start/encode while any zip is active
     setStartEncodeDisabled(anyZipActive);
 
-    // Update active encoding progress (for the currently active session)
     if (CURRENT_SESSION){
       const enc = jobs[CURRENT_SESSION];
       if (enc && (enc.status === 'encoding' || enc.status === 'queued')){
@@ -2776,36 +2748,10 @@ TPL_INDEX = r"""
       if (!r.ok) return;
       const jobs = await r.json();
       applyJobs(jobs);
-    }catch(e){
-      // ignore
-    }
+    }catch(e){}
   }
-
-  // Initial DOM setup: ensure any missing progress elements exist for sessions rendered with data-sess
-  function primeSessionElements(){
-    document.querySelectorAll('[data-sess]').forEach(el=>{
-      const sess = el.getAttribute('data-sess');
-      if (!sess) return;
-      // If the named controls don't exist, create minimal ones so JS can update them
-      if (!document.getElementById('zip-progress-' + sess)){
-        const container = document.createElement('div');
-        container.id = 'zip-progress-' + sess;
-        container.innerHTML = `<div class="zip-progress" style="display:inline-block"><div class="bar" id="zip-bar-${sess}" style="width:0%"></div></div><span class="zip-label" id="zip-label-${sess}"></span>`;
-        // Append to the element (prefer an actions area if present)
-        const actions = el.querySelector('.controls') || el;
-        actions.appendChild(container);
-      }
-      if (!document.getElementById('zip-btn-' + sess)){
-        // try to find an existing button/link that looks like the zip button by href or text
-        const possible = el.querySelector('form[action*="/zip/"] button, a[href*="/zip/"]');
-        if (possible){ possible.id = 'zip-btn-' + sess; }
-      }
-    });
-  }
-
-  // Run
+  
   ensureActiveEncodingEl();
-  primeSessionElements();
   poll();
   setInterval(poll, POLL_MS);
 })();
