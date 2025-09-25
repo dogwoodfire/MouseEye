@@ -843,8 +843,9 @@ def _list_sessions():
             
             jpg = _session_latest_jpg(sd)
             vid = _video_path(sd)
-            zip_path = os.path.join(sd, f"{_safe_name(d)}-images.zip") 
+            zip_path = os.path.join(sd, f"{_safe_name(d)}-images.zip")
             has_video = os.path.exists(vid)
+            has_zip = os.path.exists(zip_path)
 
             quality = 'std' # Default to standard
             quality_file = os.path.join(sd, 'quality.json')
