@@ -2143,6 +2143,12 @@ TPL_INDEX = r"""
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Pi Timelapse</title>
 <style>
+  .zip-progress{height:10px;background:#e6e6e6;border-radius:6px;overflow:hidden;width:160px;margin-top:6px}
+  .zip-progress > .bar{height:100%;width:0%;background:#47b870;border-radius:6px}
+  .zip-label{font-size:13px;color:#6b7280;margin-left:8px}
+  #active-encoding-wrap{display:flex;gap:10px;align-items:center;padding:8px 12px;border-radius:10px;background:#fff;border:1px solid var(--border);margin-bottom:12px}
+  #active-encoding-wrap .bar{height:12px;border-radius:8px;background:#3b82f6;width:0%}
+  #active-encoding-wrap .label{font-size:14px;color:var(--text)}
   :root {
     --active-bg: #e6f2ff; /* light blue */
     --card-bg: #ffffff;
@@ -2480,10 +2486,7 @@ TPL_INDEX = r"""
     {% endif %}
   </div>
 
-<script>
-    // ... (all other javascript is unchanged) ...
-</script>
-{% if current_session %}
+
 <script>
 // --- Active session updater (preview, frames, time, progress, interval, fps) ---
 (function(){
@@ -2670,6 +2673,137 @@ TPL_INDEX = r"""
 })();
 </script>
 {% endif %}
+
+(function(){
+  const POLL_MS = 1500;
+  const JOBS_URL = "{{ url_for('jobs') }}";
+  const CURRENT_SESSION = "{{ current_session or '' }}";
+
+  // Create / ensure an active-encoding container in the header area
+  function ensureActiveEncodingEl(){
+    if (document.getElementById('active-encoding-wrap')) return;
+    const header = document.querySelector('header') || document.body;
+    const wrap = document.createElement('div');
+    wrap.id = 'active-encoding-wrap';
+    wrap.style.display = 'none';
+    wrap.innerHTML = `<div class="label">Encoding:</div><div style="flex:1;min-width:120px;max-width:420px;background:#e6e6e6;padding:6px;border-radius:8px"><div class="bar" style="width:0%"></div></div><div class="label" id="active-encoding-text"></div>`;
+    header.parentNode.insertBefore(wrap, header.nextSibling);
+  }
+
+  function setActiveEncoding(progress, text){
+    ensureActiveEncodingEl();
+    const wrap = document.getElementById('active-encoding-wrap');
+    const bar = wrap.querySelector('.bar');
+    const txt = document.getElementById('active-encoding-text');
+    if (progress == null){
+      wrap.style.display = 'none';
+    } else {
+      wrap.style.display = 'flex';
+      bar.style.width = Math.max(0, Math.min(100, progress)) + '%';
+      txt.textContent = text || '';
+    }
+  }
+
+  // Disable/enable start/encode controls when zipping is in progress
+  function setStartEncodeDisabled(disabled){
+    // disable buttons with class names (if present)
+    document.querySelectorAll('button.start-btn, button.encode-btn, a.btn.start-btn, a.btn.encode-btn').forEach(b=>{ b.disabled = disabled; if(disabled) b.classList.add('disabled'); else b.classList.remove('disabled'); });
+    // disable forms whose action contains /start or /encode/
+    document.querySelectorAll('form').forEach(f=>{
+      try{
+        const a = f.getAttribute('action') || f.action || '';
+        if (a.includes('/start') || a.includes('/encode')){
+          Array.from(f.querySelectorAll('button, input[type=submit]')).forEach(el=> el.disabled = disabled);
+        }
+      }catch(e){}
+    });
+  }
+
+  // Update per-session zip bars and buttons
+  function applyJobs(jobs){
+    let anyZipActive = false;
+    for (const [k,v] of Object.entries(jobs || {})){
+      if (!k.startsWith('zip:')) continue;
+      const sess = k.slice(4);
+      const status = (v.status || '').toLowerCase();
+      const progress = Number(v.progress || 0);
+
+      const bar = document.getElementById('zip-bar-' + sess);
+      const label = document.getElementById('zip-label-' + sess);
+      const btn = document.getElementById('zip-btn-' + sess);
+
+      if (status === 'queued' || status === 'zipping'){
+        anyZipActive = true;
+        if (bar) { bar.style.width = Math.max(1, progress) + '%'; bar.parentNode.style.display = 'inline-block'; }
+        if (label) { label.textContent = (status === 'queued') ? 'Queued…' : ('Zipping: ' + progress + '%'); }
+        if (btn) { btn.disabled = true; btn.classList && btn.classList.add('disabled'); }
+      } else if (status === 'done'){
+        if (bar) { bar.style.width = '100%'; }
+        if (label) { label.innerHTML = 'Ready — <a href="' + ("{{ url_for('download_session_zip', sess='') }}") + sess + '">Download ZIP</a>'; }
+        if (btn) { btn.disabled = false; btn.classList && btn.classList.remove('disabled'); }
+      } else if (status === 'error'){
+        if (bar) { bar.style.width = '0%'; }
+        if (label) { label.textContent = 'Error creating ZIP'; }
+        if (btn) { btn.disabled = false; btn.classList && btn.classList.remove('disabled'); }
+      }
+    }
+
+    // disable start/encode while any zip is active
+    setStartEncodeDisabled(anyZipActive);
+
+    // Update active encoding progress (for the currently active session)
+    if (CURRENT_SESSION){
+      const enc = jobs[CURRENT_SESSION];
+      if (enc && (enc.status === 'encoding' || enc.status === 'queued')){
+        const p = Number(enc.progress || 0);
+        setActiveEncoding(p, (enc.status === 'queued') ? 'Queued…' : ('Encoding: ' + p + '%'));
+      } else {
+        setActiveEncoding(null);
+      }
+    } else {
+      setActiveEncoding(null);
+    }
+  }
+
+  async function poll(){
+    try{
+      const r = await fetch(JOBS_URL, {cache:'no-store'});
+      if (!r.ok) return;
+      const jobs = await r.json();
+      applyJobs(jobs);
+    }catch(e){
+      // ignore
+    }
+  }
+
+  // Initial DOM setup: ensure any missing progress elements exist for sessions rendered with data-sess
+  function primeSessionElements(){
+    document.querySelectorAll('[data-sess]').forEach(el=>{
+      const sess = el.getAttribute('data-sess');
+      if (!sess) return;
+      // If the named controls don't exist, create minimal ones so JS can update them
+      if (!document.getElementById('zip-progress-' + sess)){
+        const container = document.createElement('div');
+        container.id = 'zip-progress-' + sess;
+        container.innerHTML = `<div class="zip-progress" style="display:inline-block"><div class="bar" id="zip-bar-${sess}" style="width:0%"></div></div><span class="zip-label" id="zip-label-${sess}"></span>`;
+        // Append to the element (prefer an actions area if present)
+        const actions = el.querySelector('.controls') || el;
+        actions.appendChild(container);
+      }
+      if (!document.getElementById('zip-btn-' + sess)){
+        // try to find an existing button/link that looks like the zip button by href or text
+        const possible = el.querySelector('form[action*="/zip/"] button, a[href*="/zip/"]');
+        if (possible){ possible.id = 'zip-btn-' + sess; }
+      }
+    });
+  }
+
+  // Run
+  ensureActiveEncodingEl();
+  primeSessionElements();
+  poll();
+  setInterval(poll, POLL_MS);
+})();
 </script>
 """
 
