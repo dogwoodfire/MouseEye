@@ -2814,7 +2814,7 @@ TPL_STILLS = r"""
   body { font-family: system-ui, sans-serif; margin: 0; background:#f8fafc; color: #111827;}
   header { background:#fff; border-bottom:1px solid #e5e7eb; padding: 10px 12px; display:flex; gap:10px; align-items:center; }
   header h1 { margin: 0; font-size: 18px; }
-  main { padding: 12px; max-width: 1200px; margin: 0 auto; }
+  main { padding: 12px; max-{width}: 1200px; margin: 0 auto; }
   .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
   .photo-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
   .photo-card img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; }
@@ -3058,4 +3058,340 @@ def qr_info():
             "url": f"http://{ip}:5050" if ip else ""
         })
     except Exception as e:
-        return jsonify({"e
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+# ================== Simple Scheduler (ASCII-safe, single copy) ==================
+import threading, time
+from datetime import datetime
+from flask import render_template_string, request, redirect, url_for
+
+# _sched_lock = threading.Lock()
+# _sched_state = {}        # {'start_ts': int, 'end_ts': int, 'interval': int, 'fps': int}
+# _sched_start_t = None    # threading.Timer
+# _sched_stop_t  = None
+
+SCHED_TPL = '''<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedules</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px}
+  h2{margin:0 0 12px}
+  form{display:grid;gap:10px;max-width:440px;margin-bottom:18px}
+  label{font-weight:600}
+  input,select,button{padding:10px;font-size:16px}
+  .cards{display:grid;gap:10px;max-width:760px}
+  .card{background:#f6f9ff;border:1px solid #d7e4ff;border-radius:8px;padding:12px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .muted{color:#6b7280}
+  .danger{background:#f06767;color:#fff;border:0;border-radius:10px;text-decoration:none;}
+  .link{padding:8px 12px;background:#eee;border-radius:10px;text-decoration:none;color:#111}
+  .full{width:100%}
+</style>
+
+<h2>Create a new schedule</h2>
+<form method="post" action="{{ url_for('schedule_arm') }}">
+  <label>Start (local time)</label>
+  <input type="datetime-local" name="start_local" required>
+  <label>Duration (hours & minutes)</label>
+  <div class="row">
+    <input type="number" name="duration_hr"  value=""  min="0" placeholder="hrs" style="width:120px">
+    <input type="number" name="duration_min" value="" min="0" placeholder="mins" style="width:120px">
+  </div>
+  <label>Interval (seconds)</label>
+  <input type="number" name="interval" value="{{ interval_default }}" min="1">
+  <label>FPS</label>
+  <select name="fps">
+    {% for f in fps_choices %}
+      <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
+    {% endfor %}
+  </select>
+  <label>Image Quality</label>
+    <div class="row">
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
+            <input type="radio" name="quality" value="std" checked onchange="toggleEncode(this)"> Standard (for video)
+        </label>
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
+            <input type="radio" name="quality" value="hq" onchange="toggleEncode(this)"> High (for export)
+        </label>
+    </div>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+    <input type="checkbox" name="auto_encode" checked id="auto_encode_checkbox">
+    Auto-encode when finished
+  </label>
+  <label>Session name (optional)</label>
+  <input type="text" name="sess_name" placeholder="(auto)">
+  <button type="submit">Create Schedule</button>
+  <a class="link" href="{{ url_for('index') }}">← Back</a>
+</form>
+
+<h2>Upcoming & Active Schedules</h2>
+<div class="cards">
+  {% if not schedules %}
+    <div class="muted">No upcoming schedules.</div>
+  {% endif %}
+  {% for sid, sc in schedules %}
+  <div class="card">
+    <div><b>ID:</b> {{ sid }}</div>
+    {% if sc.sess %}<div><b>Session:</b> {{ sc.sess }}</div>{% endif %}
+    <div><b>Start:</b> {{ sc.start_h }}</div>
+    <div><b>End:</b>   {{ sc.end_h }}</div>
+    <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
+    <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
+    <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Cancel this schedule?')">
+      <button class="danger" type="submit">Cancel</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+
+<h2 style="margin-top:24px;">Past Schedules</h2>
+{% if past_schedules %}
+  <form action="{{ url_for('delete_past_schedules') }}" method="post" onsubmit="return confirm('Are you sure you want to delete all past schedule records?');" style="margin-bottom: 12px;">
+    <button type="submit" class="danger" style="max-width: 1000px;">🗑️ Delete All Past Schedules</button>
+  </form>
+{% endif %}
+<div class="cards">
+  {% if not past_schedules %}
+    <div class="muted">No past schedules.</div>
+  {% endif %}
+  {% for sid, sc in past_schedules %}
+  <div class="card" style="opacity: 0.7;">
+    <div><b>ID:</b> {{ sid }}</div>
+    {% if sc.sess %}<div><b>Session:</b> {{ sc.sess }}</div>{% endif %}
+    <div><b>Start:</b> {{ sc.start_h }}</div>
+    <div><b>End:</b>   {{ sc.end_h }}</div>
+    <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
+    <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
+    <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Delete this past schedule record?')">
+      <button class="danger" type="submit">Delete Record</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+    function toggleEncode(radio) {
+        const checkbox = document.getElementById('auto_encode_checkbox');
+        if (radio.value === 'hq') {
+            checkbox.checked = false;
+            checkbox.disabled = true;
+        } else {
+            checkbox.disabled = false;
+        }
+    }
+</script>
+'''
+
+def _sched_fire_start(interval, fps, sess_name=""):
+    try:
+        from flask import current_app
+        app = current_app._get_current_object()
+    except Exception:
+        app = globals().get('app')
+    if not app:
+        return
+    with app.app_context():
+        with app.test_client() as c:
+            c.post('/start', data={'interval': interval, 'fps': fps, 'name': sess_name})
+
+def _sched_fire_stop(sess_name="", fps=24, auto_encode=False):
+    # This function runs in a background timer thread.
+    # It's more reliable to call our app's functions directly
+    # than to simulate HTTP requests.
+
+    # First, get the name of the session that is currently running.
+    session_to_stop = _current_session
+
+    # Only proceed if there is an active session.
+    if not session_to_stop:
+        return
+
+    # Now, stop the timelapse.
+    stop_timelapse()
+
+    # Wait a moment for the stop to fully process.
+    time.sleep(1.5)
+
+    # If auto-encode is enabled for this schedule, queue the job.
+    if auto_encode:
+        # Check if the session that was stopped is the one we expected
+        # or if a session name was passed from the schedule.
+        session_to_encode = session_to_stop or sess_name
+        if session_to_encode:
+            print(f"[schedule] Auto-encoding session {session_to_encode} at {fps}fps")
+            _encode_q.put((session_to_encode, fps))
+
+@app.after_request
+def _no_store_for_diag(resp):
+    if request.path in ("/live_diag", "/live_status", "/live_debug"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.get("/disk")
+def disk():
+    return jsonify(_disk_stats())
+
+@app.get("/schedule")
+def schedule_page():
+    # build view models for upcoming/active and past schedules
+    now_ts = int(time.time())
+    upcoming_schedules = []
+    past_schedules = []
+    
+    sorted_items = sorted(_schedules.items(), key=lambda kv: kv[1].get("start_ts", 0))
+    
+    for sid, st in sorted_items:
+        try:
+            start_h = datetime.fromtimestamp(int(st["start_ts"])).strftime("%a %Y-%m-%d %H:%M")
+            end_h   = datetime.fromtimestamp(int(st["end_ts"])).strftime("%a %Y-%m-%d %H:%M")
+        except Exception:
+            start_h = end_h = "?"
+        
+        # Create a view model object
+        vm = dict(st)
+        vm["start_h"] = start_h
+        vm["end_h"]   = end_h
+        
+        # Sort into the correct list based on end time
+        if int(st.get("end_ts", 0)) < now_ts:
+            past_schedules.append((sid, vm))
+        else:
+            upcoming_schedules.append((sid, vm))
+
+    return render_template_string(
+        SCHED_TPL,
+        fps_choices=globals().get("FPS_CHOICES", [10, 24, 30]),
+        default_fps=globals().get("DEFAULT_FPS", 24),
+        interval_default=globals().get("CAPTURE_INTERVAL_SEC", 10),
+        schedules=upcoming_schedules,
+        past_schedules=past_schedules # Pass the new list to the template
+    )
+
+@app.post("/schedule/arm")
+def schedule_arm():
+    start_local = request.form.get("start_local", "").strip()
+    hr_str  = request.form.get("duration_hr",  "0") or "0"
+    min_str = request.form.get("duration_min", "0") or "0" # <-- THE FIX IS HERE
+
+    try: dur_hr = int(hr_str.strip())
+    except: dur_hr = 0
+    try: dur_min = int(min_str.strip())
+    except: dur_min = 0
+    duration_min = max(1, dur_hr * 60 + dur_min)
+
+    try: interval = int(request.form.get("interval", "10") or 10)
+    except: interval = 10
+    try: fps = int(request.form.get("fps", "24") or 24)
+    except: fps = 24
+    
+    auto_encode = bool(request.form.get("auto_encode"))
+    sess_name = (request.form.get("sess_name") or "").strip()
+
+    quality = request.form.get("quality", "std")
+    if quality == 'hq':
+        auto_encode = False
+
+    try:
+        # Use a timezone-aware conversion to avoid DST bugs
+        local_tz = pytz.timezone('Europe/London')
+        start_dt = local_tz.localize(datetime.strptime(start_local, "%Y-%m-%dT%H:%M"))
+        start_ts = int(start_dt.timestamp())
+        end_ts = start_ts + duration_min * 60
+    except Exception:
+        # Fallback to current time + 1 minute if there is an error
+        start_ts = int(time.time()) + 60
+        end_ts = start_ts + duration_min * 60
+
+    sid = uuid.uuid4().hex[:8]
+    now_ts = int(time.time())
+    
+    with _sched_lock:
+        _schedules[sid] = dict(
+            start_ts=start_ts, end_ts=end_ts,
+            interval=interval, fps=fps,
+            sess=sess_name, auto_encode=auto_encode,
+            quality=quality,
+            created_ts=now_ts,
+        )
+        _save_sched_state()
+
+    return redirect(url_for("schedule_page"))
+
+@app.post("/schedule/cancel/<sid>")
+def schedule_cancel_id(sid):
+    with _sched_lock:
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return redirect(url_for("schedule_page"))
+
+@app.get("/schedule/list")
+def schedule_list_json():
+    """
+    Compact JSON for the LCD:
+    [
+      {"id": "abcd1234", "start_ts": 123, "end_ts": 456, "interval": 10, "fps": 24,
+       "sess": "", "auto_encode": true, "created_ts": 123}
+    ]
+    """
+    now = int(time.time())
+    items = []
+    for sid, st in _schedules.items():
+        try:
+            d = dict(st)
+            d["id"] = sid
+            # normalize types
+            d["start_ts"] = int(d.get("start_ts", 0))
+            d["end_ts"]   = int(d.get("end_ts", 0))
+            d["interval"] = int(d.get("interval", 10))
+            d["fps"]      = int(d.get("fps", 24))
+            d["auto_encode"] = bool(d.get("auto_encode", False))
+            d["created_ts"]  = int(d.get("created_ts", d["start_ts"]))
+        except Exception:
+            continue
+        items.append(d)
+
+    items.sort(key=lambda d: d.get("start_ts", 0))
+    resp = jsonify(items)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.post("/schedule/delete")
+def schedule_delete_json():
+    """
+    Delete a schedule by id. Accepts form or JSON:
+      - form: id=<sid>
+      - json: {"id": "<sid>"}
+    Returns 204 on success (even if id didn’t exist), 400 if no id supplied.
+    """
+    sid = request.form.get("id") or (request.json or {}).get("id")
+    if not sid:
+        return ("missing id", 400)
+
+    with _sched_lock:
+        # stop timers and remove
+        _cancel_timers_for(sid)
+        _schedules.pop(sid, None)
+        _save_sched_state()
+    return ("", 204)
+
+# ================== /Simple Scheduler ==================
+# Load persisted schedule and re-arm timers on process start
+try:
+    if _load_sched_state():
+        _arm_timers_all()
+except Exception:
+    pass
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", "5050"))
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+
+
+
+# # ---------- Main ----------
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5050)
