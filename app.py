@@ -2672,6 +2672,9 @@ TPL_INDEX = r"""
 <script>
 (function(){
   const POLL_MS = 1500;
+  // THE FIX, Part 1: Check if a capture is active when the page loads.
+  const isCaptureActive = {{ 'true' if current_session else 'false' }};
+
   async function fetchJobs(){
     try {
       const r = await fetch("{{ url_for('jobs') }}", {cache:'no-store'});
@@ -2692,81 +2695,42 @@ function updateForSession(jobs, sessName){
     const downloadBtn = document.getElementById("zip-download-" + sessName);
 
     if (!bar || !progWrap || !label || !btn || !downloadBtn) return;
+    
+    const isZipJobRunning = entry && (entry.status === 'queued' || entry.status === 'zipping');
+
+    // THE FIX, Part 2: A button is disabled if a capture is active OR its zip job is running.
+    btn.disabled = isCaptureActive || isZipJobRunning;
 
     if (!entry) {
       progWrap.style.display = 'none';
       label.textContent = '';
-      btn.disabled = false;
       return;
     }
 
-    const status = entry.status || entry.state || '';
-    const progress = entry.progress || 0;
-
-    if (status === 'queued' || status === 'zipping') {
+    if (isZipJobRunning) {
       progWrap.style.display = 'block';
-      bar.style.width = Math.max(1, progress) + '%';
-      label.textContent = (status === 'queued') ? 'Queued…' : ('Zipping: ' + progress + '%');
-      btn.disabled = true;
+      bar.style.width = Math.max(1, entry.progress || 0) + '%';
+      label.textContent = (entry.status === 'queued') ? 'Queued…' : ('Zipping: ' + (entry.progress || 0) + '%');
       downloadBtn.style.display = 'none';
-    } else if (status === 'done') {
+    } else if (entry.status === 'done') {
       progWrap.style.display = 'none';
-      label.textContent = ''; // Clear label on completion
-      btn.disabled = false;
+      label.textContent = '';
       downloadBtn.style.display = 'inline-flex';
-    } else if (status === 'error') {
+    } else if (entry.status === 'error') {
       progWrap.style.display = 'none';
       label.textContent = 'Error creating ZIP';
-      btn.disabled = false;
       downloadBtn.style.display = 'none';
     } else {
       progWrap.style.display = 'none';
       label.textContent = '';
-      btn.disabled = false;
     }
   }
 
-async function poll(){
+  async function poll(){
     const jobs = await fetchJobs();
-    if (!jobs) return;
-
-    let anyEncodingActive = false;
-
-    // First, handle all zip progress updates
-    document.querySelectorAll('[id^="zip-btn-"]').forEach(btn => {
-      const id = btn.id.replace('zip-btn-', '');
+    document.querySelectorAll('[id^=\"zip-btn-\"]').forEach(btn=>{
+      const id = btn.id.replace('zip-btn-','');
       updateForSession(jobs, id);
-    });
-
-    // Now, handle all encoding progress updates
-    document.querySelectorAll('[id^="prog-"]').forEach(progEl => {
-      const sessName = progEl.id.replace('prog-', '');
-      const barEl = document.getElementById('bar-' + sessName);
-      if (!barEl) return;
-
-      const job = jobs[sessName]; // Find the encoding job for this specific session
-
-      if (job && (job.status === 'encoding' || job.status === 'queued')) {
-        anyEncodingActive = true;
-        const progress = Number(job.progress || 0);
-        progEl.classList.add('show');
-        barEl.style.width = progress + '%';
-      } else {
-        // If job is done, errored, or doesn't exist, hide the bar
-        progEl.classList.remove('show');
-        barEl.style.width = '0%';
-      }
-    });
-
-    // Update the global status text at the bottom of the page
-    const bgStatusEl = document.getElementById('background-status');
-    if (bgStatusEl) {
-        bgStatusEl.textContent = anyEncodingActive ? 'Status: Encoding...' : '';
-    }
-    
-    // Disable all encode/re-encode buttons if any job is active
-    document.querySelectorAll('form[action*="/encode"] button').forEach(button => {
-        button.disabled = anyEncodingActive;
     });
   }
 
