@@ -2460,7 +2460,7 @@ TPL_INDEX = r"""
         {% endif %}
         
         {% if s.has_video and s.quality == 'std' %}
-          <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Video</a>
+          <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Video</a></br>
         {% endif %}
                 <form action="{{ url_for('zip_session', sess=s['name']) }}" method="post" style="display:inline;">
             <button type="submit" class="btn" id="zip-btn-{{ s['name'] }}">📦 Zip images</button>
@@ -2473,7 +2473,7 @@ TPL_INDEX = r"""
         
         <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}" id="zip-download-{{ s.name }}" 
            style="display:{% if s.has_zip %}inline-flex{% else %}none{% endif %};">
-           ⬇️ Images .zip
+           ⬇️ Zip file
         </a>
 
         <form action="{{ url_for('rename', sess=s.name) }}" method="post">
@@ -2629,6 +2629,32 @@ TPL_INDEX = r"""
   setInterval(pollActiveCard, 1000);
   pollActiveCard();
 })();
+</script>
+{% endif %}
+
+{% if current_session %}
+<script>
+  // Disables all session action buttons when a timelapse is actively capturing.
+  document.addEventListener('DOMContentLoaded', () => {
+    // Select all session cards
+    document.querySelectorAll('.session').forEach(card => {
+      // We don't need to disable buttons on the active card, as it only has a "Stop" button.
+      // This will apply to all other cards.
+
+      // Disable buttons for encoding and zipping
+      card.querySelectorAll('form[action*="/encode"] button, form[action*="/zip"] button').forEach(button => {
+        button.disabled = true;
+        button.title = 'Stop the active timelapse first';
+      });
+
+      // Disable all download links using the 'disabled' CSS class
+      card.querySelectorAll('a[href*="/download"], a[href*="/download_session_zip"]').forEach(link => {
+        link.classList.add('disabled');
+        link.setAttribute('aria-disabled', 'true');
+        link.title = 'Stop the active timelapse first';
+      });
+    });
+  });
 </script>
 {% endif %}
 <script>
