@@ -1803,6 +1803,13 @@ def download_session_zip(sess):
     # Serve directly from disk; avoid loading into memory
     return send_file(zip_path, as_attachment=True, download_name=zip_name)
 
+def _any_zipping_active():
+    """Checks if any zip jobs are currently in the 'zipping' state."""
+    for key, value in _jobs.items():
+        if key.startswith("zip:") and value.get("status") == "zipping":
+            return True
+    return False
+
 @app.get("/lcd_status")
 def lcd_status():
     try:
@@ -1840,6 +1847,7 @@ def lcd_status():
             "start_ts": start_ts,
             "end_ts": end_ts,
             "encoding": _any_encoding_active(),
+            "zipping": _any_zipping_active(), 
             "disk": _disk_stats(),
             "next_sched": next_sched_info,
             "live_idle": _idle_now(),
@@ -1849,7 +1857,7 @@ def lcd_status():
         # never crash the LCD
         return jsonify({
             "active": False, "session": "", "frames": 0,
-            "start_ts": None, "end_ts": None, "encoding": False,
+            "start_ts": None, "end_ts": None, "encoding": False, "zipping": False,
             "disk": _disk_stats(), "next_sched": None, "live_idle": True,
             "shutting_down": os.path.exists(SHUTDOWN_FLAG),
         })

@@ -1884,7 +1884,6 @@ def main():
     time.sleep(0.25)
 
     while True:
-        # --- THIS IS THE NEW LOGIC ---
         # Check for the flag file to control screen power
         if os.path.exists(LCD_OFF_FLAG):
             if not ui._screen_off:
@@ -1894,7 +1893,6 @@ def main():
         elif ui._screen_off:
             # If flag is gone but screen is off, wake it
             ui._wake_screen()
-        # --- END OF NEW LOGIC ---
 
         if ui._busy or ui.state == ui.MODAL:
             time.sleep(0.1)
@@ -1903,6 +1901,7 @@ def main():
         st = ui._status()
         is_active = st.get("active", False)
         is_encoding = st.get("encoding", False)
+        is_zipping = st.get("zipping", False)
 
         # If backend signals shutdown, freeze on a clear message and ignore inputs
         if st.get("shutting_down"):
@@ -1917,7 +1916,7 @@ def main():
             while True:
                 time.sleep(0.25)
 
-        if is_encoding:
+        if is_encoding or is_zipping:
             if ui.state != UI.ENCODING:
                 ui.state = UI.ENCODING
         elif is_active:
