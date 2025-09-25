@@ -2733,7 +2733,7 @@ TPL_INDEX = r"""
       const status = (v.status || '').toLowerCase();
       const progress = Number(v.progress || 0);
 
-      const bar = document.getElementById('zip-bar-'' + sess);
+      const bar = document.getElementById('zip-bar-' + sess);
       const label = document.getElementById('zip-label-' + sess);
       const btn = document.getElementById('zip-btn-' + sess);
 
