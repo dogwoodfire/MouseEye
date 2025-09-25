@@ -2673,33 +2673,7 @@ function updateForSession(jobs, sessName){
       downloadBtn.style.display = 'none';
     } else if (status === 'done') {
       progWrap.style.display = 'none';
-      label.textContent = ''; // REMOVED THE "Ready" MESSAGE
-      btn.disabled = false;
-      downloadBtn.style.display = 'inline-flex';
-    } else if (status === 'error') {
-      progWrap.style.display = 'none';
-      label.textContent = 'Error creating ZIP';
-      btn.disabled = false;
-      downloadBtn.style.display = 'none';
-    } else {
-      progWrap.style.display = 'none';
-      label.textContent = '';
-      btn.disabled = false;
-    }
-  }
-
-    const status = entry.status || entry.state || '';
-    const progress = entry.progress || 0;
-
-    if (status === 'queued' || status === 'zipping') {
-      progWrap.style.display = 'block';
-      bar.style.width = Math.max(1, progress) + '%';
-      label.textContent = (status === 'queued') ? 'Queued…' : ('Zipping: ' + progress + '%');
-      btn.disabled = true;
-      downloadBtn.style.display = 'none';
-    } else if (status === 'done') {
-      progWrap.style.display = 'none';
-      label.innerHTML = '';
+      label.textContent = ''; // Clear label on completion
       btn.disabled = false;
       downloadBtn.style.display = 'inline-flex';
     } else if (status === 'error') {
