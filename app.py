@@ -2467,6 +2467,8 @@ TPL_INDEX = r"""
   </div>
   {% endfor %}
 
+</main>
+
 <div class="footer card">
     {% if high_temp_warning is sameas true %}
     <div class="row" style="background-color: #fef2f2; color: #991b1b; padding: 8px; border-radius: 8px; margin-bottom: 10px;">
@@ -2486,6 +2488,7 @@ TPL_INDEX = r"""
       <div class="label" id="temp-text">CPU Temp: </br>{{ temp }}°C</div>
     {% endif %}
   </div>
+</div>
 
 {% if current_session %}
 <script>
@@ -2604,6 +2607,7 @@ TPL_INDEX = r"""
 </script>
 {% endif %}
 
+<script>
 (function(){
   const POLL_MS = 1500;
   async function fetchJobs(){
@@ -2729,7 +2733,7 @@ TPL_INDEX = r"""
       const status = (v.status || '').toLowerCase();
       const progress = Number(v.progress || 0);
 
-      const bar = document.getElementById('zip-bar-' + sess);
+      const bar = document.getElementById('zip-bar-'' + sess);
       const label = document.getElementById('zip-label-' + sess);
       const btn = document.getElementById('zip-btn-' + sess);
 
