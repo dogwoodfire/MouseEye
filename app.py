@@ -2460,8 +2460,9 @@ TPL_INDEX = r"""
         {% endif %}
         
         {% if s.has_video and s.quality == 'std' %}
-          <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Video</a></br>
+          <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Video</a>
         {% endif %}
+        <div class="row">
                 <form action="{{ url_for('zip_session', sess=s['name']) }}" method="post" style="display:inline;">
             <button type="submit" class="btn" id="zip-btn-{{ s['name'] }}">📦 Zip images</button>
         </form>
@@ -2475,7 +2476,7 @@ TPL_INDEX = r"""
            style="display:{% if s.has_zip %}inline-flex{% else %}none{% endif %};">
            ⬇️ Zip file
         </a>
-
+        </div>
         <form action="{{ url_for('rename', sess=s.name) }}" method="post">
           <input name="new_name" type="text" placeholder="rename…" {% if current_session == s.name %}disabled title="Stop capture first"{% endif %}>
           <button class="btn" type="submit" {% if current_session == s.name %}disabled title="Stop capture first"{% endif %}>✏️</button>
