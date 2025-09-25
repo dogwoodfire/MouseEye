@@ -216,9 +216,9 @@ def _get_background_status():
     for job in _jobs.values():
         status = job.get("status", "")
         if status == "encoding":
-            return "Encoding..."
+            return "Status: Encoding..."
         if status == "zipping":
-            return "Zipping..."
+            return "Status: Zipping..."
     return ""
 
 def _current_cam_rotate_deg():
@@ -2473,7 +2473,7 @@ TPL_INDEX = r"""
         
         <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}" id="zip-download-{{ s.name }}" 
            style="display:{% if s.has_zip %}inline-flex{% else %}none{% endif %};">
-           ⬇️ Images (.zip)
+           ⬇️ Images .zip
         </a>
 
         <form action="{{ url_for('rename', sess=s.name) }}" method="post">
@@ -2645,7 +2645,7 @@ TPL_INDEX = r"""
   }
 
 function updateForSession(jobs, sessName){
-    const key = "zip:" + sessName;
+    const key = "zip:" + sessName.trim();
     const entry = jobs && jobs[key];
     const bar = document.getElementById("zip-bar-" + sessName);
     const progWrap = document.getElementById("zip-progress-" + sessName);
