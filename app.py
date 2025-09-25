@@ -593,6 +593,84 @@ def _start_encode_worker_once():
 
 _start_encode_worker_once()
 
+# --- ZIP queue/worker (background zipping to avoid blocking web requests) ---
+_zip_q = queue.Queue()
+
+def _start_zip_worker_once():
+    if getattr(_start_zip_worker_once, "_started", False):
+        return
+    _start_zip_worker_once._started = True
+
+    def _zip_worker():
+        while True:
+            task = _zip_q.get()
+            if not task:
+                _zip_q.task_done()
+                continue
+            sess = task
+            job_key = f"zip:{sess}"
+            try:
+                sess_dir = _session_path(sess)
+                zip_name = f"{_safe_name(sess)}-images.zip"
+                zip_path = os.path.join(sess_dir, zip_name)
+                # remove any stale tmp file
+                try:
+                    tmp_old = zip_path + ".tmp"
+                    if os.path.exists(tmp_old):
+                        os.remove(tmp_old)
+                except Exception:
+                    pass
+
+                # Remove an existing zip so the worker produces a fresh one
+                try:
+                    if os.path.exists(zip_path):
+                        os.remove(zip_path)
+                except Exception:
+                    pass
+
+                files = sorted([f for f in os.listdir(sess_dir) if f.lower().endswith('.jpg')])
+                total = len(files)
+                if total == 0:
+                    _jobs[job_key] = {"status":"error","progress":0,"reason":"no_images"}
+                    _zip_q.task_done()
+                    continue
+
+                _jobs[job_key] = {"status":"zipping","progress":0,"path":zip_path}
+                tmp = zip_path + ".tmp"
+
+                # Stream the zip to disk to keep memory usage low
+                with zipfile.ZipFile(tmp, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                    for idx, filename in enumerate(files, start=1):
+                        file_path = os.path.join(sess_dir, filename)
+                        try:
+                            zf.write(file_path, basename(file_path))
+                        except Exception as e:
+                            # log but continue (capture processes may be writing)
+                            print(f"[zip_worker] failed to add {file_path}: {e}")
+                        # Update progress (0..100)
+                        try:
+                            _jobs[job_key]["progress"] = int((idx / total) * 100)
+                        except Exception:
+                            _jobs[job_key] = {"status":"zipping","progress":int((idx / total) * 100),"path":zip_path}
+
+                # Atomically move into place
+                try:
+                    os.replace(tmp, zip_path)
+                except Exception:
+                    # final move failed; fall back to rename
+                    os.rename(tmp, zip_path)
+
+                _jobs[job_key] = {"status":"done","progress":100,"path":zip_path}
+
+            except Exception as e:
+                _jobs[job_key] = {"status":"error","progress":0,"reason":str(e)}
+            finally:
+                _zip_q.task_done()
+
+    threading.Thread(target=_zip_worker, daemon=True).start()
+
+_start_zip_worker_once()
+
 # ---- priming the live camera ----
 _camera_warmed = False
 WARMUP_MS = 1500  # short, just to init pipeline
@@ -1667,6 +1745,22 @@ def encode(sess):
     _encode_q.put((sess, fps))
     return redirect(url_for("index"))
 
+@app.post("/zip/<sess>")
+def zip_session(sess):
+    """Queue background creation of a ZIP of all images in a session."""
+    session_dir = _session_path(sess)
+    if not os.path.isdir(session_dir):
+        abort(404, "Session not found.")
+
+    job_key = f"zip:{sess}"
+    # If already queued or running, do nothing
+    existing = _jobs.get(job_key, {})
+    if existing.get("status") in ("queued", "zipping"):
+        return redirect(url_for("index"))
+
+    _jobs[job_key] = {"status": "queued", "progress": 0}
+    _zip_q.put(sess)
+    return redirect(url_for("index"))
 
 @app.post("/schedule/cancel")
 def schedule_cancel_compat():
@@ -1692,36 +1786,21 @@ def download(sess):
 
 @app.get("/download_session_zip/<sess>")
 def download_session_zip(sess):
-    """Creates a ZIP archive of all images in a session and sends it for download."""
+    """Serve a pre-created ZIP archive of all images in a session (created by background job)."""
     session_dir = _session_path(sess)
     if not os.path.isdir(session_dir):
         abort(404, "Session not found.")
 
-    try:
-        # Find all .jpg files, excluding any in subdirectories like _raw
-        image_files = [f for f in os.listdir(session_dir) if f.lower().endswith('.jpg')]
-        
-        if not image_files:
-            abort(404, "No images found in this session to download.")
+    zip_name = f"{_safe_name(sess)}-images.zip"
+    zip_path = os.path.join(session_dir, zip_name)
 
-        memory_file = io.BytesIO()
-        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for filename in image_files:
-                file_path = os.path.join(session_dir, filename)
-                # Add file to the zip archive, using just the filename inside the zip
-                zf.write(file_path, basename(file_path))
-        
-        memory_file.seek(0)
-        
-        return send_file(
-            memory_file,
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name=f'{_safe_name(sess)}-images.zip'
-        )
-    except Exception as e:
-        print(f"Error creating session ZIP for {sess}: {e}")
-        abort(500, "Failed to create ZIP file.")
+    # If the zip doesn't exist yet, tell the client to create it first.
+    if not os.path.exists(zip_path):
+        # 404 with helpful message so front-end can show 'not ready yet'
+        abort(404, "ZIP not found. Create it first by clicking 'Zip images'.")
+
+    # Serve directly from disk; avoid loading into memory
+    return send_file(zip_path, as_attachment=True, download_name=zip_name)
 
 @app.get("/lcd_status")
 def lcd_status():
@@ -2352,6 +2431,14 @@ TPL_INDEX = r"""
         {% if s.has_video and s.quality == 'std' %}
           <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Video</a>
         {% endif %}
+        <form action="{{ url_for('zip_session', sess=s['name']) }}" method="post" style="display:inline;">
+            <button type="submit" class="btn" id="zip-btn-{{ s['name'] }}">📦 Zip images</button>
+        </form>
+
+        <div class="progress" id="zip-progress-{{ s['name'] }}">
+            <div class="bar" style="width:0%" id="zip-bar-{{ s['name'] }}"></div>
+        </div>
+        <span class="sub" id="zip-label-{{ s['name'] }}"></span>
         {% if s.count > 0 %}
           <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}">⬇️ Images (.zip)</a>
         {% endif %}
@@ -2509,6 +2596,77 @@ TPL_INDEX = r"""
   });
   setInterval(pollActiveCard, 1000);
   pollActiveCard();
+})();
+
+(function(){
+  const POLL_MS = 1500;
+  async function fetchJobs(){
+    try {
+      const r = await fetch("{{ url_for('jobs') }}", {cache:'no-store'});
+      if (!r.ok) return null;
+      return await r.json();
+    } catch(e){
+      return null;
+    }
+  }
+
+  function updateForSession(jobs, sessName){
+    const key = "zip:" + sessName;
+    const entry = jobs && jobs[key];
+    const bar = document.getElementById("zip-bar-" + sessName);
+    const progWrap = document.getElementById("zip-progress-" + sessName);
+    const label = document.getElementById("zip-label-" + sessName);
+    const btn = document.getElementById("zip-btn-" + sessName);
+
+    if (!bar || !progWrap || !label || !btn) return;
+
+    if (!entry) {
+      progWrap.classList.remove('show');
+      bar.style.width = '0%';
+      label.textContent = '';
+      btn.disabled = false;
+      return;
+    }
+
+    const status = entry.status || entry.state || '';
+    const progress = entry.progress || 0;
+
+    if (status === 'queued' || status === 'zipping') {
+      progWrap.classList.add('show');
+      bar.style.width = Math.max(1, progress) + '%';
+      label.textContent = (status === 'queued') ? 'Queued…' : ('Zipping: ' + progress + '%');
+      btn.disabled = true;
+    } else if (status === 'done') {
+      progWrap.classList.remove('show');
+      bar.style.width = '100%';
+      label.innerHTML = 'Ready — <a href=\"' + "{{ url_for('download_session_zip', sess='') }}" + sessName + '\">Download ZIP</a>';
+      btn.disabled = false;
+    } else if (status === 'error') {
+      progWrap.classList.remove('show');
+      bar.style.width = '0%';
+      label.textContent = 'Error creating ZIP';
+      btn.disabled = false;
+    } else {
+      progWrap.classList.remove('show');
+      bar.style.width = '0%';
+      label.textContent = '';
+      btn.disabled = false;
+    }
+  }
+
+  async function poll(){
+    const jobs = await fetchJobs();
+    // find all session names displayed on the page and update each (cheap approach)
+    document.querySelectorAll('[id^=\"zip-btn-\"]').forEach(btn=>{
+      const id = btn.id.replace('zip-btn-','');
+      updateForSession(jobs, id);
+    });
+  }
+
+  // Kick off
+  setInterval(poll, POLL_MS);
+  // Also poll once immediately after load
+  poll();
 })();
 </script>
 {% endif %}
