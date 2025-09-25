@@ -2248,7 +2248,7 @@ TPL_INDEX = r"""
   }
 
   .footer {
-  position: sticky; bottom: 0; background:#fff; border-radius:0px;margin-bottom:0px;
+  position: sticky; bottom: 0; background:#fff;max-width: 820px;
   border-top:1px solid var(--border); padding:10px 12px;
   }
   .footer .row { align-items:center; justify-content:space-between; }
