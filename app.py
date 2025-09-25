@@ -2169,7 +2169,7 @@ TPL_INDEX = r"""
 <style>
   .zip-progress{height:10px;background:#e6e6e6;border-radius:6px;overflow:hidden;width:160px;margin-top:6px}
   .zip-progress > .bar{height:100%;width:0%;background:#47b870;border-radius:6px}
-  .zip-label{font-size:13px;color:#6b7280;margin-left:8px}
+  .zip-label{font-size:16px;font-weight:600;color:#6b7280;margin-left:8px}
   #active-encoding-wrap{display:flex;gap:10px;align-items:center;padding:8px 12px;border-radius:10px;background:#fff;border:1px solid var(--border);margin-bottom:12px}
   #active-encoding-wrap .bar{height:12px;border-radius:8px;background:#3b82f6;width:0%}
   #active-encoding-wrap .label{font-size:14px;color:var(--text)}
@@ -2762,6 +2762,53 @@ async function poll(){
   setInterval(poll, POLL_MS);
   poll();
 })();
+</script>
+<script>
+  // Toggles the visibility of the settings panel
+  function toggleSettings() {
+    const panel = document.getElementById('settings-panel');
+    if (panel) {
+      // Check if the panel is currently hidden
+      if (panel.style.display === 'none' || panel.style.display === '') {
+        panel.style.display = 'block'; // Show the panel
+      } else {
+        panel.style.display = 'none'; // Hide the panel
+      }
+    }
+  }
+
+  // Sends the browser's current time to the server to sync the system clock
+  async function syncTime(event) {
+    event.preventDefault(); // Prevent default link behavior
+    const btn = event.target;
+    const originalText = btn.textContent;
+    btn.textContent = 'Syncing...';
+    btn.disabled = true;
+
+    try {
+      const response = await fetch("{{ url_for('sync_time_route') }}", {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ time: new Date().toISOString() }) // Send current time as an ISO string
+      });
+
+      if (response.ok) {
+        btn.textContent = '✅ Synced!';
+        // Reload the page after a short delay to reflect any changes
+        setTimeout(() => { window.location.reload(); }, 1500);
+      } else {
+        throw new Error('Server responded with an error');
+      }
+    } catch (error) {
+      console.error('Time sync failed:', error);
+      btn.textContent = '❌ Error';
+      // Reset the button text after an error
+      setTimeout(() => {
+        btn.textContent = originalText;
+        btn.disabled = false;
+      }, 2500);
+    }
+  }
 </script>
 """
 
