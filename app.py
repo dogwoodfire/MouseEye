@@ -2248,7 +2248,7 @@ TPL_INDEX = r"""
     background:#5ca5d6; /* light blue */
   }
   .footer .label { color: var(--muted); font-size: 13px; }
-  .footer .status { font-size: 16px; font-wight: 600; color: var(--muted); }
+  .footer .status { font-size: 16px; font-wight: 600; color: var(--btn-strong-bg); }
   .diskbar .fill { height:100%; width:0%; transition:width .25s ease; }
   .diskbar .fill.ok   { background:#5ca5d6; } /* light blue */
   .diskbar .fill.warn { background:#f59e0b; } /* amber */
