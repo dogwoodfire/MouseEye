@@ -2688,100 +2688,52 @@ function updateForSession(jobs, sessName){
     }
   }
 
-  async function poll(){
+async function poll(){
     const jobs = await fetchJobs();
-    document.querySelectorAll('[id^=\"zip-btn-\"]').forEach(btn=>{
-      const id = btn.id.replace('zip-btn-','');
+    if (!jobs) return;
+
+    let anyEncodingActive = false;
+
+    // First, handle all zip progress updates
+    document.querySelectorAll('[id^="zip-btn-"]').forEach(btn => {
+      const id = btn.id.replace('zip-btn-', '');
       updateForSession(jobs, id);
     });
-  }
 
-  setInterval(poll, POLL_MS);
-  poll();
-})();
+    // Now, handle all encoding progress updates
+    document.querySelectorAll('[id^="prog-"]').forEach(progEl => {
+      const sessName = progEl.id.replace('prog-', '');
+      const barEl = document.getElementById('bar-' + sessName);
+      if (!barEl) return;
 
-(function(){
-  const POLL_MS = 1500;
-  const JOBS_URL = "{{ url_for('jobs') }}";
-  const CURRENT_SESSION = "{{ current_session or '' }}";
+      const job = jobs[sessName]; // Find the encoding job for this specific session
 
-  function ensureActiveEncodingEl(){
-    if (document.getElementById('active-encoding-wrap')) return;
-    const header = document.querySelector('header') || document.body;
-    const wrap = document.createElement('div');
-    wrap.id = 'active-encoding-wrap';
-    wrap.style.display = 'none';
-    wrap.innerHTML = `<div class="label">Encoding:</div><div style="flex:1;min-width:120px;max-width:420px;background:#e6e6e6;padding:6px;border-radius:8px"><div class="bar" style="width:0%"></div></div><div class="label" id="active-encoding-text"></div>`;
-    header.parentNode.insertBefore(wrap, header.nextSibling);
-  }
+      if (job && (job.status === 'encoding' || job.status === 'queued')) {
+        anyEncodingActive = true;
+        const progress = Number(job.progress || 0);
+        progEl.classList.add('show');
+        barEl.style.width = progress + '%';
+      } else {
+        // If job is done, errored, or doesn't exist, hide the bar
+        progEl.classList.remove('show');
+        barEl.style.width = '0%';
+      }
+    });
 
-  function setActiveEncoding(progress, text){
-    ensureActiveEncodingEl();
-    const wrap = document.getElementById('active-encoding-wrap');
-    const bar = wrap.querySelector('.bar');
-    const txt = document.getElementById('active-encoding-text');
-    if (progress == null){
-      wrap.style.display = 'none';
-    } else {
-      wrap.style.display = 'flex';
-      bar.style.width = Math.max(0, Math.min(100, progress)) + '%';
-      txt.textContent = text || '';
+    // Update the global status text at the bottom of the page
+    const bgStatusEl = document.getElementById('background-status');
+    if (bgStatusEl) {
+        bgStatusEl.textContent = anyEncodingActive ? 'Status: Encoding...' : '';
     }
-  }
-
-  function setStartEncodeDisabled(disabled){
-    document.querySelectorAll('button.start-btn, button.encode-btn, a.btn.start-btn, a.btn.encode-btn').forEach(b=>{ b.disabled = disabled; if(disabled) b.classList.add('disabled'); else b.classList.remove('disabled'); });
-    document.querySelectorAll('form').forEach(f=>{
-      try{
-        const a = f.getAttribute('action') || f.action || '';
-        if (a.includes('/start') || a.includes('/encode')){
-          Array.from(f.querySelectorAll('button, input[type=submit]')).forEach(el=> el.disabled = disabled);
-        }
-      }catch(e){}
+    
+    // Disable all encode/re-encode buttons if any job is active
+    document.querySelectorAll('form[action*="/encode"] button').forEach(button => {
+        button.disabled = anyEncodingActive;
     });
   }
 
-  function applyJobs(jobs){
-    let anyZipActive = false;
-    for (const [k,v] of Object.entries(jobs || {})){
-      if (!k.startsWith('zip:')) continue;
-      const sess = k.slice(4);
-      const status = (v.status || '').toLowerCase();
-      const progress = Number(v.progress || 0);
-      
-      const bar = document.getElementById('zip-bar-' + sess);
-      if (status === 'queued' || status === 'zipping'){
-        anyZipActive = true;
-      }
-    }
-
-    setStartEncodeDisabled(anyZipActive);
-
-    if (CURRENT_SESSION){
-      const enc = jobs[CURRENT_SESSION];
-      if (enc && (enc.status === 'encoding' || enc.status === 'queued')){
-        const p = Number(enc.progress || 0);
-        setActiveEncoding(p, (enc.status === 'queued') ? 'Queued…' : ('Encoding: ' + p + '%'));
-      } else {
-        setActiveEncoding(null);
-      }
-    } else {
-      setActiveEncoding(null);
-    }
-  }
-
-  async function poll(){
-    try{
-      const r = await fetch(JOBS_URL, {cache:'no-store'});
-      if (!r.ok) return;
-      const jobs = await r.json();
-      applyJobs(jobs);
-    }catch(e){}
-  }
-  
-  ensureActiveEncodingEl();
-  poll();
   setInterval(poll, POLL_MS);
+  poll();
 })();
 </script>
 """
