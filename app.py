@@ -650,12 +650,23 @@ def session_status(sess):
     """Return JSON with number of frames and remaining seconds for a session."""
     active = (_current_session == sess)
     frames_count = 0
+    quality = 'std'  # Default quality
     try:
         sess_dir = _session_path(sess)
         if os.path.isdir(sess_dir):
             frames_count = len(glob.glob(os.path.join(sess_dir, "*.jpg")))
+            # THE FIX: Read the quality setting for the active session
+            quality_file = os.path.join(sess_dir, 'quality.json')
+            if os.path.exists(quality_file):
+                try:
+                    with open(quality_file, 'r') as f:
+                        data = json.load(f)
+                        quality = data.get('quality', 'std')
+                except Exception:
+                    pass
     except Exception:
         frames_count = 0
+
     remaining_sec = None
     try:
         if active and _capture_end_ts:
@@ -664,6 +675,7 @@ def session_status(sess):
                 remaining_sec = rem
     except Exception:
         remaining_sec = None
+        
     return jsonify({
         "active": active,
         "frames": frames_count,
@@ -672,6 +684,7 @@ def session_status(sess):
         "end_ts": (_capture_end_ts if active else None),
         "interval": (_capture_interval if active else None),
         "fps": (_capture_fps if active else None),
+        "quality": quality # Add quality to the response
     })
 
 # ---------- Helpers ----------
@@ -2198,6 +2211,7 @@ TPL_INDEX = r"""
       <div class="sub" id="active-stats">
         <span>Frame: <span id="active-frames">0</span></span>
         <span id="active-time" style="margin-left:8px;"></span>
+        <span id="active-quality" style="margin-left:8px;"></span>
       </div>
       
       <div class="sub" id="active-meta">
@@ -2380,7 +2394,7 @@ TPL_INDEX = r"""
   </div>
 
 <script>
-// ... (all other javascript is unchanged until the bottom script block) ...
+    // ... (all other javascript is unchanged) ...
 </script>
 {% if current_session %}
 <script>
@@ -2390,6 +2404,7 @@ TPL_INDEX = r"""
   const framesEl = document.getElementById('active-frames');
   const timeEl = document.getElementById('active-time');
   const barEl = document.getElementById('active-bar');
+  const qualityEl = document.getElementById('active-quality'); // THE FIX: Get the quality span
   let imgEl = document.getElementById('active-preview');
   const phEl  = document.getElementById('active-preview-placeholder');
   const intEl = document.getElementById('active-interval');
@@ -2407,11 +2422,19 @@ TPL_INDEX = r"""
     if (typeof st.interval === 'number' && intEl) intEl.textContent = st.interval;
     if (typeof st.fps === 'number' && fpsEl) fpsEl.textContent = st.fps;
 
+    // THE FIX: Update the quality text
+    if (st.quality && qualityEl) {
+        if (st.quality === 'hq') {
+            qualityEl.innerHTML = `• <span style="background:#eef2ff; color:#4338ca; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:500;">High Quality</span>`;
+        } else {
+            qualityEl.textContent = '• Standard Quality';
+        }
+    }
+
     const now = Math.floor(Date.now()/1000);
     const start = st.start_ts || 0;
     const end   = st.end_ts || 0;
 
-    // THE FIX: Differentiate between countdown and count-up timers
     if (end > 0) {
         // Countdown for timed/scheduled sessions
         const remaining = end - now;
@@ -2436,7 +2459,6 @@ TPL_INDEX = r"""
     const base = `{{ url_for('preview', sess=current_session) }}`;
     if ((st.frames|0) > 0) {
       if (!imgEl) {
-        // swap placeholder for an <img>
         const ph = document.getElementById('active-preview-placeholder');
         const img = document.createElement('img');
         img.id = 'active-preview';
@@ -2452,9 +2474,8 @@ TPL_INDEX = r"""
         imgEl.src = base + '?t=' + Date.now();
       }
     } else {
-      // No frames yet: ensure placeholder is present and no stale image remains
       if (!document.getElementById('active-preview-placeholder')) {
-        const img = imgEl; // may be null
+        const img = imgEl; 
         const ph = document.createElement('div');
         ph.id = 'active-preview-placeholder';
         ph.className = 'placeholder';
