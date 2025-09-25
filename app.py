@@ -926,6 +926,10 @@ def _scheduler_thread():
                     # Find a schedule that should be active now
                     schedule_to_start = None
                     for sid, sched_data in _schedules.items():
+                        # THE FIX: Ignore schedules that were manually stopped
+                        if sched_data.get('manually_stopped'):
+                            continue
+
                         if sched_data.get("start_ts", 0) <= now < sched_data.get("end_ts", 0):
                             schedule_to_start = sched_data
                             schedule_to_start['id'] = sid
@@ -1388,6 +1392,13 @@ def stop_timelapse():
 
 @app.route("/stop", methods=["GET","POST"], endpoint="stop_route")
 def stop_route():
+    if _active_schedule_id:
+        with _sched_lock:
+            # Mark the schedule as manually stopped to prevent the scheduler from restarting it
+            if _active_schedule_id in _schedules:
+                _schedules[_active_schedule_id]['manually_stopped'] = True
+                _save_sched_state()
+
     stop_timelapse()
     return redirect(url_for("index"))
 
