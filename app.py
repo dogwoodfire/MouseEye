@@ -2199,7 +2199,7 @@ TPL_INDEX = r"""
   .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 
   button, .btn {
-    font-weight: normal;border:1px solid var(--border); background: var(--btn); color: var(--btn-text);
+    font-weight: 600;border:1px solid var(--border); background: var(--btn); color: var(--btn-text);
     border-radius:10px; padding:10px 12px; font-size:16px; line-height:1; text-decoration:none; display:inline-flex; align-items:center; gap:8px;
   }
   .btn-strong { background: var(--btn-strong-bg); color: var(--btn-strong-text); border-color: transparent;}
@@ -2246,6 +2246,7 @@ TPL_INDEX = r"""
     background:#5ca5d6; /* light blue */
   }
   .footer .label { color: var(--muted); font-size: 13px; }
+  .footer .status { font-size: 16px; font-wight: 600; color: var(--muted); }
   .diskbar .fill { height:100%; width:0%; transition:width .25s ease; }
   .diskbar .fill.ok   { background:#5ca5d6; } /* light blue */
   .diskbar .fill.warn { background:#f59e0b; } /* amber */
@@ -2504,7 +2505,7 @@ TPL_INDEX = r"""
     {% if temp %}
       <div class="label" id="temp-text">CPU Temp: </br>{{ temp }}°C</div>
     {% endif %}
-    {% if background_status %}  <div class="label" id="background-status" style="color: #3b82f6;">{{ background_status }}</div> {% endif %} </div>
+    {% if background_status %}  <div class="status" id="background-status">{{ background_status }}</div> {% endif %} </div>
 </div>
 
 {% if current_session %}
