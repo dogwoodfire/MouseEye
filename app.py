@@ -843,6 +843,7 @@ def _list_sessions():
             
             jpg = _session_latest_jpg(sd)
             vid = _video_path(sd)
+            zip_path = os.path.join(sd, f"{_safe_name(d)}-images.zip") 
             has_video = os.path.exists(vid)
 
             quality = 'std' # Default to standard
@@ -861,6 +862,7 @@ def _list_sessions():
                 "has_frame": bool(jpg),
                 "latest": os.path.basename(jpg) if jpg else "",
                 "has_video": has_video,
+                "has_zip": has_zip,
                 "video": os.path.basename(vid) if has_video else "",
                 "count": len(glob.glob(os.path.join(sd, "*.jpg"))),
                 "created_ts": os.path.getctime(sd),
@@ -2459,15 +2461,19 @@ TPL_INDEX = r"""
         {% if s.has_video and s.quality == 'std' %}
           <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Video</a>
         {% endif %}
-        <form action="{{ url_for('zip_session', sess=s['name']) }}" method="post" style="display:inline;">
+                <form action="{{ url_for('zip_session', sess=s['name']) }}" method="post" style="display:inline;">
             <button type="submit" class="btn" id="zip-btn-{{ s['name'] }}">📦 Zip images</button>
         </form>
 
-        <div class="progress" id="zip-progress-{{ s['name'] }}">
+        <div class="progress" id="zip-progress-{{ s['name'] }}" style="display: none;">
             <div class="bar" style="width:0%" id="zip-bar-{{ s['name'] }}"></div>
         </div>
         <span class="sub" id="zip-label-{{ s['name'] }}"></span>
-        <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}" id="zip-download-{{ s.name }}" style="display:none;">⬇️ Images (.zip)</a>
+        
+        <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}" id="zip-download-{{ s.name }}" 
+           style="display:{% if s.has_zip %}inline-flex{% else %}none{% endif %};">
+           ⬇️ Images (.zip)
+        </a>
 
         <form action="{{ url_for('rename', sess=s.name) }}" method="post">
           <input name="new_name" type="text" placeholder="rename…" {% if current_session == s.name %}disabled title="Stop capture first"{% endif %}>
@@ -2637,7 +2643,7 @@ TPL_INDEX = r"""
     }
   }
 
-  function updateForSession(jobs, sessName){
+function updateForSession(jobs, sessName){
     const key = "zip:" + sessName;
     const entry = jobs && jobs[key];
     const bar = document.getElementById("zip-bar-" + sessName);
@@ -2646,7 +2652,7 @@ TPL_INDEX = r"""
     const btn = document.getElementById("zip-btn-" + sessName);
     const downloadBtn = document.getElementById("zip-download-" + sessName);
 
-    if (!bar || !progWrap || !label || !btn) return;
+    if (!bar || !progWrap || !label || !btn || !downloadBtn) return;
 
     if (!entry) {
       progWrap.style.display = 'none';
@@ -2654,6 +2660,32 @@ TPL_INDEX = r"""
       btn.disabled = false;
       return;
     }
+
+    const status = entry.status || entry.state || '';
+    const progress = entry.progress || 0;
+
+    if (status === 'queued' || status === 'zipping') {
+      progWrap.style.display = 'block';
+      bar.style.width = Math.max(1, progress) + '%';
+      label.textContent = (status === 'queued') ? 'Queued…' : ('Zipping: ' + progress + '%');
+      btn.disabled = true;
+      downloadBtn.style.display = 'none';
+    } else if (status === 'done') {
+      progWrap.style.display = 'none';
+      label.textContent = ''; // REMOVED THE "Ready" MESSAGE
+      btn.disabled = false;
+      downloadBtn.style.display = 'inline-flex';
+    } else if (status === 'error') {
+      progWrap.style.display = 'none';
+      label.textContent = 'Error creating ZIP';
+      btn.disabled = false;
+      downloadBtn.style.display = 'none';
+    } else {
+      progWrap.style.display = 'none';
+      label.textContent = '';
+      btn.disabled = false;
+    }
+  }
 
     const status = entry.status || entry.state || '';
     const progress = entry.progress || 0;
