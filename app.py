@@ -2487,7 +2487,7 @@ TPL_INDEX = r"""
     {% endif %}
   </div>
 
-
+{% if current_session %}
 <script>
 // --- Active session updater (preview, frames, time, progress, interval, fps) ---
 (function(){
@@ -2601,6 +2601,8 @@ TPL_INDEX = r"""
   setInterval(pollActiveCard, 1000);
   pollActiveCard();
 })();
+</script>
+{% endif %}
 
 (function(){
   const POLL_MS = 1500;
