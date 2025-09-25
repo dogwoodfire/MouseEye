@@ -6,6 +6,7 @@ def _needs_pillarbox(w, h):
     return (abs(w * 9 - h * 16) > 8)
 # -*- coding: utf-8 -*-
 import os, time, threading, subprocess, shutil, glob, json, mimetypes
+import sys
 from datetime import datetime
 from flask import Flask, request, redirect, url_for, send_file, abort, jsonify, render_template_string
 import pytz
