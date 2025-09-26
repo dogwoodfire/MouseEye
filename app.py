@@ -1880,33 +1880,38 @@ def lcd_status():
         frames = 0
         start_ts = None
         end_ts = None
+        quality = 'std' # Default quality
 
         if active:
-            # If a capture is active, get the frame count
             sd = _session_path(_current_session)
             if os.path.isdir(sd):
                 frames = len(glob.glob(os.path.join(sd, "*.jpg")))
+                # Read the quality setting for the active session
+                quality_file = os.path.join(sd, 'quality.json')
+                if os.path.exists(quality_file):
+                    try:
+                        with open(quality_file, 'r') as f:
+                            data = json.load(f)
+                            quality = data.get('quality', 'std')
+                    except Exception:
+                        pass # Keep default if file is corrupted
 
-            # The actual start time is always recorded in _capture_start_ts
             start_ts = _capture_start_ts
-
-            # Now determine the end time. Check for an active schedule first.
+            
             nxt = _get_next_schedule()
             if nxt and nxt.get("active_now"):
-                # It's a scheduled capture, get the end time from the schedule
                 sched_data = _schedules.get(nxt["id"], {})
                 end_ts = sched_data.get("end_ts")
             else:
-                # It must be a manual capture, get the end time from the timer
                 end_ts = _capture_end_ts
         
-        # Get next schedule info for the main screen, regardless of active state
         next_sched_info = _get_next_schedule()
 
         return jsonify({
             "active": active,
             "session": _current_session or "",
             "frames": frames,
+            "quality": quality, # This line is new
             "start_ts": start_ts,
             "end_ts": end_ts,
             "encoding": _any_encoding_active(),
@@ -1919,7 +1924,7 @@ def lcd_status():
     except Exception:
         # never crash the LCD
         return jsonify({
-            "active": False, "session": "", "frames": 0,
+            "active": False, "session": "", "frames": 0, "quality": "std",
             "start_ts": None, "end_ts": None, "encoding": False, "zipping": False,
             "disk": _disk_stats(), "next_sched": None, "live_idle": True,
             "shutting_down": os.path.exists(SHUTDOWN_FLAG),
@@ -2416,14 +2421,14 @@ TPL_INDEX = r"""
     </div>
     <div class="row">
         <label>Image Quality:</label>
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Captures High Quality images and also creates Standard copies for on-device video encoding.">
+            <input type="radio" name="quality" value="hybrid" checked> Hybrid
+        </label>
         <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Good for on-device video encoding.">
-            <input type="radio" name="quality" value="std" checked> Standard
+            <input type="radio" name="quality" value="std"> Standard
         </label>
         <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Best for exporting images to edit elsewhere.">
             <input type="radio" name="quality" value="hq"> High
-        </label>
-        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Captures High Quality images and also creates Standard copies for on-device video encoding.">
-            <input type="radio" name="quality" value="hybrid"> Hybrid
         </label>
     </div>
   <div class="row">
@@ -3137,15 +3142,16 @@ SCHED_TPL = '''<!doctype html>
   </select>
     <label>Image Quality</label>
     <div class="row">
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Captures High Quality images and also creates Standard copies for on-device video encoding.">
+            <input type="radio" name="quality" value="hybrid" checked onchange="toggleEncode(this)"> Hybrid
+        </label>
         <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Good for on-device video encoding.">
-            <input type="radio" name="quality" value="std" checked onchange="toggleEncode(this)"> Standard
+            <input type="radio" name="quality" value="std"  onchange="toggleEncode(this)"> Standard
         </label>
         <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Best for exporting images to edit elsewhere.">
             <input type="radio" name="quality" value="hq" onchange="toggleEncode(this)"> High
         </label>
-        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Captures High Quality images and also creates Standard copies for on-device video encoding.">
-            <input type="radio" name="quality" value="hybrid" onchange="toggleEncode(this)"> Hybrid
-        </label>
+
     </div>
   <label style="display:flex;gap:8px;align-items:center;margin-top:6px;">
     <input type="checkbox" name="auto_encode" checked id="auto_encode_checkbox">
