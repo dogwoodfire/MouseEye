@@ -2442,6 +2442,7 @@ TPL_INDEX = r"""
           {{ next_sched.start_human }} → {{ next_sched.end_human }}
           • every {{ next_sched.interval }}s
           • {{ next_sched.fps }} FPS
+          • Quality: {{ next_sched.quality|capitalize }}
           • Schedule name: {{next_sched.sess}}
           • Auto-encode: {{ 'on' if next_sched.auto_encode else 'off' }}
           • {{ 'ACTIVE NOW' if next_sched.active_now else 'upcoming' }}
@@ -2958,6 +2959,7 @@ def _get_next_schedule():
         "fps": int(st.get("fps", 24)),
         "sess": (st.get("sess") or None),
         "auto_encode": bool(st.get("auto_encode", False)),
+        "quality": st.get("quality", "std"),
         "active_now": int(st.get("start_ts", 0)) <= now < int(st.get("end_ts", 0)),
     }
 
