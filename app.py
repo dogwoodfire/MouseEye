@@ -331,14 +331,16 @@ def _rotate_copy_to(src_path: str, dst_path: str, deg: int = None):
     except Exception as e:
         print(f"[_rotate_copy_to] failed from {src_path} -> {dst_path}: {e}")
 
-def _downscale_copy_to(src_path: str, dst_path: str, size: tuple = (int(TL_WIDTH), int(TL_HEIGHT))):
+def _downscale_copy_to(src_path: str, dst_path: str, size: tuple = None):
     """
     Read image at src_path, resize it, and save to dst_path.
     Creates parent directory for dst if needed.
     """
+    # This 'if' block is the fix. It sets the default size inside
+    # the function, after all global variables have been loaded.
     if size is None:
         size = (int(TL_WIDTH), int(TL_HEIGHT))
-        
+
     try:
         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
         with Image.open(src_path) as im:
