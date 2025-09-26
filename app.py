@@ -1002,6 +1002,7 @@ def _action_processor_thread():
                 interval = sched.get('interval', 10)
                 sess_name = sched.get('sess', '')
                 _active_schedule_id = payload['schedule']['id']
+                _capture_end_ts = sched.get('end_ts')
                 # UI: capture metadata
                 globals()['_capture_interval'] = interval
                 globals()['_capture_fps'] = sched.get('fps', DEFAULT_FPS)
@@ -2598,6 +2599,8 @@ TPL_INDEX = r"""
     if (st.quality && qualityEl) {
         if (st.quality === 'hq') {
             qualityEl.innerHTML = `• <span style="background:#eef2ff; color:#4338ca; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:500;">High Quality</span>`;
+        } else if (st.quality === 'hybrid') {
+            qualityEl.innerHTML = `• <span style="background:#e0f2fe; color:#0c4a6e; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:500;">Hybrid</span>`;
         } else {
             qualityEl.textContent = '• Standard Quality';
         }
