@@ -2532,7 +2532,7 @@ TPL_INDEX = r"""
         <span class="sub" id="zip-label-{{ s['name'] }}"></span>
         
         <a class="btn" href="{{ url_for('download_session_zip', sess=s.name) }}" id="zip-download-{{ s.name }}" 
-           style="display:{% if s.has_zip %}inline-flex{% else %}none{% endif %};">
+           style="margin-left:0px; display:{% if s.has_zip %}inline-flex{% else %}none{% endif %};">
            ⬇️ Zip file
         </a>
         </div>
@@ -2732,24 +2732,35 @@ TPL_INDEX = r"""
         } catch (e) { /* ignore network errors */ }
 
         let anyEncodingActive = false;
+        // THE FIX: Check for ANY active zip job, just like we do for encoding.
+        let anyZippingActive = false;
+
         if (jobs) {
-            for (const job of Object.values(jobs)) {
+            for (const [key, job] of Object.entries(jobs)) {
                 if (job.status === 'encoding' || job.status === 'queued') {
                     anyEncodingActive = true;
-                    break;
                 }
+                if (key.startsWith('zip:') && (job.status === 'zipping' || job.status === 'queued')) {
+                    anyZippingActive = true;
+                }
+                // Break early if both are found
+                if (anyEncodingActive && anyZippingActive) break;
             }
         }
         
+        const isJobActive = anyEncodingActive || anyZippingActive;
+
         // Update the global status text at the bottom
         const bgStatusEl = document.getElementById('background-status');
         if (bgStatusEl) {
-            bgStatusEl.textContent = anyEncodingActive ? 'Status: Encoding...' : '';
+            let statusText = '';
+            if (anyEncodingActive) statusText = 'Status: Encoding...';
+            else if (anyZippingActive) statusText = 'Status: Zipping...';
+            bgStatusEl.textContent = statusText;
         }
 
         // Iterate over all session cards to update their state
         document.querySelectorAll('.session').forEach(card => {
-            // Find an element with a session-specific ID to get the name
             const progEl = card.querySelector('[id^="prog-"]');
             if (!progEl) return;
             const sessName = progEl.id.replace('prog-', '');
@@ -2757,10 +2768,8 @@ TPL_INDEX = r"""
             // --- Update Encoding Progress and Buttons ---
             const encJob = jobs ? jobs[sessName] : null;
             const barEl = document.getElementById('bar-' + sessName);
-            const isEncodingThisSession = encJob && (encJob.status === 'encoding' || encJob.status === 'queued');
-
             if (progEl && barEl) {
-                if (isEncodingThisSession) {
+                if (encJob && (encJob.status === 'encoding' || encJob.status === 'queued')) {
                     progEl.classList.add('show');
                     barEl.style.width = (encJob.progress || 0) + '%';
                 } else {
@@ -2768,7 +2777,8 @@ TPL_INDEX = r"""
                 }
             }
             card.querySelectorAll('form[action*="/encode"] button, form[action*="/encode"] select').forEach(el => {
-                el.disabled = isCaptureActive || anyEncodingActive;
+                // THE FIX: Disable if any job is active.
+                el.disabled = isCaptureActive || isJobActive;
             });
 
             // --- Update Zip Progress and Buttons ---
@@ -2783,8 +2793,10 @@ TPL_INDEX = r"""
             const zipDownloadBtn = document.getElementById('zip-download-' + sessName);
 
             if (zipBtn) {
-                zipBtn.disabled = isCaptureActive || anyEncodingActive || isZippingThisSession;
+                // THE FIX: Disable if any job is active.
+                zipBtn.disabled = isCaptureActive || isJobActive;
             }
+            // This part remains specific to this card's zip job
             if (zipProgWrap && zipBar && zipLabel) {
                 if (isZippingThisSession) {
                     zipProgWrap.style.display = 'block';
@@ -2797,14 +2809,13 @@ TPL_INDEX = r"""
             }
             if (zipDownloadBtn) {
                 const shouldShowZip = zipJob && zipJob.status === 'done';
-                // Only show if the zip exists and is not actively being re-zipped
                 zipDownloadBtn.style.display = (shouldShowZip && !isZippingThisSession) ? 'inline-flex' : 'none';
             }
 
             // --- Update Other Action Buttons (Delete, Rename) ---
-            const isJobRunningOnThisCard = isEncodingThisSession || isZippingThisSession;
             card.querySelectorAll('form[action*="/delete"] button, form[action*="/rename"] button, form[action*="/rename"] input').forEach(el => {
-                el.disabled = isCaptureActive || anyEncodingActive || isJobRunningOnThisCard;
+                // THE FIX: Disable if any job is active.
+                el.disabled = isCaptureActive || isJobActive;
             });
         });
     }
