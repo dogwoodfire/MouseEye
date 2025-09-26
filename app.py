@@ -331,6 +331,23 @@ def _rotate_copy_to(src_path: str, dst_path: str, deg: int = None):
     except Exception as e:
         print(f"[_rotate_copy_to] failed from {src_path} -> {dst_path}: {e}")
 
+def _downscale_copy_to(src_path: str, dst_path: str, size: tuple = (int(TL_WIDTH), int(TL_HEIGHT))):
+    """
+    Read image at src_path, resize it, and save to dst_path.
+    Creates parent directory for dst if needed.
+    """
+    try:
+        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+        with Image.open(src_path) as im:
+            # Use thumbnail for a high-quality downscale
+            im.thumbnail(size, Image.Resampling.LANCZOS)
+            tmp = dst_path + ".tmp"
+            # No need to preserve EXIF for the smaller video frames
+            im.save(tmp, format="JPEG")
+            os.replace(tmp, dst_path)
+    except Exception as e:
+        print(f"[_downscale_copy_to] failed from {src_path} -> {dst_path}: {e}")
+
 # --- Optional hflip/vflip flags from prefs ---
 def _mirror_flags_from_prefs():
     """
@@ -515,7 +532,12 @@ def _start_encode_worker_once():
 
                 sess_dir = _session_path(sess)
                 out = _video_path(sess_dir)
-                frames = sorted(glob.glob(os.path.join(sess_dir, "*.jpg")))
+
+                # Use std_frames if they exist, otherwise use the main session dir
+                std_frames_dir = os.path.join(sess_dir, "std_frames")
+                frames_source_dir = std_frames_dir if os.path.isdir(std_frames_dir) else sess_dir
+                
+                frames = sorted(glob.glob(os.path.join(frames_source_dir, "*.jpg")))
                 total_frames = len(frames)
                 if total_frames == 0:
                     _jobs[sess] = {"status": "error", "progress": 0}
@@ -546,7 +568,7 @@ def _start_encode_worker_once():
                     "-threads", "1",
                     "-framerate", str(fps),
                     "-pattern_type", "glob",
-                    "-i", os.path.join(sess_dir, "*.jpg"),
+                    "-i", os.path.join(frames_source_dir, "*.jpg"),
                     "-pix_fmt", "yuv420p",
                 ]
 
@@ -998,6 +1020,10 @@ def _action_processor_thread():
             sess_dir = _session_path(_current_session)
             os.makedirs(sess_dir, exist_ok=True)
 
+            # Create a subdirectory for standard-def frames if in hybrid mode
+            if quality == 'hybrid':
+                os.makedirs(os.path.join(sess_dir, 'std_frames'), exist_ok=True)
+
             try:
                 with open(os.path.join(sess_dir, 'quality.json'), 'w') as f:
                     json.dump({'quality': quality}, f)
@@ -1031,20 +1057,19 @@ threading.Thread(target=_action_processor_thread, daemon=True).start()
 def _capture_loop(sess_dir, interval, quality='std'):
     global _stop_event, _last_frame_ts
 
-    # Use rpicam-still's built-in timelapse mode, but write raw frames to a staging folder.
     raw_dir = os.path.join(sess_dir, "_raw")
     os.makedirs(raw_dir, exist_ok=True)
     jpg_pattern = os.path.join(raw_dir, "%06d.jpg")
     
     total_run_time_ms = 24 * 3600 * 1000 # 24 hours in ms
 
-    # Choose resolution based on the quality parameter
-    width, height = (HQ_WIDTH, HQ_HEIGHT) if quality == 'hq' else (TL_WIDTH, TL_HEIGHT)
+    # Choose resolution: HQ for 'hq' and 'hybrid', otherwise STD
+    width, height = (HQ_WIDTH, HQ_HEIGHT) if quality in ('hq', 'hybrid') else (TL_WIDTH, TL_HEIGHT)
 
     cmd = [
         CAMERA_STILL,
         "-o", jpg_pattern,
-        "--width", width, "--height", height, # Use the selected width and height
+        "--width", width, "--height", height,
         "--quality", CAPTURE_QUALITY,
         "--nopreview",
         "--exposure", "normal",
@@ -1074,8 +1099,14 @@ def _capture_loop(sess_dir, interval, quality='std'):
                         dst  = os.path.join(sess_dir, base)
                         _rotate_copy_to(src, dst)
                         processed.add(src)
+                        
+                        # If in hybrid mode, create the downscaled copy
+                        if quality == 'hybrid' and os.path.exists(dst):
+                            std_dst = os.path.join(sess_dir, 'std_frames', base)
+                            _downscale_copy_to(dst, std_dst)
+
                 except Exception as _e:
-                    log_file.write(f"Rotation error: {_e}\n")
+                    log_file.write(f"Rotation/downscale error: {_e}\n")
 
                 if proc.poll() is not None:
                     log_file.write(f"\nProcess exited unexpectedly with code: {proc.returncode}\n")
@@ -2379,11 +2410,14 @@ TPL_INDEX = r"""
     </div>
     <div class="row">
         <label>Image Quality:</label>
-        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
-            <input type="radio" name="quality" value="std" checked> Standard (for video)
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Good for on-device video encoding.">
+            <input type="radio" name="quality" value="std" checked> Standard
         </label>
-        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
-            <input type="radio" name="quality" value="hq"> High (for export)
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Best for exporting images to edit elsewhere.">
+            <input type="radio" name="quality" value="hq"> High
+        </label>
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Captures High Quality images and also creates Standard copies for on-device video encoding.">
+            <input type="radio" name="quality" value="hybrid"> Hybrid
         </label>
     </div>
   <div class="row">
@@ -2440,10 +2474,12 @@ TPL_INDEX = r"""
         {% endif %}
       </div>
       <div class="sub">
-        <span id="frames-{{ s.name }}">{{ s.count }} frame{{ '' if s.count==1 else 's' }}</span>
-        {% if s.quality == 'hq' %}
-            <span style="background:#eef2ff; color:#4338ca; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:500;">High Quality</span>
-        {% endif %}
+    <span id="frames-{{ s.name }}">{{ s.count }} frame{{ '' if s.count==1 else 's' }}</span>
+    {% if s.quality == 'hq' %}
+        <span style="background:#eef2ff; color:#4338ca; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:500;">High Quality</span>
+    {% elif s.quality == 'hybrid' %}
+        <span style="background:#e0f2fe; color:#0c4a6e; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:500;">Hybrid</span>
+    {% endif %}
         {% if s.has_video and s.quality == 'std' %} • 🎞 ready{% endif %}
         {% if current_session == s.name %}
           <span id="timeleft-{{ s.name }}"
