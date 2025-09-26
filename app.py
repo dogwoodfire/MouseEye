@@ -336,6 +336,9 @@ def _downscale_copy_to(src_path: str, dst_path: str, size: tuple = (int(TL_WIDTH
     Read image at src_path, resize it, and save to dst_path.
     Creates parent directory for dst if needed.
     """
+    if size is None:
+        size = (int(TL_WIDTH), int(TL_HEIGHT))
+        
     try:
         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
         with Image.open(src_path) as im:
