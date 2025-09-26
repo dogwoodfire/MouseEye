@@ -2248,8 +2248,8 @@ TPL_INDEX = r"""
   }
 
   .footer {
-  position: sticky; bottom: 0; background:#fff;max-width: 820px;
-  border-top:1px solid var(--border); padding:10px 12px; margin: 0 auto;
+  position: sticky; bottom: 0; background:#fff;
+  border-top:1px solid var(--border); padding:10px 12px;
   }
   .footer .row { align-items:center; justify-content:space-between; }
   .diskbar {
