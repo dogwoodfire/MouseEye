@@ -1356,13 +1356,14 @@ class UI:
             if dur_hr == 0 and dur_min == 0: dur_min = 1
             start_local = datetime.now().strftime("%Y-%m-%dT%H:%M")
             self._draw_center("Starting…")
+            auto_encode_val = "on" if (self.wz_encode and self.wz_quality != 'hq') else ""
             ok = _http_post_form(SCHED_ARM_URL, {
                 "start_local": start_local,
                 "duration_hr":  str(dur_hr),
                 "duration_min": str(dur_min),
                 "interval":     str(self.wz_interval),
                 "fps":          "24",
-                "auto_encode":  "on" if (self.wz_encode and self.wz_quality == 'std') else "",
+                "auto_encode":  auto_encode_val,
                 "sess_name":    "",
                 "quality":      self.wz_quality # Pass quality to backend
             })
