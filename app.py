@@ -3130,13 +3130,16 @@ SCHED_TPL = '''<!doctype html>
       <option value="{{ f }}" {% if f == default_fps %}selected{% endif %}>{{ f }}</option>
     {% endfor %}
   </select>
-  <label>Image Quality</label>
+    <label>Image Quality</label>
     <div class="row">
-        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
-            <input type="radio" name="quality" value="std" checked onchange="toggleEncode(this)"> Standard (for video)
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Good for on-device video encoding.">
+            <input type="radio" name="quality" value="std" checked onchange="toggleEncode(this)"> Standard
         </label>
-        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
-            <input type="radio" name="quality" value="hq" onchange="toggleEncode(this)"> High (for export)
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Best for exporting images to edit elsewhere.">
+            <input type="radio" name="quality" value="hq" onchange="toggleEncode(this)"> High
+        </label>
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;" title="Captures High Quality images and also creates Standard copies for on-device video encoding.">
+            <input type="radio" name="quality" value="hybrid" onchange="toggleEncode(this)"> Hybrid
         </label>
     </div>
   <label style="display:flex;gap:8px;align-items:center;margin-top:6px;">
@@ -3161,6 +3164,7 @@ SCHED_TPL = '''<!doctype html>
     <div><b>Start:</b> {{ sc.start_h }}</div>
     <div><b>End:</b>   {{ sc.end_h }}</div>
     <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
+    <div><b>Quality:</b> {{ sc.quality|capitalize if sc.quality else 'Standard' }}</div> 
     <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
     <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Cancel this schedule?')">
       <button class="danger" type="submit">Cancel</button>
@@ -3186,6 +3190,7 @@ SCHED_TPL = '''<!doctype html>
     <div><b>Start:</b> {{ sc.start_h }}</div>
     <div><b>End:</b>   {{ sc.end_h }}</div>
     <div><b>Interval:</b> {{ sc.interval }}s &nbsp; <b>FPS:</b> {{ sc.fps }}</div>
+    <div><b>Quality:</b> {{ sc.quality|capitalize if sc.quality else 'Standard' }}</div>
     <div><b>Auto-encode:</b> {{ 'on' if sc.auto_encode else 'off' }}</div>
     <form class="row" method="post" action="{{ url_for('schedule_cancel_id', sid=sid) }}" onsubmit="return confirm('Delete this past schedule record?')">
       <button class="danger" type="submit">Delete Record</button>
