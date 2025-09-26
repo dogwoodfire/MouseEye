@@ -1643,6 +1643,9 @@ class UI:
 
     def _render_wz(self):
         self._maybe_hard_clear()
+        # THE FIX: A map to get the correct display name for all quality options
+        quality_map = {'std': 'Standard', 'hq': 'High', 'hybrid': 'Hybrid'}
+
         if self.state == self.TL_INT:
             self._draw_wizard_page("Interval (s)", f"{self.wz_interval}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
@@ -1653,7 +1656,9 @@ class UI:
             self._draw_wizard_page("Duration mins", f"{self.tl_mins:02d}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
         elif self.state == self.TL_QUAL:
-            self._draw_wizard_page("Image Quality", "High" if self.wz_quality == 'hq' else "Standard",
+            # THE FIX: Use the map to display the correct quality name
+            quality_str = quality_map.get(self.wz_quality, 'Standard')
+            self._draw_wizard_page("Image Quality", quality_str,
                                    tips=["High quality disables auto-encode", "UP/DOWN toggle, OK next"])
         elif self.state == self.TL_ENC:
             self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
@@ -1677,8 +1682,10 @@ class UI:
             self._draw_wizard_page("End minute", f"{self.sch_end_m:02d}",
                                    tips=["UP/DOWN ±1, LEFT/RIGHT ±10", "OK next"])
         elif self.state == self.SCH_QUAL:
-            self._draw_wizard_page("Image Quality", "High" if self.wz_quality == 'hq' else "Standard",
-                                   tips=["High quality disables auto-encode", "UP/DOWN toggle, OK next"])
+            # THE FIX: Use the map here as well
+            quality_str = quality_map.get(self.wz_quality, 'Standard')
+            self._draw_wizard_page("Image Quality", quality_str,
+                                   tips=["High quality disables\nauto-encode", "UP/DOWN toggle, OK next"])
         elif self.state == self.SCH_ENC:
             self._draw_wizard_page("Auto-encode", "Yes" if self.wz_encode else "No",
                                    tips=["UP/DOWN toggle", "OK next"])
