@@ -722,6 +722,8 @@ class UI:
         frames = st.get("frames", 0)
         start_ts = st.get("start_ts")
         end_ts = st.get("end_ts")
+        # THE FIX: Get quality from the status payload
+        quality = st.get("quality", "std")
 
         # 2. Calculate progress and remaining time
         time_left_str = ""
@@ -740,8 +742,13 @@ class UI:
         # 3. Draw UI elements
         drw.text((2, 2), "Capturing...", font=F_TITLE, fill=WHITE)
         drw.text((2, 20), f"Frames: {frames}", font=F_TEXT, fill=WHITE)
+        # THE FIX: Draw the quality on the screen
+        drw.text((2, 34), f"Quality: {quality.capitalize()}", font=F_TEXT, fill=CYAN)
+        
         if time_left_str:
-            drw.text((2, 34), time_left_str, font=F_TEXT, fill=WHITE)
+            # Position time left string based on its width
+            time_w = self._text_w(F_TEXT, time_left_str)
+            drw.text((WIDTH - time_w - 2, 34), time_left_str, font=F_TEXT, fill=WHITE)
         
         # Draw Progress Bar
         if progress_pct > 0:
@@ -1066,7 +1073,15 @@ class UI:
         elif self.state in (self.TL_ENC, self.SCH_ENC):
             if abs(delta) >= 1: self.wz_encode = not self.wz_encode
         elif self.state in (self.TL_QUAL, self.SCH_QUAL):
-            if abs(delta) >= 1: self.wz_quality = 'hq' if self.wz_quality == 'std' else 'std'
+            # THE FIX: Cycle through all three quality options
+            if abs(delta) >= 1:
+                options = ['std', 'hq', 'hybrid']
+                try:
+                    current_idx = options.index(self.wz_quality)
+                except ValueError:
+                    current_idx = 0
+                next_idx = (current_idx + 1) % len(options)
+                self.wz_quality = options[next_idx]
         self.render()
 
     def ok(self):
@@ -1510,12 +1525,14 @@ class UI:
 
     # ---------- render ----------
     def _draw_confirm_tl(self, interval_s, h, m, quality, auto_encode, hi):
+        quality_map = {'std': 'Standard', 'hq': 'High', 'hybrid': 'Hybrid'}
+        quality_str = quality_map.get(quality, 'Standard')
         lines = [
             f"Interval:  {interval_s}s",
             f"Duration:  {h}h{m:02d}m",
             f"Quality:   {'High' if quality == 'hq' else 'Standard'}",
         ]
-        if quality == 'std':
+        if quality != 'hq':
             lines.append(f"Auto-enc.: {'Yes' if auto_encode else 'No'}")
         
         lines.append("") # Spacer
@@ -1527,14 +1544,18 @@ class UI:
                          highlight_idxes=set(), dividers=False)
 
     def _draw_confirm_sch(self, interval_s, sch_date, sh, sm, eh, em, quality, auto_encode, hi):
+        # THE FIX: Display all three quality options correctly
+        quality_map = {'std': 'Standard', 'hq': 'High', 'hybrid': 'Hybrid'}
+        quality_str = quality_map.get(quality, 'Standard')
+
         lines = [
             f"Interval:  {interval_s}s",
             f"Date:      {sch_date.strftime('%y-%m-%d')}",
             f"Start:     {sh:02d}:{sm:02d}",
             f"End:       {eh:02d}:{em:02d}",
-            f"Quality:   {'High' if quality == 'hq' else 'Standard'}",
+            f"Quality:   {quality_str}",
         ]
-        if quality == 'std':
+        if quality != 'hq':
              lines.append(f"Auto-enc.: {'Yes' if auto_encode else 'No'}")
 
         lines.append("") # Spacer
