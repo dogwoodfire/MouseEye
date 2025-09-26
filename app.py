@@ -2495,7 +2495,7 @@ TPL_INDEX = r"""
       </div>
 
     <div class="controls">
-        {% if s.quality == 'std' %}
+        {% if s.quality in ('std', 'hybrid') %}
         <form action="{{ url_for('encode', sess=s.name) }}" method="post" onsubmit="showProgress('{{ s.name }}')">
           <label>🎞 FPS:</label>
             <select name="fps" {% if encoding_active %}disabled{% endif %}>
@@ -2511,7 +2511,7 @@ TPL_INDEX = r"""
         </form>
         {% endif %}
         
-        {% if s.has_video and s.quality == 'std' %}
+        {% if s.has_video and s.quality in ('std', 'hybrid') %}
           <a class="btn" href="{{ url_for('download', sess=s.name) }}">⬇️ Video</a>
         {% endif %}
         <div class="row">
