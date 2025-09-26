@@ -676,8 +676,8 @@ def _start_zip_worker_once():
                 _jobs[job_key] = {"status":"zipping","progress":0,"path":zip_path}
                 tmp = zip_path + ".tmp"
 
-                # Stream the zip to disk to keep memory usage low
-                with zipfile.ZipFile(tmp, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                # THE FIX: Change compression from ZIP_DEFLATED to ZIP_STORED
+                with zipfile.ZipFile(tmp, 'w', compression=zipfile.ZIP_STORED) as zf:
                     for idx, filename in enumerate(files, start=1):
                         file_path = os.path.join(sess_dir, filename)
                         try:
