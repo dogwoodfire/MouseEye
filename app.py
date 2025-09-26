@@ -2279,7 +2279,7 @@ TPL_INDEX = r"""
 
 <main>
 {% set ap = ap_status %}
-    <div class="card" id="ap-indicator" style="background:#e9f0f7;padding:5px;">
+    <div class="card" id="ap-indicator" style="background:#e9f0f7;padding:12px 0px;">
       <div class="row" style="justify-content: space-between;">
         <span>
           {% if ap.on %}
