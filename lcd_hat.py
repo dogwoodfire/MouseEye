@@ -755,17 +755,6 @@ class UI:
             bar_width = int((WIDTH - 4) * progress_pct)
             drw.rectangle((2, bar_y, WIDTH - 2, bar_y + 8), outline=GRAY, fill=None)
             drw.rectangle((2, bar_y, 2 + bar_width, bar_y + 8), outline=None, fill=GREEN)
-        if time_left_str:
-            # Position time left string based on its width
-            time_w = self._text_w(F_TEXT, time_left_str)
-            drw.text((WIDTH - time_w - 2, 34), time_left_str, font=F_TEXT, fill=WHITE)
-        
-        # Draw Progress Bar
-        if progress_pct > 0:
-            bar_y = 52
-            bar_width = int((WIDTH - 4) * progress_pct)
-            drw.rectangle((2, bar_y, WIDTH - 2, bar_y + 8), outline=GRAY, fill=None)
-            drw.rectangle((2, bar_y, 2 + bar_width, bar_y + 8), outline=None, fill=GREEN)
 
         # 4. Draw Menu Options
         options = ["Screen off", "Stop Timelapse"]
