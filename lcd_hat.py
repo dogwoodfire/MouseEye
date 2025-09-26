@@ -742,9 +742,19 @@ class UI:
         # 3. Draw UI elements
         drw.text((2, 2), "Capturing...", font=F_TITLE, fill=WHITE)
         drw.text((2, 20), f"Frames: {frames}", font=F_TEXT, fill=WHITE)
-        # THE FIX: Draw the quality on the screen
         drw.text((2, 34), f"Quality: {quality.capitalize()}", font=F_TEXT, fill=CYAN)
         
+        next_y = 48 
+        if time_left_str:
+            time_w = self._text_w(F_TEXT, time_left_str)
+            drw.text((WIDTH - time_w - 2, next_y), time_left_str, font=F_TEXT, fill=WHITE)
+        
+        # Position the Progress Bar below the text lines
+        bar_y = next_y + 14 
+        if progress_pct > 0:
+            bar_width = int((WIDTH - 4) * progress_pct)
+            drw.rectangle((2, bar_y, WIDTH - 2, bar_y + 8), outline=GRAY, fill=None)
+            drw.rectangle((2, bar_y, 2 + bar_width, bar_y + 8), outline=None, fill=GREEN)
         if time_left_str:
             # Position time left string based on its width
             time_w = self._text_w(F_TEXT, time_left_str)
