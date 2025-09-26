@@ -744,7 +744,7 @@ class UI:
         drw.text((2, 20), f"Frames: {frames}", font=F_TEXT, fill=WHITE)
         drw.text((2, 34), f"Quality: {quality.capitalize()}", font=F_TEXT, fill=CYAN)
         
-        next_y = 48 
+        next_y = 55 
         if time_left_str:
             time_w = self._text_w(F_TEXT, time_left_str)
             drw.text((WIDTH - time_w - 2, next_y), time_left_str, font=F_TEXT, fill=WHITE)
@@ -758,7 +758,7 @@ class UI:
 
         # 4. Draw Menu Options
         options = ["Screen off", "Stop Timelapse"]
-        y = 80
+        y = 90
         for i, opt in enumerate(options):
             fill = BLUE if i == self.menu_idx else WHITE
             prefix = "> " if i == self.menu_idx else "  "

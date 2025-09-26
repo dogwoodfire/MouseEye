@@ -2720,72 +2720,97 @@ TPL_INDEX = r"""
 </script>
 {% endif %}
 <script>
-(function(){
-  const POLL_MS = 1500;
-  // THE FIX, Part 1: Check if a capture is active when the page loads.
-  const isCaptureActive = {{ 'true' if current_session else 'false' }};
+(function() {
+    const POLL_MS = 1500;
+    const isCaptureActive = {{ 'true' if current_session else 'false' }};
 
-  async function fetchJobs(){
-    try {
-      const r = await fetch("{{ url_for('jobs') }}", {cache:'no-store'});
-      if (!r.ok) return null;
-      return await r.json();
-    } catch(e){
-      return null;
+    async function poll() {
+        let jobs = null;
+        try {
+            const r = await fetch("{{ url_for('jobs') }}", { cache: 'no-store' });
+            if (r.ok) jobs = await r.json();
+        } catch (e) { /* ignore network errors */ }
+
+        let anyEncodingActive = false;
+        if (jobs) {
+            for (const job of Object.values(jobs)) {
+                if (job.status === 'encoding' || job.status === 'queued') {
+                    anyEncodingActive = true;
+                    break;
+                }
+            }
+        }
+        
+        // Update the global status text at the bottom
+        const bgStatusEl = document.getElementById('background-status');
+        if (bgStatusEl) {
+            bgStatusEl.textContent = anyEncodingActive ? 'Status: Encoding...' : '';
+        }
+
+        // Iterate over all session cards to update their state
+        document.querySelectorAll('.session').forEach(card => {
+            // Find an element with a session-specific ID to get the name
+            const progEl = card.querySelector('[id^="prog-"]');
+            if (!progEl) return;
+            const sessName = progEl.id.replace('prog-', '');
+
+            // --- Update Encoding Progress and Buttons ---
+            const encJob = jobs ? jobs[sessName] : null;
+            const barEl = document.getElementById('bar-' + sessName);
+            const isEncodingThisSession = encJob && (encJob.status === 'encoding' || encJob.status === 'queued');
+
+            if (progEl && barEl) {
+                if (isEncodingThisSession) {
+                    progEl.classList.add('show');
+                    barEl.style.width = (encJob.progress || 0) + '%';
+                } else {
+                    progEl.classList.remove('show');
+                }
+            }
+            card.querySelectorAll('form[action*="/encode"] button, form[action*="/encode"] select').forEach(el => {
+                el.disabled = isCaptureActive || anyEncodingActive;
+            });
+
+            // --- Update Zip Progress and Buttons ---
+            const zipJobKey = "zip:" + sessName;
+            const zipJob = jobs ? jobs[zipJobKey] : null;
+            const isZippingThisSession = zipJob && (zipJob.status === 'zipping' || zipJob.status === 'queued');
+            
+            const zipBtn = document.getElementById('zip-btn-' + sessName);
+            const zipProgWrap = document.getElementById('zip-progress-' + sessName);
+            const zipBar = document.getElementById('zip-bar-' + sessName);
+            const zipLabel = document.getElementById('zip-label-' + sessName);
+            const zipDownloadBtn = document.getElementById('zip-download-' + sessName);
+
+            if (zipBtn) {
+                zipBtn.disabled = isCaptureActive || anyEncodingActive || isZippingThisSession;
+            }
+            if (zipProgWrap && zipBar && zipLabel) {
+                if (isZippingThisSession) {
+                    zipProgWrap.style.display = 'block';
+                    zipBar.style.width = (zipJob.progress || 0) + '%';
+                    zipLabel.textContent = (zipJob.status === 'queued') ? 'Queued…' : ('Zipping: ' + zipJob.progress + '%');
+                } else {
+                    zipProgWrap.style.display = 'none';
+                    zipLabel.textContent = '';
+                }
+            }
+            if (zipDownloadBtn) {
+                const shouldShowZip = zipJob && zipJob.status === 'done';
+                // Only show if the zip exists and is not actively being re-zipped
+                zipDownloadBtn.style.display = (shouldShowZip && !isZippingThisSession) ? 'inline-flex' : 'none';
+            }
+
+            // --- Update Other Action Buttons (Delete, Rename) ---
+            const isJobRunningOnThisCard = isEncodingThisSession || isZippingThisSession;
+            card.querySelectorAll('form[action*="/delete"] button, form[action*="/rename"] button, form[action*="/rename"] input').forEach(el => {
+                el.disabled = isCaptureActive || anyEncodingActive || isJobRunningOnThisCard;
+            });
+        });
     }
-  }
 
-function updateForSession(jobs, sessName){
-    const key = "zip:" + sessName.trim();
-    const entry = jobs && jobs[key];
-    const bar = document.getElementById("zip-bar-" + sessName);
-    const progWrap = document.getElementById("zip-progress-" + sessName);
-    const label = document.getElementById("zip-label-" + sessName);
-    const btn = document.getElementById("zip-btn-" + sessName);
-    const downloadBtn = document.getElementById("zip-download-" + sessName);
-
-    if (!bar || !progWrap || !label || !btn || !downloadBtn) return;
-    
-    const isZipJobRunning = entry && (entry.status === 'queued' || entry.status === 'zipping');
-
-    // THE FIX, Part 2: A button is disabled if a capture is active OR its zip job is running.
-    btn.disabled = isCaptureActive || isZipJobRunning;
-
-    if (!entry) {
-      progWrap.style.display = 'none';
-      label.textContent = '';
-      return;
-    }
-
-    if (isZipJobRunning) {
-      progWrap.style.display = 'block';
-      bar.style.width = Math.max(1, entry.progress || 0) + '%';
-      label.textContent = (entry.status === 'queued') ? 'Queued…' : ('Zipping: ' + (entry.progress || 0) + '%');
-      downloadBtn.style.display = 'none';
-    } else if (entry.status === 'done') {
-      progWrap.style.display = 'none';
-      label.textContent = '';
-      downloadBtn.style.display = 'inline-flex';
-    } else if (entry.status === 'error') {
-      progWrap.style.display = 'none';
-      label.textContent = 'Error creating ZIP';
-      downloadBtn.style.display = 'none';
-    } else {
-      progWrap.style.display = 'none';
-      label.textContent = '';
-    }
-  }
-
-  async function poll(){
-    const jobs = await fetchJobs();
-    document.querySelectorAll('[id^=\"zip-btn-\"]').forEach(btn=>{
-      const id = btn.id.replace('zip-btn-','');
-      updateForSession(jobs, id);
-    });
-  }
-
-  setInterval(poll, POLL_MS);
-  poll();
+    setInterval(poll, POLL_MS);
+    poll(); // Initial call
 })();
 </script>
 <script>
