@@ -2504,7 +2504,7 @@ TPL_INDEX = r"""
     </div>
   </div>
   {% endfor %}
-</main>
+
 
 <div class="footer card">
     {% if high_temp_warning is sameas true %}
@@ -2526,7 +2526,7 @@ TPL_INDEX = r"""
     {% endif %}
     {% if background_status %}  <div class="status" id="background-status">{{ background_status }}</div> {% endif %} </div>
 </div>
-
+</main>
 {% if current_session %}
 <script>
 // --- Active session updater (preview, frames, time, progress, interval, fps) ---
